@@ -209,6 +209,52 @@ describe('buildSessionListRowModel', () => {
         expect(model.adjacency).toEqual({ isFirst: false, isLast: true, isSingle: false });
     });
 
+    it('keeps every task and merge request in the structured preview and shortens recognized MR URLs', () => {
+        const session = createRenderable('context-session', {
+            metadata: {
+                name: 'Context session',
+                summaryText: null,
+                path: '/repo/context-session',
+                homeDir: '/repo',
+                host: 'workstation.local',
+                machineId: 'machine-1',
+                directSessionV1: null,
+                readStateV1: null,
+                sessionWorkContextV1: {
+                    v: 1,
+                    tasks: ['TASK-42', 'TASK-43'],
+                    mergeRequests: [
+                        'https://github.com/acme/app/pull/42',
+                        'https://gitlab.com/acme/app/-/merge_requests/43',
+                        'follow-up after release',
+                    ],
+                    branch: 'feature/context',
+                    repository: 'acme/app',
+                    description: 'Searchable description',
+                    customFields: { owner: 'platform' },
+                },
+            } as unknown as SessionListRenderableSession['metadata'],
+        });
+        const model = buildSessionListRowModel({
+            item: createSessionItem(session),
+            state: {},
+            isFirst: true,
+            isLast: true,
+            isSingle: true,
+            settings: createSettings(),
+        });
+
+        expect(model.workContextPreview).toEqual({
+            tasks: ['TASK-42', 'TASK-43'],
+            mergeRequests: [
+                { value: 'https://github.com/acme/app/pull/42', label: '!42' },
+                { value: 'https://gitlab.com/acme/app/-/merge_requests/43', label: '!43' },
+                { value: 'follow-up after release', label: 'follow-up after release' },
+            ],
+            branch: 'feature/context',
+        });
+    });
+
     it('uses server-scoped row identity without collapsing same session ids from different servers', () => {
         const session = createRenderable('shared-id');
         const modelA = buildSessionListRowModel({

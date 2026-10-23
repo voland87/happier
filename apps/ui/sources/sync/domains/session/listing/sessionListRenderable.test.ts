@@ -105,6 +105,15 @@ describe('preserveSessionListRenderableStaleFields', () => {
             host: 'host-a',
             machineId: 'machine-a',
             flavor: 'codex',
+            sessionWorkContextV1: {
+                v: 1 as const,
+                tasks: ['TASK-42'],
+                mergeRequests: ['https://git.example/acme/app/merge_requests/7'],
+                branch: 'feature/context',
+                repository: 'acme/app',
+                description: 'Improve context search',
+                customFields: { owner: 'platform' },
+            },
         };
         const previous = buildRenderable({
             id: 's_identity',
@@ -129,19 +138,51 @@ describe('preserveSessionListRenderableStaleFields', () => {
     it('takes the new metadata object when a field actually changed', () => {
         const previous = buildRenderable({
             id: 's_changed',
-            metadata: { path: '/repo', flavor: 'codex' },
+            metadata: {
+                path: '/repo',
+                flavor: 'codex',
+                sessionWorkContextV1: { v: 1, branch: 'feature/old' },
+            },
             metadataVersion: 7,
         });
         const changed = buildRenderable({
             id: 's_changed',
-            metadata: { path: '/repo', flavor: 'claude' },
+            metadata: {
+                path: '/repo',
+                flavor: 'codex',
+                sessionWorkContextV1: { v: 1, branch: 'feature/new' },
+            },
             metadataVersion: 8,
         });
 
         const result = preserveSessionListRenderableStaleFields(previous, changed);
 
         expect(result.metadata).toBe(changed.metadata);
-        expect(result.metadata?.flavor).toBe('claude');
+        expect(result.metadata?.sessionWorkContextV1?.branch).toBe('feature/new');
+    });
+
+    it('recognizes a changed work-context manual lock marker', () => {
+        const previous = buildRenderable({
+            id: 's_context_manual_lock',
+            metadata: {
+                path: '/repo',
+                sessionWorkContextV1: { v: 1, branch: 'feature/context', manualOverrides: { branch: true } },
+            },
+            metadataVersion: 7,
+        });
+        const changed = buildRenderable({
+            id: 's_context_manual_lock',
+            metadata: {
+                path: '/repo',
+                sessionWorkContextV1: { v: 1, branch: 'feature/context', manualOverrides: { repository: true } },
+            },
+            metadataVersion: 8,
+        });
+
+        const result = preserveSessionListRenderableStaleFields(previous, changed);
+
+        expect(result).toBe(changed);
+        expect(result.metadata?.sessionWorkContextV1?.manualOverrides).toEqual({ repository: true });
     });
 
     it('keeps metadata-unavailable settled state across placeholder replacements', () => {
@@ -193,6 +234,76 @@ describe('preserveSessionListRenderableStaleFields', () => {
 });
 
 describe('buildSessionListRenderableFromSession', () => {
+    it('projects searchable work context into the narrow list metadata snapshot', () => {
+        const renderable = buildSessionListRenderableFromSession({
+            id: 's_work_context',
+            seq: 4,
+            createdAt: 1,
+            updatedAt: 1,
+            active: true,
+            activeAt: 1,
+            archivedAt: null,
+            metadataVersion: 1,
+            agentState: null,
+            agentStateVersion: 0,
+            thinking: false,
+            thinkingAt: 0,
+            presence: 'online',
+            metadata: {
+                path: '/repo',
+                sessionWorkContextV1: {
+                    v: 1,
+                    tasks: ['TASK-42'],
+                    mergeRequests: ['!7'],
+                    branch: 'feature/context',
+                    repository: 'acme/app',
+                    description: 'Searchable session context',
+                    customFields: { owner: 'platform' },
+                    manualOverrides: { branch: true, 'custom:cleared': true },
+                },
+            },
+        } as unknown as Session);
+
+        expect(renderable.metadata?.sessionWorkContextV1).toEqual({
+            v: 1,
+            tasks: ['TASK-42'],
+            mergeRequests: ['!7'],
+            branch: 'feature/context',
+            repository: 'acme/app',
+            description: 'Searchable session context',
+            customFields: { owner: 'platform' },
+            manualOverrides: { branch: true, 'custom:cleared': true },
+        });
+    });
+
+    it('marks an unlocked context projection as complete with an explicit empty lock map', () => {
+        const renderable = buildSessionListRenderableFromSession({
+            id: 's_unlocked_work_context',
+            seq: 1,
+            createdAt: 1,
+            updatedAt: 1,
+            active: true,
+            activeAt: 1,
+            archivedAt: null,
+            metadataVersion: 1,
+            agentState: null,
+            agentStateVersion: 0,
+            thinking: false,
+            thinkingAt: 0,
+            presence: 'online',
+            metadata: {
+                path: '/repo',
+                sessionWorkContextV1: { v: 1, branch: 'feature/automatic' },
+            },
+        } as unknown as Session);
+
+        expect(renderable.metadata?.sessionWorkContextV1).toEqual({
+            v: 1,
+            branch: 'feature/automatic',
+            manualOverrides: {},
+        });
+    });
+
     /**
      * The count has to be projected here or it cannot exist at all: a session-list row is handed
      * this narrow object and never the session's real metadata, so a count read at the row would be

@@ -1153,6 +1153,7 @@ export {
   SetSessionPinResponseSchema,
   SetSessionTagAssignmentsRequestSchema,
   SetSessionTagAssignmentsResponseSchema,
+  SetSessionTagAssignmentsConflictResponseSchema,
   UpsertSessionOrganizationLabelRequestSchema,
   UpsertSessionOrganizationLabelResponseSchema,
   type CreateOrUpdateSessionOrganizationFolderRequest,
@@ -1976,6 +1977,16 @@ export {
   readSessionWorkspaceLocationFromMetadata,
   resolveSessionWorkspaceRootForMachine,
 } from './sessionMetadata/sessionWorkspaceLocationV1.js';
+
+export {
+  createSessionWorkContextV1Schema,
+  SessionWorkContextV1Schema,
+  SessionWorkContextPatchV1Schema,
+  readSessionWorkContextV1,
+  applySessionWorkContextPatchV1,
+  type SessionWorkContextV1,
+  type SessionWorkContextPatchV1,
+} from './sessionMetadata/sessionWorkContextV1.js';
 
 export {
   SessionMessageMetaSchema,
@@ -3204,6 +3215,7 @@ export {
   HAPPIER_BASE_SYSTEM_PROMPT_ATTACHMENTS_V1,
   HAPPIER_BASE_SYSTEM_PROMPT_LINKED_WORKSPACE_FILES_V1,
   HAPPIER_BASE_SYSTEM_PROMPT_OPTIONS_V1,
+  HAPPIER_BASE_SYSTEM_PROMPT_WORK_CONTEXT_V1,
   HAPPIER_BASE_SYSTEM_PROMPT_SESSION_TITLE_INITIAL_V1,
   HAPPIER_BASE_SYSTEM_PROMPT_SESSION_TITLE_ONGOING_V1,
   HAPPIER_BASE_SYSTEM_PROMPT_SESSION_TITLE_V1,

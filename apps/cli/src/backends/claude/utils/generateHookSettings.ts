@@ -331,6 +331,8 @@ export function generateHookSettingsFile(_port: number, _options: GenerateHookSe
             allow: [
                 'mcp__happier__change_title',
                 'mcp__happier__session_title_set',
+                'mcp__happier__session_work_context_get',
+                'mcp__happier__session_work_context_update',
             ],
         },
     };

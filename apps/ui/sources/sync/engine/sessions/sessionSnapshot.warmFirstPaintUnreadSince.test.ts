@@ -39,6 +39,16 @@ const UNREAD_SINCE = 1_700_000_000_000;
 const ACTIVITY_AT = 1_700_000_600_000;
 const CREATED_AT = 1_699_000_000_000;
 const PLACEMENT_NOW_MS = ACTIVITY_AT + 3_600_000;
+const WORK_CONTEXT = {
+    v: 1 as const,
+    tasks: ['MANUAL-777'],
+    mergeRequests: ['!23'],
+    branch: 'feature/context',
+    repository: 'acme/app',
+    description: 'Restore the list search value',
+    customFields: { owner: 'alice' },
+    manualOverrides: {},
+};
 
 function buildUnreadPlainRow(): V2SessionRecord {
     return {
@@ -51,7 +61,7 @@ function buildUnreadPlainRow(): V2SessionRecord {
         activeAt: ACTIVITY_AT,
         archivedAt: null,
         encryptionMode: 'plain',
-        metadata: JSON.stringify({ path: '/repo', host: 'host' }),
+        metadata: JSON.stringify({ path: '/repo', host: 'host', sessionWorkContextV1: WORK_CONTEXT }),
         metadataVersion: 3,
         agentState: JSON.stringify({}),
         agentStateVersion: 1,
@@ -86,6 +96,7 @@ function buildWarmCacheEntry(): SessionListCacheEntryV1 {
         path: '/repo',
         host: 'host',
         name: 'warm session',
+        sessionWorkContextV1: WORK_CONTEXT,
     };
 }
 
@@ -163,6 +174,13 @@ describe('warm first-paint session-list renderables', () => {
 
         expect(firstPaintRenderable.hasUnreadMessages).toBe(true);
         expect(firstPaintRenderable.unreadSince).toBe(UNREAD_SINCE);
+    });
+
+    it('restores session work context from a matching warm-cache entry on first paint', async () => {
+        const { firstPaintRenderable, hydratedRenderable } = await runSessionListSnapshot();
+
+        expect(firstPaintRenderable.metadata?.sessionWorkContextV1).toEqual(WORK_CONTEXT);
+        expect(hydratedRenderable.metadata?.sessionWorkContextV1).toEqual(WORK_CONTEXT);
     });
 
     it('orders the row by the same key at warm first paint and after hydration', async () => {

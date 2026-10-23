@@ -1399,6 +1399,17 @@ describe("session organization routes", () => {
         });
     });
 
+    it("rejects additive assignments when metadata has changed before writing tags", async () => {
+        sessionFindFirst.mockResolvedValue({ id: "s1" });
+        txSessionFindFirst.mockResolvedValue({ id: "s1", metadataVersion: 3 });
+        const route = await createSessionRouteTestBuilder("PUT", "/v2/session-organization/tag-assignments/:sessionId");
+        const { response, reply } = await route.invoke({ params: { sessionId: "s1" }, body: { tagIds: ["tag-1"], mode: "add", expectedMetadataVersion: 2 } });
+        expect(reply.code).toHaveBeenCalledWith(409);
+        expect(response).toEqual({ error: "metadata-version-conflict", currentMetadataVersion: 3 });
+        expect(txSessionTagAssignmentDeleteMany).not.toHaveBeenCalled();
+        expect(txSessionTagAssignmentCreateMany).not.toHaveBeenCalled();
+    });
+
     it("upserts workspace labels without parsing private display content", async () => {
         txSessionOrganizationLabelUpsert.mockResolvedValue({
             labelKind: "workspace",

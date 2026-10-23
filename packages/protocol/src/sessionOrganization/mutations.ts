@@ -179,12 +179,24 @@ export const DeleteSessionOrganizationTagResponseSchema = z
   .strict();
 export type DeleteSessionOrganizationTagResponse = z.infer<typeof DeleteSessionOrganizationTagResponseSchema>;
 
-export const SetSessionTagAssignmentsRequestSchema = z
-  .object({
+// Legacy requests replace the complete assignment set. Additive agent writes must
+// be fenced by the metadata version used to inspect the manual override marker.
+export const SetSessionTagAssignmentsRequestSchema = z.union([
+  z.object({
     tagIds: z.array(SessionOrganizationIdSchema).max(SESSION_ORGANIZATION_MAX_ASSIGNMENTS_PER_MUTATION),
-  })
-  .strict();
+  }).strict(),
+  z.object({
+    tagIds: z.array(SessionOrganizationIdSchema).max(SESSION_ORGANIZATION_MAX_ASSIGNMENTS_PER_MUTATION),
+    mode: z.literal('add'),
+    expectedMetadataVersion: z.number().int().nonnegative(),
+  }).strict(),
+]);
 export type SetSessionTagAssignmentsRequest = z.infer<typeof SetSessionTagAssignmentsRequestSchema>;
+
+export const SetSessionTagAssignmentsConflictResponseSchema = z.object({
+  error: z.literal('metadata-version-conflict'),
+  currentMetadataVersion: z.number().int().nonnegative(),
+}).strict();
 
 export const SetSessionTagAssignmentsResponseSchema = SessionTagAssignmentSchema;
 export type SetSessionTagAssignmentsResponse = z.infer<typeof SetSessionTagAssignmentsResponseSchema>;

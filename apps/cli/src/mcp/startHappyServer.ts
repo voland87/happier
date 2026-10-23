@@ -26,8 +26,11 @@ export type HappyMcpSessionClient = {
     sessionId: string;
     rpcHandlerManager: RpcHandlerManagerLike;
     sendClaudeSessionMessage(message: any, meta?: Record<string, unknown>): void;
+    updateMetadataWithResult?<TResult>(handler: (metadata: Metadata) => Readonly<{ metadata: Metadata; result: TResult }>): Promise<TResult>;
     updateMetadata(updater: (metadata: Metadata) => Metadata): void | Promise<void>;
     getMetadataSnapshot?(): Metadata | null;
+    getMetadataVersionSnapshot?(): number;
+    refreshMetadataSnapshot?(): Promise<void>;
     getPermissionMode?(): PermissionMode | null | undefined;
     getBackendTarget?(): BackendTargetRefV1 | null | undefined;
     getCurrentSessionLocation?(): Readonly<{

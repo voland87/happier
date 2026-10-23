@@ -2,6 +2,7 @@ import { MMKV } from 'react-native-mmkv';
 import {
     parseSessionRuntimeActivityProjectionFields,
     PrimaryTurnStatusV1Schema,
+    SessionWorkContextV1Schema,
     SessionOrganizationSnapshotSchema,
     SessionRuntimeActivityStateSchema,
     SessionRuntimeIssueV1Schema,
@@ -239,6 +240,16 @@ export const SessionListCacheEntryV1Schema = z.object({
     host: z.string().nullable().optional(),
     machineId: z.string().nullable().optional(),
     flavor: z.string().nullable().optional(),
+    sessionWorkContextV1: SessionWorkContextV1Schema.pick({
+        v: true,
+        tasks: true,
+        mergeRequests: true,
+        branch: true,
+        repository: true,
+        description: true,
+        customFields: true,
+        manualOverrides: true,
+    }).strip().nullable().optional(),
     directSessionV1: z.object({
         v: z.literal(1),
         providerId: z.string().optional(),

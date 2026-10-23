@@ -1545,6 +1545,15 @@ export function buildSessionListShellViewItemSignature(item: SessionListViewItem
 
   const metadata = item.session.metadata;
   const readState = metadata?.readStateV1;
+  const workContext = metadata?.sessionWorkContextV1;
+  const workContextSignature = workContext == null ? '' : JSON.stringify([
+    workContext.tasks ?? null,
+    workContext.mergeRequests ?? null,
+    workContext.branch ?? null,
+    workContext.repository ?? null,
+    workContext.description ?? null,
+    Object.entries(workContext.customFields ?? {}).sort(([left], [right]) => left.localeCompare(right)),
+  ]);
   const issue = item.session.lastRuntimeIssue;
   return [
     's',
@@ -1574,6 +1583,7 @@ export function buildSessionListShellViewItemSignature(item: SessionListViewItem
     metadata?.host ?? '',
     metadata?.machineId ?? '',
     metadata?.flavor ?? '',
+    workContextSignature,
     metadata?.directSessionV1?.providerId ?? '',
     metadata?.hiddenSystemSession === true ? '1' : '0',
     readState?.sessionSeq ?? '',

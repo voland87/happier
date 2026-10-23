@@ -399,6 +399,74 @@ describe('useSessions', () => {
         }
     });
 
+    it('publishes session-list metadata changes when work-context values change', async () => {
+        const previousState = storage.getState();
+        try {
+            const firstData: SessionListViewItem[] = [{
+                type: 'session',
+                section: 'active',
+                groupKey: 'server:server-a:active',
+                groupKind: 'active',
+                serverId: 'server-a',
+                session: {
+                    id: 's-work-context-signature',
+                    seq: 1,
+                    createdAt: 10,
+                    updatedAt: 20,
+                    active: true,
+                    activeAt: 20,
+                    archivedAt: null,
+                    metadataVersion: 1,
+                    agentStateVersion: 1,
+                    metadata: {
+                        path: '/repo',
+                        host: 'localhost',
+                        machineId: 'm-1',
+                        sessionWorkContextV1: { v: 1, tasks: ['TASK-1'] },
+                    },
+                    thinking: false,
+                    thinkingAt: 0,
+                    presence: 'online',
+                },
+            }];
+            const firstRow = firstData[0];
+            if (firstRow.type !== 'session') throw new Error('expected session test fixture');
+
+            storage.setState((state) => ({ ...state, isDataReady: true, sessionListViewData: firstData }));
+            const hook = await renderHook(() => useSessionListViewData(), {
+                flushOptions: { cycles: 1, turns: 4 },
+            });
+            const first = hook.getCurrent();
+            expect(first).toBe(firstData);
+
+            await act(async () => {
+                storage.setState((state) => ({
+                    ...state,
+                    sessionListViewData: [{
+                        ...firstRow,
+                        session: {
+                            ...firstRow.session,
+                            metadata: {
+                                ...firstRow.session.metadata,
+                                path: firstRow.session.metadata?.path ?? '/repo',
+                                sessionWorkContextV1: { v: 1, tasks: ['MANUAL-777'] },
+                            },
+                        },
+                    }],
+                }));
+            });
+
+            expect(hook.getCurrent()).not.toBe(first);
+            const currentRow = hook.getCurrent()?.[0];
+            expect(currentRow?.type === 'session' ? currentRow.session.metadata?.sessionWorkContextV1?.tasks : null)
+                .toEqual(['MANUAL-777']);
+
+            await hook.unmount();
+        } finally {
+            storage.setState(previousState);
+        }
+    });
+
     it('publishes placement freshness inputs without treating them as rendered row output', async () => {
         const previousState = storage.getState();
         try {

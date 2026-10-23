@@ -14,6 +14,8 @@ import { installSessionRouteCommonModuleMocks } from './sessionRouteTestHelpers'
 let mockSessionId = 'session-1';
 let mockServerId: string | undefined;
 let mockSession: any = null;
+let mockSessionListRenderable: any = null;
+let mockActiveServerId = 'server-1';
 let isDataReady = true;
 let sessionHydrated = true;
 let sessionIsConnected = true;
@@ -172,6 +174,7 @@ installSessionRouteCommonModuleMocks({
                     }),
                 } as any,
                 useSession: (sessionId: string) => useSessionSpy(sessionId),
+                useSessionListRenderable: () => mockSessionListRenderable,
                 useIsDataReady: () => isDataReady,
                 useLocalSetting: <K extends keyof LocalSettings>(name: K): LocalSettings[K] => {
                     if (name === 'devModeEnabled') {
@@ -306,6 +309,10 @@ vi.mock('@/sync/domains/server/serverProfiles', () => ({
         id: serverId,
         serverUrl: 'https://server.example.test',
     }),
+    getActiveServerSnapshot: () => ({ serverId: mockActiveServerId }),
+    areServerProfileIdentifiersEquivalent: (left: string | null | undefined, right: string | null | undefined) => (
+        Boolean(left && right && left === right)
+    ),
 }));
 vi.mock('@/sync/ops/sessionFolders', () => ({
     setSessionFolderAssignment: setSessionFolderAssignmentSpy,
@@ -419,6 +426,8 @@ describe('/session/[id]/info', () => {
         mockSessionId = 'session-1';
         mockServerId = undefined;
         mockSession = null;
+        mockSessionListRenderable = null;
+        mockActiveServerId = 'server-1';
         isDataReady = true;
         sessionHydrated = true;
         sessionIsConnected = true;
@@ -575,6 +584,155 @@ describe('/session/[id]/info', () => {
         const screen = await renderInfoScreen();
         expect(screen.getTextContent()).not.toContain('common.loading');
         expect(screen.getTextContent()).toContain('name');
+    });
+
+    it('shows work-context values and manual locks within the session info route', async () => {
+        mockSession = {
+            id: 'session-context',
+            active: false,
+            accessLevel: 'view',
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+            seq: 1,
+            metadata: {
+                sessionWorkContextV1: {
+                    v: 1,
+                    tasks: ['TASK-42'],
+                    branch: 'feature/context',
+                    manualOverrides: { branch: true, 'custom:cleared': true },
+                },
+            },
+        };
+
+        const screen = await renderInfoScreen();
+
+        expect(screen.findByTestId('session-work-context-tasks')?.props.subtitle).toBe('TASK-42');
+        const branch = screen.findByTestId('session-work-context-branch');
+        expect(branch?.props.subtitle).toBe('feature/context');
+        expect(branch?.props.detail).toBe('sessionInfo.workContext.manual');
+        expect(branch?.props.onPress).toBeUndefined();
+        expect(screen.findByTestId('session-work-context-custom-cleared')?.props.subtitle)
+            .toBe('sessionInfo.workContext.notSet');
+    });
+
+    it('uses a newer same-server list projection for work-context values and manual locks', async () => {
+        mockSession = {
+            id: 'session-context-live',
+            serverId: 'server-1',
+            active: false,
+            accessLevel: 'view',
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+            seq: 1,
+            metadataVersion: 1,
+            metadata: {
+                sessionWorkContextV1: {
+                    v: 1,
+                    branch: 'feature/old',
+                    manualOverrides: { branch: true },
+                },
+            },
+        };
+        mockSessionListRenderable = {
+            id: 'session-context-live',
+            metadataVersion: 2,
+            metadata: {
+                sessionWorkContextV1: {
+                    v: 1,
+                    branch: 'feature/live',
+                    repository: 'acme/app',
+                    manualOverrides: { repository: true },
+                },
+            },
+        };
+
+        const screen = await renderInfoScreen();
+
+        expect(screen.findByTestId('session-work-context-branch')?.props.subtitle).toBe('feature/live');
+        expect(screen.findByTestId('session-work-context-branch')?.props.detail).toBeUndefined();
+        expect(screen.findByTestId('session-work-context-repository')?.props.detail).toBe('sessionInfo.workContext.manual');
+    });
+
+    it('ignores a newer active-server list projection for an info route scoped to another server', async () => {
+        resolvedServerId = 'server-remote';
+        resolveServerIdForSessionIdFromLocalCacheSpy.mockReturnValue('server-remote');
+        resolvePreferredServerIdForSessionIdSpy.mockReturnValue('server-remote');
+        usePreferredServerIdForSessionSpy.mockReturnValue('server-remote');
+        mockServerId = 'server-remote';
+        mockSession = {
+            id: 'session-context-remote',
+            serverId: 'server-remote',
+            active: false,
+            accessLevel: 'view',
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+            seq: 1,
+            metadataVersion: 1,
+            metadata: { sessionWorkContextV1: { v: 1, branch: 'feature/remote' } },
+        };
+        mockSessionListRenderable = {
+            id: 'session-context-remote',
+            metadataVersion: 2,
+            metadata: { sessionWorkContextV1: { v: 1, branch: 'feature/other-server' } },
+        };
+
+        const screen = await renderInfoScreen();
+
+        expect(screen.findByTestId('session-work-context-branch')?.props.subtitle).toBe('feature/remote');
+    });
+
+    it('keeps the last hydrated context when a newer legacy projection lacks lock state', async () => {
+        mockSession = {
+            id: 'session-context-legacy',
+            active: false,
+            accessLevel: 'view',
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+            seq: 1,
+            metadataVersion: 1,
+            metadata: {
+                sessionWorkContextV1: {
+                    v: 1,
+                    branch: 'feature/known',
+                    manualOverrides: { branch: true },
+                },
+            },
+        };
+        mockSessionListRenderable = {
+            id: 'session-context-legacy',
+            metadataVersion: 2,
+            metadata: {
+                sessionWorkContextV1: { v: 1, branch: 'feature/unknown-lock-state' },
+            },
+        };
+
+        const screen = await renderInfoScreen();
+
+        expect(screen.findByTestId('session-work-context-branch')?.props.subtitle).toBe('feature/known');
+        expect(screen.findByTestId('session-work-context-branch')?.props.detail).toBe('sessionInfo.workContext.manual');
+    });
+
+    it('uses a newer explicit empty work-context projection to clear stale info values', async () => {
+        mockSession = {
+            id: 'session-context-cleared',
+            active: false,
+            accessLevel: 'view',
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+            seq: 1,
+            metadataVersion: 1,
+            metadata: { sessionWorkContextV1: { v: 1, branch: 'feature/old', manualOverrides: { branch: true } } },
+        };
+        mockSessionListRenderable = {
+            id: 'session-context-cleared',
+            metadataVersion: 2,
+            metadata: { sessionWorkContextV1: null },
+        };
+
+        const screen = await renderInfoScreen();
+
+        expect(screen.findByTestId('session-work-context-branch')?.props.subtitle).toBe('sessionInfo.workContext.notSet');
+        expect(screen.findByTestId('session-work-context-branch')?.props.detail).toBeUndefined();
     });
 
     it('normalizes the route id before looking up the session', async () => {

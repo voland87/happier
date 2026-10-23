@@ -12,6 +12,7 @@ import {
     createProviderSessionInfoV1Schema,
     createSessionSystemSessionV1Schema,
     createSessionWorkspaceLocationV1Schema,
+    createSessionWorkContextV1Schema,
     SessionMcpSelectionRestartRequiredV1Schema,
     SessionMcpSelectionV1Schema,
     type PendingDeliveryBlockedReason,
@@ -45,6 +46,7 @@ const MetadataObjectSchema = z.object({
     }).optional(),
     machineId: z.string().optional(),
     sessionWorkspaceLocationV1: createSessionWorkspaceLocationV1Schema(z).optional(),
+    sessionWorkContextV1: createSessionWorkContextV1Schema(z).optional(),
     handoffV1: z.object({
         v: z.literal(1),
         sourceMachineId: z.string(),

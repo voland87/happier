@@ -68,6 +68,7 @@ describe('ProviderEnforcedPermissionHandler always-auto-approve matching', () =>
     await expect(handler.handleToolCall('safe-2', 'mcp__happier__change_title', {})).resolves.toEqual({ decision: 'approved' });
     await expect(handler.handleToolCall('safe-3', 'happier_change_title', {})).resolves.toEqual({ decision: 'approved' });
     await expect(handler.handleToolCall('safe-4', 'mcp__happier__session_title_set', {})).resolves.toEqual({ decision: 'approved' });
+    await expect(handler.handleToolCall('context-1', 'mcp__happier__session_work_context_update', { patch: { branch: 'main' } })).resolves.toEqual({ decision: 'approved' });
     await expect(handler.handleToolCall('safe-5', 'happier_action_execute', { actionId: 'session.title.set' })).resolves.toEqual({ decision: 'approved' });
     await expect(handler.handleToolCall('safe-6', 'mcp__happier__execution_run_wait', { runId: 'run-1' })).resolves.toEqual({ decision: 'approved' });
     await expect(handler.handleToolCall('safe-7', 'happier_action_execute', { actionId: 'execution.run.get', input: { runId: 'run-1' } })).resolves.toEqual({ decision: 'approved' });

@@ -59,6 +59,33 @@ function normalizeNonEmptyString(value: unknown): string | null {
     return trimmed.length > 0 ? trimmed : null;
 }
 
+function formatMergeRequestPreviewLabel(reference: string): string {
+    const trimmed = reference.trim();
+    if (/^\d+$/.test(trimmed)) return `!${trimmed}`;
+    if (/^!\d+$/.test(trimmed)) return trimmed;
+    try {
+        const url = new URL(trimmed);
+        if (url.protocol !== 'https:' && url.protocol !== 'http:') return reference;
+        const match = url.pathname.match(/\/(?:merge_requests|pull-requests|pullrequest|pulls|pull)\/(\d+)(?:\/|$)/i);
+        return match ? `!${match[1]}` : reference;
+    } catch {
+        return reference;
+    }
+}
+
+function buildWorkContextPreview(session: Session | SessionListRenderableSession) {
+    const context = session.metadata?.sessionWorkContextV1;
+    if (!context || context.v !== 1) return null;
+    const tasks = (context.tasks ?? []).filter((value) => typeof value === 'string' && value.trim().length > 0);
+    const mergeRequests = (context.mergeRequests ?? [])
+        .filter((value) => typeof value === 'string' && value.trim().length > 0)
+        .map((value) => ({ value, label: formatMergeRequestPreviewLabel(value) }));
+    const branch = typeof context.branch === 'string' && context.branch.trim().length > 0 ? context.branch : null;
+    return tasks.length > 0 || mergeRequests.length > 0 || branch !== null
+        ? { tasks, mergeRequests, branch }
+        : null;
+}
+
 function normalizeFiniteTimestamp(value: unknown): number | null {
     return typeof value === 'number' && Number.isFinite(value) && value > 0
         ? Math.trunc(value)
@@ -387,6 +414,7 @@ export function buildSessionListRowModel(input: BuildSessionListRowModelInput): 
     // standing session that is currently placed for being unread must still offer to be removed.
     const isAttentionStanding = resolveSessionAttentionStanding(settings.attentionStandingPolicy, rowKey, settings.runtimeNowMs);
     const title = getSessionName(resolvedSession);
+    const workContextPreview = buildWorkContextPreview(resolvedSession);
 
     return {
         rowKey,
@@ -419,6 +447,7 @@ export function buildSessionListRowModel(input: BuildSessionListRowModelInput): 
         title,
         subtitle,
         subtitleEllipsizeMode,
+        workContextPreview,
         groupKey: String(item.groupKey ?? '').trim(),
         groupKind: item.groupKind ?? null,
         section: item.section ?? null,

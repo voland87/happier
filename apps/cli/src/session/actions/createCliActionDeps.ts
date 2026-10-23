@@ -1,3 +1,4 @@
+import { getSessionWorkContext, updateSessionWorkContext } from '@/session/services/sessionWorkContext';
 import { homedir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 
@@ -1657,6 +1658,15 @@ export function createCliActionDeps(params: Readonly<{
         return { ok: false, errorCode: 'not_authenticated', error: 'not_authenticated' };
       }
       return await requestSessionStop({ credentials: params.credentials, idOrPrefix: sessionId });
+    },
+
+    sessionWorkContextGet: async ({ sessionId }) => {
+      if (!params.credentials) return { ok: false, errorCode: 'not_authenticated', error: 'not_authenticated' };
+      return await getSessionWorkContext({ credentials: params.credentials, idOrPrefix: sessionId });
+    },
+    sessionWorkContextUpdate: async ({ sessionId, patch, tags }) => {
+      if (!params.credentials) return { ok: false, errorCode: 'not_authenticated', error: 'not_authenticated' };
+      return await updateSessionWorkContext({ credentials: params.credentials, idOrPrefix: sessionId, patch, tags });
     },
 
     sessionTitleSet: async ({ sessionId, title }) => {

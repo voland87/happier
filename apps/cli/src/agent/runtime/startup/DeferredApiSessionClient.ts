@@ -61,6 +61,9 @@ export type DeferredApiSessionTarget = Readonly<{
     localId?: string;
     meta?: Record<string, unknown>;
   }>) => Promise<SessionUserMessageEnqueueResult>;
+  updateMetadataWithResult?: <TResult>(handler: (metadata: Metadata) => Readonly<{ metadata: Metadata; result: TResult }>) => Promise<TResult>;
+  getMetadataVersionSnapshot?: () => number;
+  refreshMetadataSnapshot?: () => Promise<void>;
   updateMetadata: (updater: (metadata: Metadata) => Metadata) => void | Promise<void>;
   updateAgentState: (updater: (state: AgentState) => AgentState) => void | Promise<void>;
   getRuntimeActivitySnapshotPublisher?: () => SessionRuntimeActivitySnapshotPublisher | null;
@@ -433,6 +436,28 @@ export class DeferredApiSessionClient {
       },
     );
     return deferred.promise;
+  }
+
+  async updateMetadataWithResult<TResult>(
+    handler: (metadata: Metadata) => Readonly<{ metadata: Metadata; result: TResult }>,
+  ): Promise<TResult> {
+    const target = await this.withAttachedTarget((attached) => attached, null);
+    if (!target?.updateMetadataWithResult) {
+      throw Object.assign(new Error('Session metadata is not available until the session is attached'), { code: 'session_metadata_unavailable' });
+    }
+    return await target.updateMetadataWithResult(handler);
+  }
+
+  getMetadataVersionSnapshot(): number {
+    return this.target?.getMetadataVersionSnapshot?.() ?? -1;
+  }
+
+  async refreshMetadataSnapshot(): Promise<void> {
+    const target = await this.withAttachedTarget((attached) => attached, null);
+    if (!target?.refreshMetadataSnapshot) {
+      throw Object.assign(new Error('Session metadata is not available until the session is attached'), { code: 'session_metadata_unavailable' });
+    }
+    await target.refreshMetadataSnapshot();
   }
 
   updateMetadata(_updater: (metadata: Metadata) => Metadata): void | Promise<void> {

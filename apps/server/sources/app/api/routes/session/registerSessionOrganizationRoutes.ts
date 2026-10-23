@@ -25,6 +25,7 @@ import {
     SetSessionPinRequestSchema,
     SetSessionPinResponseSchema,
     SetSessionTagAssignmentsRequestSchema,
+    SetSessionTagAssignmentsConflictResponseSchema,
     SetSessionTagAssignmentsResponseSchema,
     UpsertSessionOrganizationLabelRequestSchema,
     UpsertSessionOrganizationLabelResponseSchema,
@@ -601,6 +602,7 @@ export function registerSessionOrganizationRoutes(app: Fastify) {
                 200: SetSessionTagAssignmentsResponseSchema,
                 400: z.object({ error: z.literal("invalid-session-tag-assignments") }),
                 404: z.object({ error: z.literal("Session not found") }),
+                409: SetSessionTagAssignmentsConflictResponseSchema,
             },
         },
     }, async (request, reply) => {
@@ -622,6 +624,9 @@ export function registerSessionOrganizationRoutes(app: Fastify) {
             sessionId: parsedParams.data.sessionId,
             request: parsedBody.data,
         });
+        if ("error" in result && result.error === "metadata-version-conflict") {
+            return reply.code(409).send(result);
+        }
         if ("error" in result) {
             return reply.code(400).send({ error: "invalid-session-tag-assignments" });
         }

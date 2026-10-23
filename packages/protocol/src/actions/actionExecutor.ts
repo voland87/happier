@@ -1,3 +1,4 @@
+import type { SessionWorkContextPatchV1 } from '../sessionMetadata/sessionWorkContextV1.js';
 import {
   findActionInputFieldHint,
   filterResolvedActionOptions,
@@ -277,6 +278,8 @@ export type ActionExecutorDeps = Readonly<{
     callerSurface?: keyof ActionSurfaces | null;
     callerPermissionMode?: string | null;
   }>) => Promise<unknown>;
+  sessionWorkContextGet?: (args: Readonly<{ sessionId: string; serverId?: string | null }>) => Promise<unknown>;
+  sessionWorkContextUpdate?: (args: Readonly<{ sessionId: string; patch: SessionWorkContextPatchV1; tags?: string[]; serverId?: string | null }>) => Promise<unknown>;
   sessionTitleSet?: (args: Readonly<{ sessionId: string; title: string; serverId?: string | null }>) => Promise<unknown>;
   sessionStop?: (args: Readonly<{ sessionId: string; serverId?: string | null }>) => Promise<SessionStopActionDependencyResult>;
   sessionPermissionModeSet?: (args: Readonly<{
@@ -2268,6 +2271,31 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
           });
           const failure = readActionExecuteFailure(res);
           if (failure) return { ok: false, ...failure };
+          return { ok: true, result: res };
+        }
+
+        if (actionId === 'session.work_context.get' || actionId === 'session.work_context.update') {
+          const sessionId = resolveSessionIdFromInput(parsed.data, ctx);
+          if (!sessionId) return { ok: false, errorCode: 'session_not_selected', error: 'session_not_selected' };
+          if (isSessionAgentCaller(ctx) && sessionId !== normalizeId(ctx.defaultSessionId)) {
+            return { ok: false, errorCode: 'permission_denied', error: 'Work context tools are limited to the current session' };
+          }
+          const serverId = resolveServerIdForSession(deps, ctx, sessionId);
+          const target = { sessionId, ...(serverId ? { serverId } : {}) };
+          let res: unknown;
+          if (actionId === 'session.work_context.get') {
+            if (!deps.sessionWorkContextGet) return { ok: false, errorCode: 'unsupported_action', error: `unsupported_action:${actionId}` };
+            res = await deps.sessionWorkContextGet(target);
+          } else {
+            if (!deps.sessionWorkContextUpdate) return { ok: false, errorCode: 'unsupported_action', error: `unsupported_action:${actionId}` };
+            const input = parsed.data as { patch: SessionWorkContextPatchV1; tags?: string[] };
+            res = await deps.sessionWorkContextUpdate({ ...target, patch: input.patch, ...(input.tags !== undefined ? { tags: input.tags } : {}) });
+          }
+          const failure = readActionExecuteFailure(res);
+          if (failure) {
+            const details = (res as { details?: unknown }).details;
+            return { ok: false, ...failure, ...(details !== undefined ? { details } : {}) };
+          }
           return { ok: true, result: res };
         }
 

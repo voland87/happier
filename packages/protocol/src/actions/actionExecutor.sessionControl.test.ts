@@ -49,6 +49,25 @@ function createExecutor(overrides: Partial<ActionExecutorDeps> = {}) {
 }
 
 describe('createActionExecutor (session control)', () => {
+  it('updates current-session context without granting manual override powers and rejects cross-session agents', async () => {
+    const sessionWorkContextUpdate = vi.fn(async () => ({ ok: true, context: { v: 1, branch: 'main' }, skippedManualFields: [] }));
+    const sessionWorkContextGet = vi.fn(async () => ({ ok: true, context: null }));
+    const executor = createExecutor({ sessionWorkContextUpdate, sessionWorkContextGet });
+    await expect(executor.execute('session.work_context.update', { patch: { branch: 'main' } },
+      { surface: 'session_agent', defaultSessionId: 'self' })).resolves.toMatchObject({ ok: true, result: { context: { branch: 'main' } } });
+    expect(sessionWorkContextUpdate).toHaveBeenCalledWith({ sessionId: 'self', patch: { branch: 'main' } });
+    await expect(executor.execute('session.work_context.update', { tags: ['backend'] },
+      { surface: 'session_agent', defaultSessionId: 'self' })).resolves.toMatchObject({ ok: true });
+    expect(sessionWorkContextUpdate).toHaveBeenCalledWith({ sessionId: 'self', patch: {}, tags: ['backend'] });
+    await expect(executor.execute('session.work_context.get', { sessionId: 'other' },
+      { surface: 'session_agent', defaultSessionId: 'self' })).resolves.toMatchObject({ ok: false });
+    expect(sessionWorkContextGet).not.toHaveBeenCalled();
+    await expect(executor.execute('session.work_context.update', { patch: { branch: 'x', manualOverrides: {} } },
+      { surface: 'session_agent', defaultSessionId: 'self' })).resolves.toMatchObject({ ok: false, errorCode: 'invalid_parameters' });
+    await expect(executor.execute('session.work_context.update', { patch: {}, source: 'user', resetManualFields: ['branch'] },
+      { surface: 'session_agent', defaultSessionId: 'self' })).resolves.toMatchObject({ ok: false, errorCode: 'invalid_parameters' });
+  });
+
   it('executes session.message.send via deps.sessionSendMessage (including optional overrides)', async () => {
     const sessionSendMessage = vi.fn(async () => ({ ok: true }));
     const executor = createExecutor({ sessionSendMessage });

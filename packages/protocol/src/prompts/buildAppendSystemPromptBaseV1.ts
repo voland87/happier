@@ -1,3 +1,4 @@
+import { HAPPIER_BASE_SYSTEM_PROMPT_WORK_CONTEXT_V1 } from './systemPromptBaseV1.js';
 import { BackendTargetRefSchema } from '../backendTargets/backendTargetRef.js';
 import { buildExecutionRunsGuidanceBlockV1, type ExecutionRunsGuidanceEntryV1 } from './executionRunsGuidanceV1.js';
 import { buildMemoryRecallGuidanceBlockV1 } from './memoryRecallGuidanceV1.js';
@@ -67,6 +68,7 @@ export function buildCodingSessionPromptPlanBaseV1(args: Readonly<{
   executionRunsFeatureEnabled: boolean;
   memoryRecallGuidanceEnabled?: boolean;
   sessionTitleToolAvailable?: boolean;
+  sessionWorkContextToolAvailable?: boolean;
 }>): PromptPlanV1 {
   const settings = args.settings && typeof args.settings === 'object' && !Array.isArray(args.settings)
     ? args.settings
@@ -83,6 +85,10 @@ export function buildCodingSessionPromptPlanBaseV1(args: Readonly<{
     scope: 'session' as const,
     text: base.trim(),
   }];
+
+  if (args.sessionWorkContextToolAvailable === true) {
+    blocks.push({ id: 'coding.work_context', scope: 'session', text: HAPPIER_BASE_SYSTEM_PROMPT_WORK_CONTEXT_V1 });
+  }
 
   if (args.memoryRecallGuidanceEnabled === true) {
     blocks.push({
@@ -122,6 +128,7 @@ export function buildAppendSystemPromptBaseV1(args: Readonly<{
   executionRunsFeatureEnabled: boolean;
   memoryRecallGuidanceEnabled?: boolean;
   sessionTitleToolAvailable?: boolean;
+  sessionWorkContextToolAvailable?: boolean;
 }>): string {
   return renderPromptPlanV1(buildCodingSessionPromptPlanBaseV1(args));
 }

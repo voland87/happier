@@ -51,6 +51,7 @@ import { readDisplayMachineTargetForSession } from '@/sync/ops/sessionMachineTar
 import { useSessionMachineTarget } from '@/components/sessions/model/useSessionMachineTarget';
 import { getActionSpec } from '@happier-dev/protocol';
 import { SessionRetentionNotice } from '@/components/sessions/info/SessionRetentionNotice';
+import { SessionWorkContextSection } from '@/components/sessions/info/SessionWorkContextSection';
 import { useSessionRouteServerScope, type SessionRouteServerScope } from '@/hooks/session/sessionRouteServerScope';
 import { useServerFeaturesSnapshotForServerId } from '@/sync/domains/features/featureDecisionRuntime';
 import {
@@ -1254,6 +1255,16 @@ function SessionInfoContent({ session, sessionServerId, sourceMachineIdForHandof
                         />
                     )}
                 </ItemGroup>
+
+                <SessionWorkContextSection
+                    sessionId={session.id}
+                    serverId={scopedMutationServerId}
+                    metadataVersion={session.metadataVersion}
+                    context={session.metadata?.sessionWorkContextV1}
+                    tags={sessionInfoTags}
+                    canEdit={canRenameSession}
+                    onEditTags={performEditTags}
+                />
 
                 {/* Metadata */}
                 {session.metadata && (

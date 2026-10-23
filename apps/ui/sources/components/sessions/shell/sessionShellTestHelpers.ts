@@ -126,6 +126,7 @@ export function createSessionItemTestRowModel(
         title: session.metadata == null ? 'status.unknown' : 'Session',
         subtitle,
         subtitleEllipsizeMode: input.subtitleEllipsizeMode ?? 'head',
+        workContextPreview: null,
         groupKey: 'group-a',
         groupKind: null,
         section: 'active',

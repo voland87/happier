@@ -128,6 +128,7 @@ type SessionItemBaseProps = Readonly<{
     selectionKey?: string | null;
     subtitleOverride?: string | null;
     subtitleEllipsizeMode?: 'head' | 'tail';
+    workContextPreview?: SessionListRowModel['workContextPreview'];
     serverId?: string;
     serverName?: string;
     currentUserId?: string | null;
@@ -176,6 +177,7 @@ type SessionItemRenderProps = Omit<SessionItemBaseProps, 'activityTimeMode' | 's
     sessionStatus: SessionStatus;
     sessionNameResolved: string;
     sessionSubtitle: string;
+    workContextPreview: SessionListRowModel['workContextPreview'];
     pendingCount: number;
     draft: SessionListRowModel['draft'];
     reminder: SessionListRowModel['reminder'];
@@ -241,6 +243,15 @@ const stylesheet = StyleSheet.create((theme) => ({
         borderLeftWidth: 2,
         borderRightWidth: 2,
         borderColor: theme.colors.surface.base,
+    },
+    sessionItemWithWorkContext: {
+        height: 'auto',
+        minHeight: SESSION_LIST_ROW_HEIGHT_DEFAULT,
+        paddingVertical: 7,
+    },
+    sessionItemCompactWithWorkContext: {
+        minHeight: SESSION_LIST_ROW_HEIGHT_COMPACT,
+        paddingVertical: 6,
     },
     sessionItemFirst: {
         borderTopLeftRadius: SESSION_LIST_ROW_CORNER_RADIUS,
@@ -403,6 +414,9 @@ const stylesheet = StyleSheet.create((theme) => ({
         flex: 1,
         marginLeft: 14,
         justifyContent: 'center',
+    },
+    sessionContentWithWorkContext: {
+        minWidth: 0,
     },
     sessionContentCompact: {
         marginLeft: 12,
@@ -612,6 +626,87 @@ const stylesheet = StyleSheet.create((theme) => ({
         gap: 3,
         marginTop: -1,
     },
+    workContextPreview: {
+        alignSelf: 'stretch',
+        minWidth: 0,
+        maxWidth: '100%',
+        marginTop: 3,
+        gap: 2,
+    },
+    workContextPreviewCompact: {
+        marginTop: 2,
+        gap: 1,
+    },
+    workContextGroup: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        flexWrap: 'wrap',
+        minWidth: 0,
+        maxWidth: '100%',
+        gap: 4,
+    },
+    workContextGroupLabel: {
+        color: theme.colors.text.secondary,
+        fontSize: 10,
+        lineHeight: 14,
+        ...Typography.default('semiBold'),
+    },
+    workContextGroupLabelCompact: {
+        fontSize: 9,
+        lineHeight: 12,
+    },
+    workContextChips: {
+        flex: 1,
+        flexDirection: 'row',
+        alignItems: 'center',
+        flexWrap: 'wrap',
+        gap: 4,
+        flexShrink: 1,
+        minWidth: 0,
+        maxWidth: '100%',
+    },
+    workContextChip: {
+        borderRadius: 999,
+        paddingHorizontal: 6,
+        paddingVertical: 1,
+        borderWidth: 1,
+        borderColor: theme.colors.border.default,
+        backgroundColor: theme.colors.background.canvas,
+        flexShrink: 1,
+        minWidth: 0,
+        maxWidth: '100%',
+    },
+    workContextChipText: {
+        color: theme.colors.text.secondary,
+        fontSize: 10,
+        lineHeight: 13,
+        ...Typography.default('semiBold'),
+        flexShrink: 1,
+        minWidth: 0,
+        maxWidth: '100%',
+    },
+    workContextChipTextCompact: {
+        fontSize: 9,
+        lineHeight: 11,
+    },
+    workContextBranch: {
+        flexDirection: 'row',
+        alignItems: 'flex-start',
+        alignSelf: 'stretch',
+        gap: 4,
+    },
+    workContextBranchText: {
+        flex: 1,
+        flexShrink: 1,
+        color: theme.colors.text.secondary,
+        fontSize: 10,
+        lineHeight: 14,
+        ...Typography.default(),
+    },
+    workContextBranchTextCompact: {
+        fontSize: 9,
+        lineHeight: 12,
+    },
     // As wide as the attention indicator's own slot, so the 16 px working spinner keeps the line's
     // gap to the status text instead of overhanging it.
     secondaryStatusDotContainer: {
@@ -665,6 +760,82 @@ const stylesheet = StyleSheet.create((theme) => ({
     },
 }));
 
+const SessionListWorkContextPreview = React.memo(function SessionListWorkContextPreview(props: Readonly<{
+    sessionId: string;
+    preview: NonNullable<SessionListRowModel['workContextPreview']>;
+    compact: boolean;
+}>) {
+    const styles = stylesheet;
+    const taskLabel = t('sessionInfo.workContext.tasks');
+    const mergeRequestLabel = t('sessionInfo.workContext.mergeRequests');
+    const branchLabel = t('sessionInfo.workContext.branch');
+
+    return (
+        <View
+            testID={`session-list-work-context-preview-${props.sessionId}`}
+            style={[styles.workContextPreview, props.compact ? styles.workContextPreviewCompact : null]}
+        >
+            {props.preview.tasks.length > 0 ? (
+                <View
+                    testID={`session-list-work-context-preview-tasks-${props.sessionId}`}
+                    style={styles.workContextGroup}
+                >
+                    <Text style={[styles.workContextGroupLabel, props.compact ? styles.workContextGroupLabelCompact : null]}>
+                        {taskLabel}
+                    </Text>
+                    <View style={styles.workContextChips}>
+                        {props.preview.tasks.map((task, index) => (
+                            <View key={`${task}-${index}`} style={styles.workContextChip}>
+                                <Text
+                                    testID={`session-list-work-context-preview-task-${props.sessionId}-${index}`}
+                                    style={[styles.workContextChipText, props.compact ? styles.workContextChipTextCompact : null]}
+                                >
+                                    {task}
+                                </Text>
+                            </View>
+                        ))}
+                    </View>
+                </View>
+            ) : null}
+            {props.preview.mergeRequests.length > 0 ? (
+                <View
+                    testID={`session-list-work-context-preview-merge-requests-${props.sessionId}`}
+                    style={styles.workContextGroup}
+                >
+                    <Text style={[styles.workContextGroupLabel, props.compact ? styles.workContextGroupLabelCompact : null]}>
+                        {mergeRequestLabel}
+                    </Text>
+                    <View style={styles.workContextChips}>
+                        {props.preview.mergeRequests.map((mergeRequest, index) => (
+                            <View key={`${mergeRequest.value}-${index}`} style={styles.workContextChip}>
+                                <Text
+                                    testID={`session-list-work-context-preview-merge-request-${props.sessionId}-${index}`}
+                                    style={[styles.workContextChipText, props.compact ? styles.workContextChipTextCompact : null]}
+                                >
+                                    {mergeRequest.label}
+                                </Text>
+                            </View>
+                        ))}
+                    </View>
+                </View>
+            ) : null}
+            {props.preview.branch ? (
+                <View
+                    testID={`session-list-work-context-preview-branch-${props.sessionId}`}
+                    style={styles.workContextBranch}
+                >
+                    <Text style={[styles.workContextGroupLabel, props.compact ? styles.workContextGroupLabelCompact : null]}>
+                        {branchLabel}
+                    </Text>
+                    <Text style={[styles.workContextBranchText, props.compact ? styles.workContextBranchTextCompact : null]}>
+                        {props.preview.branch}
+                    </Text>
+                </View>
+            ) : null}
+        </View>
+    );
+});
+
 const SessionItemContent = React.memo(
     ({
         embedded,
@@ -707,6 +878,7 @@ const SessionItemContent = React.memo(
         sessionStatus,
         sessionNameResolved,
         sessionSubtitle,
+        workContextPreview,
         pendingCount,
         draft,
         reminder,
@@ -1317,6 +1489,8 @@ const SessionItemContent = React.memo(
                     isFirst ? styles.sessionItemFirst : null,
                     isLast ? styles.sessionItemLast : null,
                     compact ? styles.sessionItemCompact : null,
+                    !isMinimal && workContextPreview ? styles.sessionItemWithWorkContext : null,
+                    !isMinimal && workContextPreview && compact ? styles.sessionItemCompactWithWorkContext : null,
                     isMinimal ? styles.sessionItemMinimal : null,
                     useReadableNativePhoneMinimalRow ? styles.sessionItemMinimalNativePhone : null,
                     selected || rowSelection.isSelected ? styles.sessionItemSelected : null,
@@ -1395,6 +1569,7 @@ const SessionItemContent = React.memo(
                 <View
                     style={[
                         styles.sessionContent,
+                        !isMinimal && workContextPreview ? styles.sessionContentWithWorkContext : null,
                         compact ? styles.sessionContentCompact : null,
                         isMinimal ? styles.sessionContentMinimal : null,
                         isMinimal && (shouldRenderSessionListIdentity || shouldRenderSelectionCheckbox) ? styles.sessionContentMinimalWithIdentity : null,
@@ -1541,6 +1716,14 @@ const SessionItemContent = React.memo(
                                 ) : sessionSubtitle}
                             </Text>
                         )
+                    ) : null}
+
+                    {!isMinimal && workContextPreview ? (
+                        <SessionListWorkContextPreview
+                            sessionId={resolvedSession.id}
+                            preview={workContextPreview}
+                            compact={Boolean(compact)}
+                        />
                     ) : null}
 
                     {showBelowTagChips ? renderTagChipRow('below') : null}
@@ -1864,6 +2047,7 @@ function SessionItemFromRowModel(props: SessionItemProps & { rowModel: SessionLi
             sessionStatus={rowModel.status}
             sessionNameResolved={rowModel.title}
             sessionSubtitle={itemProps.subtitleOverride ?? rowModel.subtitle}
+            workContextPreview={rowModel.workContextPreview}
             pendingCount={rowModel.pendingCount}
             draft={rowModel.draft}
             reminder={rowModel.reminder}

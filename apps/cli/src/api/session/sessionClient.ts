@@ -5786,6 +5786,17 @@ export class ApiSessionClient extends EventEmitter {
         return this.metadata;
     }
 
+    /** Version paired with the decrypted metadata snapshot for conditional writes. */
+    getMetadataVersionSnapshot(): number {
+        return this.metadataVersion;
+    }
+
+    /** Refresh metadata before checking manual work-context ownership. */
+    async refreshMetadataSnapshot(): Promise<void> {
+        const refreshed = await this.syncSessionSnapshotFromServer({ reason: 'waitForMetadataUpdate' });
+        if (!refreshed) throw new Error('Unable to refresh session metadata for tag autofill');
+    }
+
     setRuntimeWorkingDirectory(directory: string): void {
         const normalized = directory.trim();
         if (!normalized) return;

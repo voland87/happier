@@ -917,11 +917,16 @@ export async function deleteSessionOrganizationTag(params: Readonly<{
     });
 }
 
+type SetSessionTagAssignmentsResult = Readonly<{ sessionId: string; tagIds: string[] }>
+    | { error: "invalid-session-tags" }
+    | { error: "metadata-version-conflict"; currentMetadataVersion: number };
+
+/** Replaces legacy assignments, or atomically appends tags against a metadata fence. */
 export async function setSessionTagAssignments(params: Readonly<{
     accountId: string;
     sessionId: string;
     request: SetSessionTagAssignmentsRequest;
-}>): Promise<Readonly<{ sessionId: string; tagIds: string[] }> | { error: "invalid-session-tags" }> {
+}>): Promise<SetSessionTagAssignmentsResult> {
     return await inTx(async (tx) => await setSessionTagAssignmentsInTx(tx, params));
 }
 
@@ -929,7 +934,30 @@ export async function setSessionTagAssignmentsInTx(tx: SessionOrganizationTx, pa
     accountId: string;
     sessionId: string;
     request: SetSessionTagAssignmentsRequest;
-}>): Promise<Readonly<{ sessionId: string; tagIds: string[] }> | { error: "invalid-session-tags" }> {
+}>): Promise<SetSessionTagAssignmentsResult> {
+    const additive = "mode" in params.request && params.request.mode === "add";
+    if ("mode" in params.request && params.request.mode === "add") {
+        const session = await tx.session.findFirst({
+            where: { id: params.sessionId },
+            select: { metadataVersion: true, updatedAt: true },
+        });
+        if (!session) return { error: "invalid-session-tags" };
+        if (session.metadataVersion !== params.request.expectedMetadataVersion) {
+            return { error: "metadata-version-conflict", currentMetadataVersion: session.metadataVersion };
+        }
+        // Take the same row write lock as metadata CAS, without changing its value
+        // or activity timestamp. A read alone cannot fence the user's separate
+        // metadata-marker and assignment-replacement transactions.
+        const locked = await tx.session.updateMany({
+            where: { id: params.sessionId, metadataVersion: params.request.expectedMetadataVersion },
+            data: { metadataVersion: params.request.expectedMetadataVersion, updatedAt: session.updatedAt },
+        });
+        if (locked.count !== 1) {
+            const current = await tx.session.findFirst({ where: { id: params.sessionId }, select: { metadataVersion: true } });
+            if (!current) return { error: "invalid-session-tags" };
+            return { error: "metadata-version-conflict", currentMetadataVersion: current.metadataVersion };
+        }
+    }
     const uniqueTagIds = Array.from(new Set(params.request.tagIds));
     const existingTags = uniqueTagIds.length > 0
         ? await tx.sessionOrganizationTag.findMany({
@@ -941,12 +969,22 @@ export async function setSessionTagAssignmentsInTx(tx: SessionOrganizationTx, pa
         return { error: "invalid-session-tags" };
     }
 
-    await tx.sessionTagAssignment.deleteMany({
-        where: { accountId: params.accountId, sessionId: params.sessionId },
-    });
-    if (uniqueTagIds.length > 0) {
+    let tagIdsToCreate = uniqueTagIds;
+    if (additive) {
+        const current = await tx.sessionTagAssignment.findMany({
+            where: { accountId: params.accountId, sessionId: params.sessionId },
+            select: { tagId: true },
+        });
+        const currentIds = new Set(current.map((assignment) => assignment.tagId));
+        tagIdsToCreate = uniqueTagIds.filter((tagId) => !currentIds.has(tagId));
+    } else {
+        await tx.sessionTagAssignment.deleteMany({
+            where: { accountId: params.accountId, sessionId: params.sessionId },
+        });
+    }
+    if (tagIdsToCreate.length > 0) {
         await tx.sessionTagAssignment.createMany({
-            data: uniqueTagIds.map((tagId) => ({
+            data: tagIdsToCreate.map((tagId) => ({
                 accountId: params.accountId,
                 sessionId: params.sessionId,
                 tagId,

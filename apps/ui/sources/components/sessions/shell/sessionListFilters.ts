@@ -60,6 +60,18 @@ function buildSessionSearchText(
     appendSearchText(parts, metadata?.path);
     appendSearchText(parts, metadata?.host);
     appendSearchText(parts, metadata?.machineId);
+    const workContext = metadata?.sessionWorkContextV1;
+    if (workContext?.v === 1) {
+        for (const value of workContext.tasks ?? []) appendSearchText(parts, value);
+        for (const value of workContext.mergeRequests ?? []) appendSearchText(parts, value);
+        appendSearchText(parts, workContext.branch);
+        appendSearchText(parts, workContext.repository);
+        appendSearchText(parts, workContext.description);
+        for (const [key, value] of Object.entries(workContext.customFields ?? {})) {
+            appendSearchText(parts, key);
+            appendSearchText(parts, value);
+        }
+    }
     appendSearchText(parts, sessionKey ? searchableTextBySessionKey[sessionKey] : undefined);
     return parts.join('\n').toLocaleLowerCase();
 }

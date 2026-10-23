@@ -1,4 +1,7 @@
+import { isActionDirectToolAvailableOnToolSurface } from '@/agent/tools/happierTools/actionToolCatalog';
+import { readActionsSettingsFromEnv } from '@/settings/actionsSettings';
 import {
+  ActionsSettingsV1Schema,
   buildCodingSessionPromptPlanBaseV1,
   buildPromptPlanDiagnosticsV1,
   buildPromptPlanV1,
@@ -65,11 +68,20 @@ export async function resolveEffectiveCodingPromptPlan(
   // tool-delivery appendix consume this merged record so they can never disagree.
   const basePromptSettings = resolveSessionCodingPromptSettings({ settings, profileId: args.profileId });
 
+  const parsedActionsSettings = ActionsSettingsV1Schema.safeParse(settings.actionsSettingsV1 ?? { v: 1, actions: {} });
+  const actionsSettings = args.settings ? (parsedActionsSettings.success ? parsedActionsSettings.data : null) : readActionsSettingsFromEnv();
+  const contextDeliveryAvailable = args.toolDelivery !== 'unsupported' && (args.toolDelivery !== 'shell_bridge'
+    || Boolean(args.toolDeliverySessionId?.trim() && args.toolDeliveryDirectory?.trim()));
+  const sessionWorkContextToolAvailable = contextDeliveryAvailable && isActionDirectToolAvailableOnToolSurface({
+    actionId: 'session.work_context.update', surface: 'session_agent', actionsSettings,
+  });
+
   const basePlan = buildCodingSessionPromptPlanBaseV1({
     settings: basePromptSettings,
     base: args.baseOverride === null ? '' : args.baseOverride,
     executionRunsFeatureEnabled: args.executionRunsFeatureEnabled === true,
     memoryRecallGuidanceEnabled,
+    sessionWorkContextToolAvailable,
   });
   const stackBlocks = await resolveCliPromptStackSystemAppendBlocks({
     surface: 'coding',

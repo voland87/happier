@@ -177,6 +177,89 @@ describe('warmCacheAdapters', () => {
         expect(rewrittenEntry).toBe(reloadedEntry);
     });
 
+    it('round-trips session work context through a persisted cache entry', () => {
+        const context = {
+            v: 1 as const,
+            tasks: ['MANUAL-777'],
+            mergeRequests: ['!23'],
+            branch: 'feature/context',
+            repository: 'acme/app',
+            description: 'Restore the list search value',
+            customFields: { owner: 'alice' },
+            manualOverrides: { branch: true as const, 'custom:cleared': true as const },
+        };
+        const entry = buildSessionListCacheEntryFromRenderable({
+            id: 's_work_context',
+            seq: 1,
+            createdAt: 5,
+            updatedAt: 20,
+            active: true,
+            activeAt: 20,
+            archivedAt: null,
+            metadataVersion: 2,
+            agentStateVersion: 4,
+            metadata: {
+                path: '/home/u/repo',
+                sessionWorkContextV1: context,
+            },
+            thinking: false,
+            thinkingAt: 0,
+            presence: 'online',
+        });
+
+        const reloadedEntry = SessionListCacheEntryV1Schema.parse(JSON.parse(JSON.stringify(entry)));
+        const restored = buildSessionListRenderableFromCacheEntry(reloadedEntry);
+
+        expect((reloadedEntry as Record<string, unknown>).sessionWorkContextV1).toEqual(context);
+        expect(restored.metadata?.sessionWorkContextV1).toEqual(context);
+    });
+
+    it('keeps a legacy missing work-context marker unknown until metadata is hydrated', () => {
+        const legacyEntry = SessionListCacheEntryV1Schema.parse({
+            sessionId: 's_legacy_work_context',
+            seq: 1,
+            metadataVersion: 2,
+            agentStateVersion: 1,
+            updatedAt: 20,
+            createdAt: 5,
+            active: true,
+            activeAt: 20,
+            archivedAt: null,
+            path: '/home/u/repo',
+        });
+        const legacyRenderable = buildSessionListRenderableFromCacheEntry(legacyEntry);
+        const rewrittenLegacyEntry = buildSessionListCacheEntryFromRenderable(legacyRenderable);
+        const hydratedNoContextEntry = buildSessionListCacheEntryFromRenderable({
+            ...legacyRenderable,
+            metadata: { ...legacyRenderable.metadata!, sessionWorkContextV1: null },
+        });
+
+        expect(legacyRenderable.metadata?.sessionWorkContextV1).toBeUndefined();
+        expect(rewrittenLegacyEntry.sessionWorkContextV1).toBeUndefined();
+        expect(hydratedNoContextEntry.sessionWorkContextV1).toBeNull();
+    });
+
+    it('keeps legacy work-context lock state unknown through cache rewrites', () => {
+        const legacyEntry = SessionListCacheEntryV1Schema.parse({
+            sessionId: 's_legacy_work_context_locks',
+            seq: 1,
+            metadataVersion: 2,
+            agentStateVersion: 1,
+            updatedAt: 20,
+            createdAt: 5,
+            active: true,
+            activeAt: 20,
+            archivedAt: null,
+            path: '/home/u/repo',
+            sessionWorkContextV1: { v: 1, branch: 'feature/legacy-cache' },
+        });
+        const legacyRenderable = buildSessionListRenderableFromCacheEntry(legacyEntry);
+        const rewrittenEntry = buildSessionListCacheEntryFromRenderable(legacyRenderable);
+
+        expect(legacyRenderable.metadata?.sessionWorkContextV1).toEqual({ v: 1, branch: 'feature/legacy-cache' });
+        expect(rewrittenEntry.sessionWorkContextV1).toEqual({ v: 1, branch: 'feature/legacy-cache' });
+    });
+
     it('roundtrips session unread state through cache entries', () => {
         const entry = buildSessionListCacheEntryFromRenderable({
             id: 's1',

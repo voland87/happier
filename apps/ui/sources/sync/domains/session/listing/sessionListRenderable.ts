@@ -5,6 +5,7 @@ import type {
     SessionRuntimeActivityState,
     SessionRuntimeIssueV1,
     PendingActivationAuthorizationV1,
+    SessionWorkContextV1,
 } from '@happier-dev/protocol';
 import {
     deriveLatestPendingRequestObservedAtFromSession,
@@ -46,6 +47,7 @@ export interface SessionListRenderableMetadata {
     host?: string | null;
     machineId?: string | null;
     flavor?: string | null;
+    sessionWorkContextV1?: Pick<SessionWorkContextV1, 'v' | 'tasks' | 'mergeRequests' | 'branch' | 'repository' | 'description' | 'customFields' | 'manualOverrides'> | null;
     directSessionV1?: {
         v: 1;
         providerId?: string;
@@ -139,6 +141,65 @@ export type SessionListRenderablePatchFields = Readonly<Partial<Omit<SessionList
 
 type DirectSessionRenderableMetadata = NonNullable<SessionListRenderableMetadata['directSessionV1']>;
 type ReadStateRenderableMetadata = NonNullable<SessionListRenderableMetadata['readStateV1']>;
+type WorkContextRenderableMetadata = NonNullable<SessionListRenderableMetadata['sessionWorkContextV1']>;
+
+function projectWorkContextMetadata(metadata: Metadata): WorkContextRenderableMetadata | null {
+    const context = metadata.sessionWorkContextV1;
+    if (!context || typeof context !== 'object' || context.v !== 1) return null;
+    return {
+        v: 1,
+        ...(Array.isArray(context.tasks) ? { tasks: [...context.tasks] } : {}),
+        ...(Array.isArray(context.mergeRequests) ? { mergeRequests: [...context.mergeRequests] } : {}),
+        ...(typeof context.branch === 'string' ? { branch: context.branch } : {}),
+        ...(typeof context.repository === 'string' ? { repository: context.repository } : {}),
+        ...(typeof context.description === 'string' ? { description: context.description } : {}),
+        ...(context.customFields && typeof context.customFields === 'object'
+            ? { customFields: { ...context.customFields } }
+            : {}),
+        manualOverrides: context.manualOverrides && typeof context.manualOverrides === 'object'
+            ? { ...context.manualOverrides }
+            : {},
+    };
+}
+
+function areStringArraysEqual(previous: readonly string[] | undefined, next: readonly string[] | undefined): boolean {
+    if (previous === next) return true;
+    if (!previous || !next || previous.length !== next.length) return previous === next;
+    return previous.every((value, index) => value === next[index]);
+}
+
+function areStringRecordsEqual(previous: Readonly<Record<string, string>> | undefined, next: Readonly<Record<string, string>> | undefined): boolean {
+    if (previous === next) return true;
+    if (!previous || !next) return previous === next;
+    const previousKeys = Object.keys(previous);
+    const nextKeys = Object.keys(next);
+    return previousKeys.length === nextKeys.length
+        && previousKeys.every((key) => previous[key] === next[key]);
+}
+
+function areManualOverridesEqual(
+    previous: WorkContextRenderableMetadata['manualOverrides'],
+    next: WorkContextRenderableMetadata['manualOverrides'],
+): boolean {
+    if (previous === next) return true;
+    if (!previous || !next) return previous === next;
+    const previousKeys = Object.keys(previous);
+    const nextKeys = Object.keys(next);
+    return previousKeys.length === nextKeys.length
+        && previousKeys.every((key) => previous[key] === true && next[key] === true);
+}
+
+function areWorkContextMetadataEqual(previous: WorkContextRenderableMetadata | null | undefined, next: WorkContextRenderableMetadata | null | undefined): boolean {
+    if (previous === next) return true;
+    if (!previous || !next) return previous === next;
+    return areStringArraysEqual(previous.tasks, next.tasks)
+        && areStringArraysEqual(previous.mergeRequests, next.mergeRequests)
+        && (previous.branch ?? null) === (next.branch ?? null)
+        && (previous.repository ?? null) === (next.repository ?? null)
+        && (previous.description ?? null) === (next.description ?? null)
+        && areStringRecordsEqual(previous.customFields, next.customFields)
+        && areManualOverridesEqual(previous.manualOverrides, next.manualOverrides);
+}
 
 function normalizeLastViewedSessionSeq(value: number | null | undefined): number | null {
     return typeof value === 'number' && Number.isFinite(value)
@@ -272,6 +333,7 @@ export function buildSessionListRenderableMetadata(metadata: Metadata | null | u
         host: typeof metadata.host === 'string' ? metadata.host : null,
         machineId: typeof metadata.machineId === 'string' ? metadata.machineId : null,
         flavor: typeof metadata.flavor === 'string' ? metadata.flavor : null,
+        sessionWorkContextV1: projectWorkContextMetadata(metadata),
         directSessionV1,
         readStateV1,
         agentActivityCounts: readAgentActivityCounts(metadata),
@@ -513,6 +575,7 @@ function areSessionListRenderableMetadataEqual(
         && (previous.host ?? null) === (next.host ?? null)
         && (previous.machineId ?? null) === (next.machineId ?? null)
         && (previous.flavor ?? null) === (next.flavor ?? null)
+        && areWorkContextMetadataEqual(previous.sessionWorkContextV1, next.sessionWorkContextV1)
         && (previous.directSessionV1?.v ?? null) === (next.directSessionV1?.v ?? null)
         && (previous.directSessionV1?.providerId ?? null) === (next.directSessionV1?.providerId ?? null)
         && (previous.readStateV1?.v ?? null) === (next.readStateV1?.v ?? null)
@@ -750,6 +813,7 @@ function areSessionListRenderableEmbeddedRowMetadataEqual(
         && (previous.host ?? null) === (next.host ?? null)
         && (previous.machineId ?? null) === (next.machineId ?? null)
         && (previous.flavor ?? null) === (next.flavor ?? null)
+        && areWorkContextMetadataEqual(previous.sessionWorkContextV1, next.sessionWorkContextV1)
         && (previous.directSessionV1?.v ?? null) === (next.directSessionV1?.v ?? null)
         && (previous.directSessionV1?.providerId ?? null) === (next.directSessionV1?.providerId ?? null)
         && (previous.readStateV1?.v ?? null) === (next.readStateV1?.v ?? null)

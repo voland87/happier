@@ -38,7 +38,36 @@ graph TB
     Agents --> API
 ```
 
+## Session work context (source fork)
+
+`packages/protocol/src/sessionMetadata/sessionWorkContextV1.ts` owns the optional
+`metadata.sessionWorkContextV1` schema and its patch rules. The UI and CLI apply
+the same helper inside their existing metadata CAS updater, so a retry reads
+current manual overrides before applying Agent values. Manual clears retain an
+override until the user explicitly returns that field to automatic filling.
+Tasks and merge requests accumulate unique references for Agent writes; user
+edits replace the field. Unknown metadata properties remain intact.
+
+The action catalog exposes `session.work_context.get/update`; the session-bound
+MCP implementation restricts them to its current session. Shared coding-prompt
+composition includes autofill instructions only when the update tool is
+available. The default CLI action implementation uses the existing encrypted or
+plain session transport. Context persistence needs no new database table or
+migration.
+
+Tags stay with the session-organization owner. Automatic assignment adds tag
+IDs with `expectedMetadataVersion`, acquiring the session row's write lock in
+the assignment transaction. Owner tag edits in the updated UI first set the
+metadata manual marker, then replace assignments. Shared-session recipients
+retain independent personal tags without changing the owner's marker.
+A stale automatic assignment must refresh the
+metadata and re-evaluate that marker. Legacy replacement requests remain valid;
+older UI writers do not create the new marker. An unsupported additive write
+fails without falling back to replacement. If tags fail after a context update,
+the action reports the saved context in its error details.
+
 ## High-level layout
+
 - **Entry point:** `src/index.ts` parses subcommands and routes execution.
 - **API client:** `src/api` handles HTTP + Socket.IO, encryption, and RPC.
 - **Daemon:** `src/daemon` runs in the background, spawns sessions, and maintains machine state.

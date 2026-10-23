@@ -83,3 +83,11 @@ export function buildHappierBaseSystemPromptV1(args?: Readonly<{
 }
 
 export const HAPPIER_BASE_SYSTEM_PROMPT_V1 = buildHappierBaseSystemPromptV1();
+
+export const HAPPIER_BASE_SYSTEM_PROMPT_WORK_CONTEXT_V1 = trimIdent(`
+  # Session work context
+
+  When confirmed task references, merge requests, branch, repository, a concise work description, custom work fields, or relevant tags become known or change, call session_work_context_update with a patch for those facts and optional tags for native session tags. The tool may have a provider prefix such as mcp__happier__.
+
+  Keep this context current as work progresses. Record only confirmed information; do not invent links, identifiers, branches, or other facts. Tasks and merge requests accumulate unique references. User edits take priority: preserve fields reported in skippedManualFields and never try to bypass user locks. This updates session organization information only. Call the tool directly; Happier handles its configured approval policy.
+`);

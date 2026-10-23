@@ -60,6 +60,7 @@ export {
   SetSessionPinResponseSchema,
   SetSessionTagAssignmentsRequestSchema,
   SetSessionTagAssignmentsResponseSchema,
+  SetSessionTagAssignmentsConflictResponseSchema,
   UpsertSessionOrganizationLabelRequestSchema,
   UpsertSessionOrganizationLabelResponseSchema,
   type CreateOrUpdateSessionOrganizationFolderRequest,

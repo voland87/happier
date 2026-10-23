@@ -29,6 +29,8 @@ export const ACTION_IDS = [
   // Session control plane (CLI/MCP)
   'session.stop',
   'session.title.set',
+  'session.work_context.get',
+  'session.work_context.update',
   'session.model.set',
   'session.permission_mode.set',
   'session.archive',

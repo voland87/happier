@@ -50,6 +50,22 @@ function createCredentials(): DataKeyCredentials {
 }
 
 describe('resolveEffectiveCodingPromptText', () => {
+  it('provides context guidance only when the update tool is available, including custom base prompts', async () => {
+    const base = { credentials: createCredentials(), profileId: null, baseOverride: 'CUSTOM', memoryRecallGuidanceEnabled: false };
+    const enabled = await resolveEffectiveCodingPromptText({ ...base, settings: {} });
+    expect(enabled).toContain('session_work_context_update');
+    const disabled = await resolveEffectiveCodingPromptText({ ...base, settings: {
+      actionsSettingsV1: { v: 1, actions: { 'session.work_context.update': { enabled: false, disabledSurfaces: [], disabledPlacements: [] } } },
+    } });
+    expect(disabled).not.toContain('session_work_context_update');
+    const hidden = await resolveEffectiveCodingPromptText({ ...base, settings: {
+      actionsSettingsV1: { v: 1, actions: { 'session.work_context.update': { enabled: true, disabledSurfaces: [], disabledPlacements: [], toolExposureModes: { session_agent: 'discoverable_only' } } } },
+    } });
+    expect(hidden).not.toContain('session_work_context_update');
+    const unsupported = await resolveEffectiveCodingPromptText({ ...base, settings: {}, toolDelivery: 'unsupported' });
+    expect(unsupported).not.toContain('session_work_context_update');
+  });
+
   it('decrypts referenced prompt docs and caches artifact bodies across calls', async () => {
     const credentials = createCredentials();
 
@@ -124,7 +140,8 @@ describe('resolveEffectiveCodingPromptText', () => {
       executionRunsFeatureEnabled: false,
     });
 
-    expect(first).toBe('BASE\n\nHello from coding\n\nHello from profile');
+    expect(first.startsWith('BASE\n\n')).toBe(true);
+    expect(first.endsWith('Hello from coding\n\nHello from profile')).toBe(true);
     expect(second).toBe(first);
     expect(fetchCount).toBe(2);
   });

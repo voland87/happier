@@ -8,6 +8,7 @@ import {
     type SessionListRenderableSession,
 } from '@/sync/domains/session/listing/sessionListRenderable';
 import type { Session } from '@/sync/domains/state/storageTypes';
+import type { SessionListCacheEntryV1 } from '@/sync/domains/state/warmCachePersistence';
 import { syncPerformanceTelemetry } from '@/sync/runtime/syncPerformanceTelemetry';
 import type { V2SessionRecord } from '@happier-dev/protocol';
 
@@ -160,7 +161,7 @@ function createEncryptionHarness(counter: { count: number }): SessionListEncrypt
 }
 
 type SnapshotHarness = Readonly<{
-    run: (movement: RowMovement) => Promise<void>;
+    run: (movement: RowMovement, cachedEntry?: SessionListCacheEntryV1) => Promise<void>;
     decryptCalls: () => number;
 }>;
 
@@ -191,7 +192,7 @@ function createSnapshotHarness(options: Readonly<{
 
     return {
         decryptCalls: () => counter.count,
-        run: async (movement) => {
+        run: async (movement, cachedEntry) => {
             await fetchAndApplySessions({
                 serverId: 'test',
                 credentials: { token: 't', secret: 's' } as AuthCredentials,
@@ -202,6 +203,7 @@ function createSnapshotHarness(options: Readonly<{
                     nextCursor: null,
                     hasNext: false,
                 }),
+                ...(cachedEntry ? { cachedSessionListEntries: { [SESSION_ID]: cachedEntry } } : {}),
                 getExistingSession: (sessionId) => (
                     options.withStoredSessions ? store.sessions.get(sessionId) ?? null : null
                 ),
@@ -367,5 +369,26 @@ describe('session-list snapshot metadata decryption', () => {
         await harness.run(STREAMING_TICK);
 
         expect(harness.decryptCalls()).toBe(2);
+    });
+
+    it('hydrates an older warm-cache entry that has no work-context cache marker', async () => {
+        const harness = createSnapshotHarness({ withStoredSessions: false });
+
+        await harness.run(FIRST, {
+            sessionId: SESSION_ID,
+            seq: FIRST.seq,
+            metadataVersion: FIRST.metadataVersion,
+            agentStateVersion: 1,
+            updatedAt: FIRST.updatedAt,
+            createdAt: CREATED_AT,
+            active: true,
+            activeAt: FIRST.updatedAt,
+            archivedAt: null,
+            name: 'warm session',
+            path: '/repo',
+            host: 'host',
+        });
+
+        expect(harness.decryptCalls()).toBe(1);
     });
 });

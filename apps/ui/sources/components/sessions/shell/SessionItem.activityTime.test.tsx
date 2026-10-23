@@ -112,7 +112,8 @@ vi.mock('@/agents/registry/AgentIcon', () => ({
     AgentIcon: 'AgentIcon',
 }));
 
-vi.mock('@/agents/catalog/catalog', () => ({
+vi.mock('@/agents/catalog/catalog', async (importOriginal) => ({
+    ...(await importOriginal<typeof import('@/agents/catalog/catalog')>()),
     DEFAULT_AGENT_ID: 'codex',
     resolveAgentIdFromFlavor: (flavor: string | null | undefined) => flavor === 'claude' || flavor === 'grok' ? flavor : null,
     getAgentPickerIconScale: (agentId: string) => agentId === 'grok' ? 1.25 : 1,
@@ -265,6 +266,7 @@ function createSessionRowModel(overrides: Partial<SessionListRowModel> = {}): Se
         title: 'Model Session',
         subtitle: 'Model Subtitle',
         subtitleEllipsizeMode: 'head',
+        workContextPreview: overrides.workContextPreview ?? null,
         groupKey: 'recent',
         groupKind: null,
         section: 'recent',
@@ -518,6 +520,57 @@ describe('SessionItem activity time', () => {
         ]));
         expect(useSessionStatusSpy).not.toHaveBeenCalled();
         expect(useSettingSpy).not.toHaveBeenCalled();
+    });
+
+    it('renders task and merge-request chips with a separate branch line', async () => {
+        const { SessionItem } = await importSessionItemForTest();
+        const rowModel = createSessionRowModel({
+            workContextPreview: {
+                tasks: ['TASK-42', 'TASK-43'],
+                mergeRequests: [
+                    { value: 'https://github.com/acme/app/pull/42', label: '!42' },
+                    { value: 'https://gitlab.com/acme/app/-/merge_requests/43', label: '!43' },
+                    { value: 'follow-up after release', label: 'follow-up after release' },
+                ],
+                branch: 'feature/context',
+            },
+        });
+
+        const screen = await renderScreen(<SessionItem rowModel={rowModel} session={rowModel.session} />);
+
+        expect(screen.getTextContent()).toContain('TASK-42');
+        expect(screen.getTextContent()).toContain('TASK-43');
+        expect(screen.getTextContent()).toContain('!42');
+        expect(screen.getTextContent()).toContain('!43');
+        expect(screen.getTextContent()).toContain('follow-up after release');
+        expect(screen.getTextContent()).toContain('feature/context');
+        expect(screen.findByTestId('session-list-work-context-preview-tasks-sess_row_model')).toBeTruthy();
+        expect(screen.findByTestId('session-list-work-context-preview-merge-requests-sess_row_model')).toBeTruthy();
+        expect(screen.findByTestId('session-list-work-context-preview-branch-sess_row_model')).toBeTruthy();
+        expect(screen.findByTestId('session-list-work-context-preview-task-sess_row_model-0')?.props.numberOfLines).toBeUndefined();
+        expect(screen.findByTestId('session-list-work-context-preview-merge-request-sess_row_model-0')?.props.numberOfLines).toBeUndefined();
+    });
+
+    it('shows the work-context preview when a quiet row has no status or path line', async () => {
+        const { SessionItem } = await importSessionItemForTest();
+        const rowModel = createSessionRowModel({
+            presentation: {
+                attentionIndicator: 'none',
+                titleTone: 'quiet',
+                secondaryLine: 'none',
+            },
+            workContextPreview: {
+                tasks: ['TASK-42'],
+                mergeRequests: [{ value: '!7', label: '!7' }],
+                branch: 'feature/context',
+            },
+        });
+
+        const screen = await renderScreen(<SessionItem rowModel={rowModel} session={rowModel.session} />);
+
+        expect(screen.findByTestId('session-list-work-context-preview-sess_row_model')).toBeTruthy();
+        expect(screen.findByTestId('session-list-work-context-preview-tasks-sess_row_model')).toBeTruthy();
+        expect(screen.findByTestId('session-list-status-subtitle-sess_row_model-working')).toBeNull();
     });
 
     it('renders background activity with the normal working spinner while retaining pending and unread row facts', async () => {

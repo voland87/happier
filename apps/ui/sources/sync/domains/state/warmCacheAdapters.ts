@@ -128,6 +128,31 @@ function areDirectSessionCacheEntriesEqual(
     return next.v === previous.v && next.providerId === previous.providerId;
 }
 
+function areWorkContextCacheEntriesEqual(
+    next: SessionListCacheEntryV1['sessionWorkContextV1'],
+    previous: SessionListCacheEntryV1['sessionWorkContextV1'],
+): boolean {
+    if (next === undefined || previous === undefined) return next === previous;
+    return areCacheJsonValuesEqual(next, previous);
+}
+
+function projectWorkContextForCache(
+    context: SessionListCacheEntryV1['sessionWorkContextV1'] | null | undefined,
+): SessionListCacheEntryV1['sessionWorkContextV1'] {
+    if (context === undefined) return undefined;
+    if (context === null) return null;
+    return {
+        v: 1,
+        ...(context.tasks ? { tasks: [...context.tasks] } : {}),
+        ...(context.mergeRequests ? { mergeRequests: [...context.mergeRequests] } : {}),
+        ...(typeof context.branch === 'string' ? { branch: context.branch } : {}),
+        ...(typeof context.repository === 'string' ? { repository: context.repository } : {}),
+        ...(typeof context.description === 'string' ? { description: context.description } : {}),
+        ...(context.customFields ? { customFields: { ...context.customFields } } : {}),
+        ...(context.manualOverrides ? { manualOverrides: { ...context.manualOverrides } } : {}),
+    };
+}
+
 function areSessionListCacheEntriesEqual(
     nextEntry: SessionListCacheEntryV1,
     previousEntry: SessionListCacheEntryV1,
@@ -168,6 +193,7 @@ function areSessionListCacheEntriesEqual(
         && nextEntry.host === previousEntry.host
         && nextEntry.machineId === previousEntry.machineId
         && nextEntry.flavor === previousEntry.flavor
+        && areWorkContextCacheEntriesEqual(nextEntry.sessionWorkContextV1, previousEntry.sessionWorkContextV1)
         && areDirectSessionCacheEntriesEqual(nextEntry.directSessionV1, previousEntry.directSessionV1)
         && nextEntry.hiddenSystemSession === previousEntry.hiddenSystemSession
         && nextEntry.hasPendingPermissionRequests === previousEntry.hasPendingPermissionRequests
@@ -230,6 +256,9 @@ export function buildSessionListRenderableFromCacheEntry(entry: SessionListCache
             host: entry.host ?? null,
             machineId: entry.machineId ?? null,
             flavor: entry.flavor ?? null,
+            ...(entry.sessionWorkContextV1 !== undefined
+                ? { sessionWorkContextV1: entry.sessionWorkContextV1 }
+                : {}),
             directSessionV1: entry.directSessionV1 ?? null,
             hiddenSystemSession: entry.hiddenSystemSession === true,
         } : null,
@@ -338,6 +367,9 @@ export function buildSessionListCacheEntryFromRenderable(
         host: preserveMetadata ? previousEntry.host ?? null : session.metadata?.host ?? null,
         machineId: preserveMetadata ? previousEntry.machineId ?? null : session.metadata?.machineId ?? null,
         flavor: preserveMetadata ? previousEntry.flavor ?? null : session.metadata?.flavor ?? null,
+        sessionWorkContextV1: preserveMetadata
+            ? previousEntry.sessionWorkContextV1
+            : projectWorkContextForCache(session.metadata?.sessionWorkContextV1),
         directSessionV1: preserveMetadata ? previousEntry.directSessionV1 ?? null : session.metadata?.directSessionV1 ?? null,
         hiddenSystemSession: preserveMetadata
             ? previousEntry.hiddenSystemSession === true

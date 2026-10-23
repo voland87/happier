@@ -9,6 +9,31 @@ If you’re looking for install/auth/server profiles first, start at [CLI](/apps
 
 The same canonical **action catalog** also powers the app, session agents, voice, and the external MCP server. That is why the session CLI, the built-in action surface, and external MCP controls all describe the same session operations in different transports.
 
+## Work-context tools in this source fork
+
+The updated CLI exposes `session.work_context.get` and
+`session.work_context.update` through the action catalog and the Agent's MCP
+tools. They record confirmed session context while preserving fields you edited
+manually. This addition requires the fork's CLI; it is not in upstream 0.2.17.
+
+Inspect the accepted inputs before scripting an update:
+
+```bash
+happier session actions describe session.work_context.update --json
+```
+
+For example, add a task and merge-request reference:
+
+```bash
+happier session actions execute <session-id> session.work_context.update --input-json '{"patch":{"tasks":["TASK-123"],"mergeRequests":["https://git.example.com/team/project/-/merge_requests/42"]}}' --json
+```
+
+Optional `tags` add native session tags and require the updated relay. If that
+part fails after the context was saved, the action returns an error with
+`details.contextUpdated: true`. It never replaces existing tag assignments to
+work around an older relay. See [work context](/organize/session-organization#work-context)
+for manual editing and returning a field to automatic filling.
+
 ## Session identifiers
 
 Most commands accept either:

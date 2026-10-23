@@ -49,6 +49,44 @@ const inactiveHeader: Extract<SessionListViewItem, { type: 'header' }> = {
 };
 
 describe('filterSessionListItemsForHeaderControls', () => {
+    it('searches agent work-context references and descriptive custom values', () => {
+        const metadata = {
+            name: 'Context session',
+            summaryText: null,
+            path: '/repo',
+            host: 'host-a',
+            sessionWorkContextV1: {
+                v: 1,
+                tasks: ['TASK-42'],
+                mergeRequests: ['https://git.example/acme/app/merge_requests/7'],
+                branch: 'feature/session-context',
+                repository: 'acme/app',
+                description: 'Prepare customer onboarding',
+                customFields: { owner: 'platform-team' },
+            },
+        } as unknown as NonNullable<Extract<SessionListViewItem, { type: 'session' }>['session']['metadata']>;
+
+        for (const query of ['TASK-42', 'merge_requests/7', 'feature/session-context', 'acme/app', 'onboarding', 'platform-team']) {
+            const result = filterSessionListItemsForHeaderControls([
+                activeHeader,
+                sessionItem('context', metadata),
+                sessionItem('other', {
+                    name: 'Other session',
+                    summaryText: null,
+                    path: '/other',
+                    host: 'host-b',
+                }),
+            ], {
+                searchQuery: query,
+                selectedTags: [],
+                sessionTags: {},
+                searchableTextBySessionKey: {},
+            });
+
+            expect(result.filter((item) => item.type === 'session').map((item) => item.session.id)).toEqual(['context']);
+        }
+    });
+
     it('filters sessions by metadata and prunes empty headers', () => {
         const result = filterSessionListItemsForHeaderControls([
             activeHeader,

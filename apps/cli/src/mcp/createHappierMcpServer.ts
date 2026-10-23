@@ -1,3 +1,5 @@
+import { createSessionWorkContextTagsFailure } from '@/session/services/sessionWorkContext';
+import { updateSessionWorkContextTags } from '@/session/workContext/updateSessionWorkContextTags';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 
 import type { HappyMcpSessionClient } from '@/mcp/startHappyServer';
@@ -16,6 +18,8 @@ import { createDaemonMemoryActionDeps } from '@/session/actions/createDaemonMemo
 import { resolveSessionEncryptionContextFromCredentials } from '@/session/transport/encryption/sessionEncryptionContext';
 import { callMachineRpc } from '@/session/transport/rpc/machineRpc';
 import {
+  applySessionWorkContextPatchV1,
+  readSessionWorkContextV1,
   PromptRegistryInstallRequestV1Schema,
   PromptRegistryInstallResponseV1Schema,
   type ActionId,
@@ -155,6 +159,48 @@ export function createHappierMcpServer(
       getCurrentSessionBackendTarget: () => resolveLiveClientBackendTarget(client),
     },
     {
+      sessionWorkContextGet: async ({ sessionId }) => {
+        if (sessionId !== client.sessionId) return { ok: false, errorCode: 'permission_denied', error: 'permission_denied' };
+        if (!client.getMetadataSnapshot) return { ok: false, errorCode: 'unsupported_action', error: 'metadata_snapshot_unavailable' };
+        const metadata = client.getMetadataSnapshot();
+        if (!metadata) return { ok: false, errorCode: 'session_metadata_unavailable', error: 'session_metadata_unavailable' };
+        return { ok: true, sessionId, context: readSessionWorkContextV1(metadata.sessionWorkContextV1) };
+      },
+      sessionWorkContextUpdate: async ({ sessionId, patch, tags }) => {
+        if (sessionId !== client.sessionId) return { ok: false, errorCode: 'permission_denied', error: 'permission_denied' };
+        if (!client.updateMetadataWithResult) return { ok: false, errorCode: 'unsupported_action', error: 'metadata_update_with_result_unavailable' };
+        if (tags !== undefined && !credentials) return { ok: false, errorCode: 'not_authenticated', error: 'not_authenticated' };
+        if (tags !== undefined && (!client.getMetadataSnapshot || !client.getMetadataVersionSnapshot || !client.refreshMetadataSnapshot)) {
+          return { ok: false, errorCode: 'unsupported_action', error: 'metadata_snapshot_unavailable' };
+        }
+        try {
+          const result = await client.updateMetadataWithResult((metadata) => {
+            const applied = applySessionWorkContextPatchV1({ current: metadata.sessionWorkContextV1, patch, source: 'agent' });
+            return { metadata: { ...metadata, sessionWorkContextV1: applied.context }, result: applied };
+          });
+          let tagResult: Awaited<ReturnType<typeof updateSessionWorkContextTags>> | null = null;
+          if (tags !== undefined) {
+            try {
+              tagResult = await updateSessionWorkContextTags({
+                sessionId, tags, credentials: credentials!, session: {
+                  getMetadataSnapshot: () => client.getMetadataSnapshot!(),
+                  getMetadataVersionSnapshot: () => client.getMetadataVersionSnapshot!(),
+                  refreshMetadataSnapshot: async () => await client.refreshMetadataSnapshot!(),
+                },
+              });
+            } catch (error) {
+              return createSessionWorkContextTagsFailure({ error, sessionId, ...result });
+            }
+          }
+          return { ok: true, sessionId, ...result, ...(tagResult ? { tagIds: tagResult.tagIds } : {}),
+            skippedManualFields: [...result.skippedManualFields, ...(tagResult?.skippedManualFields ?? [])] };
+        } catch (error) {
+          if (error && typeof error === 'object' && 'code' in error && error.code === 'session_metadata_unavailable') {
+            return { ok: false, errorCode: 'session_metadata_unavailable', error: 'session_metadata_unavailable' };
+          }
+          return { ok: false, errorCode: 'metadata_update_failed', error: 'metadata_update_failed' };
+        }
+      },
       sessionTitleSet: async ({ sessionId, title }) => {
         const normalizedSessionId = String(sessionId ?? '').trim();
         if (!normalizedSessionId) {
@@ -263,6 +309,7 @@ export function createHappierMcpServer(
 
   const { toolNames } = registerHappierMcpBuiltInTools(mcp as any, {
     sessionId: client.sessionId,
+    resolveSessionId: () => client.sessionId,
     defaultSessionMachineId: sessionLocation?.machineId ?? null,
     surface: toolSurface,
     actionsSettings: readActionsSettings(),

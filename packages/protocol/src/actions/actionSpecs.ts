@@ -1,5 +1,7 @@
 import { z } from 'zod';
 
+import { SessionWorkContextPatchV1Schema } from '../sessionMetadata/sessionWorkContextV1.js';
+
 import { ActionIdSchema, type ActionId } from './actionIds.js';
 import { ActionUiPlacementSchema, type ActionUiPlacement } from './actionUiPlacements.js';
 import { ReviewStartInputSchema } from '../reviews/reviewStart.js';
@@ -257,6 +259,12 @@ const OptionalSessionIdInputSchema = z.object({
 const SessionIdRequiredInputSchema = z.object({
   sessionId: z.string().min(1),
 }).passthrough();
+
+const SessionWorkContextGetInputSchema = z.object({ sessionId: z.string().trim().min(1).optional() }).strict();
+const SessionWorkContextUpdateInputSchema = SessionWorkContextGetInputSchema.extend({
+  patch: SessionWorkContextPatchV1Schema.default({}),
+  tags: z.array(z.string()).optional(),
+});
 
 const SessionTitleSetInputSchema = z.object({
   sessionId: z.string().min(1).optional(),
@@ -2318,6 +2326,42 @@ export const ACTION_SPECS: readonly ActionSpec[] = Object.freeze([
       fields: [{ path: 'sessionId', title: 'Session id', widget: 'text', required: true }],
     },
     inputSchema: SessionIdRequiredInputSchema,
+  },
+  {
+    id: 'session.work_context.get',
+    title: 'Get session work context',
+    description: 'Read confirmed tasks, merge requests, branch, repository, description and custom fields for the current session.',
+    safety: 'safe',
+    approval: APPROVAL_RESULT_NONE,
+    placements: [],
+    bindings: { mcpToolName: 'session_work_context_get' },
+    toolExposure: { session_agent: 'direct' },
+    surfaces: { ui_button: false, ui_slash_command: false, voice_tool: false, voice_action_block: false, session_agent: true, mcp: true, cli: true },
+    contextualDefaults: { sessionId: 'current_session' },
+    inputHints: { title: 'Read work context', fields: [{ path: 'sessionId', title: 'Session id', widget: 'text' }] },
+    inputSchema: SessionWorkContextGetInputSchema,
+  },
+  {
+    id: 'session.work_context.update',
+    title: 'Update session work context',
+    description: 'Update confirmed work context for the current session. User-edited fields are preserved and reported in skippedManualFields. Tasks and merge requests append unique values. Optional tags add native session tags without replacing existing assignments.',
+    safety: 'safe',
+    approval: APPROVAL_RESULT_NONE,
+    placements: [],
+    bindings: { mcpToolName: 'session_work_context_update' },
+    toolExposure: { session_agent: 'direct' },
+    surfaces: { ui_button: false, ui_slash_command: false, voice_tool: false, voice_action_block: false, session_agent: true, mcp: true, cli: true },
+    contextualDefaults: { sessionId: 'current_session' },
+    inputHints: { title: 'Update work context', fields: [
+      { path: 'sessionId', title: 'Session id', widget: 'text' },
+      { path: 'tags', title: 'Tags', widget: 'text_list', listSeparator: 'newline' },
+      { path: 'patch.tasks', title: 'Tasks', widget: 'text_list', listSeparator: 'newline' },
+      { path: 'patch.mergeRequests', title: 'Merge requests', widget: 'text_list', listSeparator: 'newline' },
+      { path: 'patch.branch', title: 'Branch', widget: 'text' },
+      { path: 'patch.repository', title: 'Repository', widget: 'text' },
+      { path: 'patch.description', title: 'Description', widget: 'textarea' },
+    ] },
+    inputSchema: SessionWorkContextUpdateInputSchema,
   },
   {
     id: 'session.title.set',

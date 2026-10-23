@@ -11,6 +11,38 @@ see on your phone.
 Folders are on by default. Nothing here needs turning on unless your server
 operator has disabled `sessions.folders`.
 
+## Work context
+
+This source fork adds **Agent work context** to the session's information screen.
+Build the updated UI and CLI to use it; this addition is not part of the upstream
+0.2.17 release.
+
+Open a session's information screen from its header, then select a work-context
+field to edit it. You can keep task references, several merge requests, the
+branch and repository, a description, and your own named fields. Enter task and
+merge-request references one per line, using a number or a full URL. The session
+list shows a short preview in Detailed and Medium density, and its search
+includes these fields in every density. Narrow density keeps its single-line
+layout; switch density in **Settings → Sessions → Session List Density**.
+
+The updated CLI gives Agents tools to record confirmed context as work
+progresses. Automatic task and merge-request updates add unique references;
+branch information changes when the Agent reports a confirmed branch change.
+An Agent can only record information it has obtained during the session.
+
+Your edits take priority. Changing or clearing a field marks it **Manual**, so
+later Agent updates preserve that value or clear. Choose **Return to automatic**
+beside a field to let the next Agent update fill it again. This also works for
+custom fields you have cleared.
+
+Automatic tags use the existing tags and filters. They require the updated
+relay as well as the updated CLI. When the session owner edits tags in the
+updated UI, this pauses automatic filling; you can restore it from the
+work-context section. Older
+clients can still edit tags, but those clients do not mark the edit as manual.
+An older relay rejects automatic tag additions; ordinary work-context fields
+can still be saved independently.
+
 ## Folders
 
 Folders group sessions the way directories group files, and they nest.

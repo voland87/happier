@@ -5,7 +5,11 @@ import {
     readSessionOrganizationTagLabel,
 } from '@/sync/domains/session/organization';
 import { getStorage } from '@/sync/domains/state/storageStore';
-import type { SessionOrganizationTag } from '@happier-dev/protocol';
+import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
+import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
+import { parseToken } from '@/utils/auth/parseToken';
+import { applySessionWorkContextPatchV1, type SessionOrganizationTag } from '@happier-dev/protocol';
+import { sync } from '@/sync/sync';
 
 import { setSessionTagAssignments } from './setSessionTagAssignments';
 import { fetchAndApplySessionOrganizationSnapshot } from './fetchSessionOrganizationSnapshot';
@@ -52,6 +56,31 @@ function resolveExistingTagsByLabel(params: Readonly<{
     return { resolvedTags, missingLabels };
 }
 
+function isSessionTagAssignmentOwner(params: Readonly<{
+    sessionId: string;
+    serverId: string;
+    credentials: AuthCredentials;
+}>): boolean {
+    const state = getStorage().getState();
+    const activeServerId = getActiveServerSnapshot().serverId;
+    const targetsActiveServer = areServerProfileIdentifiersEquivalent(activeServerId, params.serverId);
+    const hydrated = state.sessions[params.sessionId];
+    const hydratedMatches = hydrated && (hydrated.serverId
+        ? areServerProfileIdentifiersEquivalent(hydrated.serverId, params.serverId)
+        : targetsActiveServer);
+    const cached = Object.entries(state.sessionListViewDataByServerId).find(([serverId]) =>
+        areServerProfileIdentifiersEquivalent(serverId, params.serverId))?.[1]
+        ?.find((item) => item.type === 'session' && item.session.id === params.sessionId);
+    const session = hydratedMatches ? hydrated
+        : cached?.type === 'session' ? cached.session
+            : targetsActiveServer ? state.sessionListRenderables[params.sessionId] : undefined;
+    // Older/uncached callers retain the metadata CAS and its errors. A known
+    // recipient's account-local assignments must never lock the owner's agent.
+    if (!session) return true;
+    const ownerId = typeof session.owner === 'string' ? session.owner : null;
+    return ownerId ? ownerId === parseToken(params.credentials.token) : session.accessLevel == null;
+}
+
 export async function setSessionTagLabels(params: Readonly<{
     credentials: AuthCredentials;
     serverId: string;
@@ -59,6 +88,19 @@ export async function setSessionTagLabels(params: Readonly<{
     sessionId: string;
     tags: readonly string[];
 }>): Promise<void> {
+    // Tags belong to the account, while the autofill marker belongs to the
+    // session owner. Shared recipients keep personal tagging at every access level.
+    if (isSessionTagAssignmentOwner(params)) {
+        await sync.patchSessionMetadataWithRetry(params.sessionId, (metadata) => ({
+            ...metadata,
+            sessionWorkContextV1: applySessionWorkContextPatchV1({
+                current: metadata.sessionWorkContextV1,
+                patch: {},
+                source: 'user',
+                lockManualFields: ['tags'],
+            }).context,
+        }), { serverId: params.serverId });
+    }
     const labels = normalizeSessionTagLabels(params.tags);
     if (labels.length === 0) {
         await setSessionTagAssignments({

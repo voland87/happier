@@ -284,6 +284,7 @@ async function hydrateCacheOnlySessionMetadataProjection(
         updateSeq: payload.updateSeq,
         shouldContinue: payload.shouldContinue,
     });
+
 }
 
 const cacheOnlySessionMetadataHydrationCoalescer = createSessionLeadingTrailingCoalescer<
@@ -1640,20 +1641,9 @@ export async function handleUpdateContainer(params: {
                     shouldContinue,
                 });
                 const sessionEncryption = encryption.getSessionEncryption(updateData.body.id);
-                if (!fullContentConsumerActive && sessionEncryption) {
-                    // The list already has a stale-while-revalidate metadata projection, while
-                    // update-session carries the complete encrypted metadata envelope. Decrypting
-                    // that detail for every hidden session duplicates the snapshot hydrator's work
-                    // and can monopolize the JS/crypto workers. Keep the public projection current
-                    // and let the existing onSessionVisible force refresh hydrate the latest
-                    // envelope when a detail surface actually consumes it.
-                    markSessionStateHydrationDeferred?.(updateData.body.id);
-                    syncPerformanceTelemetry.count('sync.socket.sessions.metadataHydration.deferred', {
-                        sessions: 1,
-                        encrypted: 1,
-                    });
-                    return;
-                }
+                // A cached renderable is the list's active metadata projection consumer. Keep its
+                // preview/search fields current by hydrating metadata through the existing
+                // coalescer; agent state and transcript content remain deferred for hidden rows.
                 const metadataHydrationSessionId = updateData.body.id;
                 const leadingMetadataHydration = cacheOnlySessionMetadataHydrationCoalescer.request(metadataHydrationSessionId, {
                     updateBody: updateData.body,

@@ -28,6 +28,12 @@ export type SessionListRowStoreState = Readonly<{
     sessionPending?: Readonly<Record<string, SessionPending | undefined>>;
 }>;
 
+export type SessionListWorkContextPreview = Readonly<{
+    tasks: readonly string[];
+    mergeRequests: readonly Readonly<{ value: string; label: string }>[];
+    branch: string | null;
+}>;
+
 export type SessionListRowPresentationSettings = Readonly<{
     currentUserId: string | null;
     density: SessionRowDensity;
@@ -106,6 +112,7 @@ export type SessionListRowModel = Readonly<{
     title: string;
     subtitle: string;
     subtitleEllipsizeMode: 'head' | 'tail';
+    workContextPreview: SessionListWorkContextPreview | null;
     groupKey: string;
     groupKind: SessionListRowSessionItem['groupKind'] | null;
     section: SessionListRowSessionItem['section'] | 'recent' | 'pinned' | 'archived' | null;

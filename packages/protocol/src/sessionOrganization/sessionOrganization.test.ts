@@ -30,6 +30,13 @@ import {
 } from './index.js';
 
 describe('session organization protocol contracts', () => {
+  it('requires a metadata version for additive tag writes while preserving legacy replacement', () => {
+    expect(SetSessionTagAssignmentsRequestSchema.parse({ tagIds: ['tag-1'] })).toEqual({ tagIds: ['tag-1'] });
+    expect(SetSessionTagAssignmentsRequestSchema.safeParse({ tagIds: ['tag-1'], mode: 'add', expectedMetadataVersion: 2 }).success).toBe(true);
+    expect(SetSessionTagAssignmentsRequestSchema.safeParse({ tagIds: ['tag-1'], mode: 'add' }).success).toBe(false);
+    expect(SetSessionTagAssignmentsRequestSchema.safeParse({ tagIds: ['tag-1'], expectedMetadataVersion: 2 }).success).toBe(false);
+  });
+
   it('uses the canonical stored JSON content envelope for private display content', () => {
     expect(SessionOrganizationContentEnvelopeSchema.parse({ t: 'plain', v: { name: 'Work' } }))
       .toEqual(StoredJsonContentEnvelopeSchema.parse({ t: 'plain', v: { name: 'Work' } }));

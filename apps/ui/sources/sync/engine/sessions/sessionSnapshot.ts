@@ -250,11 +250,16 @@ function buildRenderableFromRowAndCache(
             host: cachedEntry.host ?? null,
             machineId: cachedEntry.machineId ?? null,
             flavor: cachedEntry.flavor ?? null,
+            ...(cachedEntry.sessionWorkContextV1 !== undefined
+                ? { sessionWorkContextV1: cachedEntry.sessionWorkContextV1 }
+                : {}),
             directSessionV1: cachedEntry.directSessionV1 ?? null,
             hiddenSystemSession: cachedEntry.hiddenSystemSession === true,
         }
         : null;
-    const useMatchingCacheMetadata = metadataMatches && metadataFromCache != null;
+    const useMatchingCacheMetadata = metadataMatches
+        && metadataFromCache != null
+        && cachedEntry?.sessionWorkContextV1 !== undefined;
     const useExistingSessionMetadata = !useMatchingCacheMetadata && existingMetadataMatches;
     const useCurrentRenderableMetadata =
         !useMatchingCacheMetadata && !useExistingSessionMetadata && currentMetadataMatches;
@@ -416,7 +421,10 @@ function isCurrentRenderableCompleteForWarmHydration(
     if ((currentRenderable.runtimeActivityActiveCount ?? null) !== (row.runtimeActivityActiveCount ?? null)) return false;
     if ((currentRenderable.runtimeActivityObservedAt ?? null) !== (row.runtimeActivityObservedAt ?? null)) return false;
     if ((currentRenderable.runtimeActivityRevision ?? null) !== (row.runtimeActivityRevision ?? null)) return false;
-    if (row.metadata != null && currentRenderable.metadata == null) return false;
+    if (
+        row.metadata != null
+        && (currentRenderable.metadata == null || currentRenderable.metadata.sessionWorkContextV1 === undefined)
+    ) return false;
     if (
         row.agentState != null
         && (
