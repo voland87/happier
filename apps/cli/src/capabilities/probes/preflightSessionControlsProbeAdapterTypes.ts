@@ -4,6 +4,8 @@ import type { RegisterNativeCatalogCleanup } from './catalogProbeLifecycle';
 
 export type PreflightSessionControlsProbeFailureCacheStrategy = 'cooldown' | 'retry';
 export type PreflightModelsProbeCachePolicy = 'generic' | 'provider-owned';
+export type PreflightSessionControlsProbeMethod = 'probeModels' | 'probeModes' | 'probeConfigOptions' | 'probeCatalogs';
+export type PreflightConnectedServiceAuthStrategy = 'materialized-env' | 'provider-owned' | 'not-required';
 
 export type PreflightSessionCatalogsRaw = Readonly<{
   /** Null denotes a channel the selected provider transport does not support. */
@@ -40,7 +42,8 @@ export type PreflightSessionControlsProbeParams = Readonly<{
  * Callers must normalize/validate all raw payloads.
  */
 export type PreflightSessionControlsProbeAdapter = Readonly<{
-  connectedServiceAuth?: 'materialized-env' | 'materialized-env-for-catalogs';
+  /** Static methods need no auth; provider-owned methods resolve credentials; ACP methods need materialization. */
+  connectedServiceAuth?: 'materialized-env' | Readonly<Partial<Record<PreflightSessionControlsProbeMethod, PreflightConnectedServiceAuthStrategy>>>;
   modelProbeCachePolicy?: PreflightModelsProbeCachePolicy;
   failureCacheStrategy?: PreflightSessionControlsProbeFailureCacheStrategy;
   probeModelsRaw?: (params: PreflightSessionControlsProbeParams) => Promise<unknown | null>;

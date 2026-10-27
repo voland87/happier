@@ -18,6 +18,7 @@ import { normalizeClaudeToolUseNamesInSdkMessage } from './normalizeClaudeToolUs
 import { providers } from '@happier-dev/agents'
 import { buildClaudeSdkResultUsageTelemetry } from './sdkResultUsageTelemetry'
 import { readNonBlankOpaqueIdentifier } from '@/utils/opaqueIdentifiers'
+import { createClaudeTaskNotificationToolResultProjector, readClaudeTaskLifecycleEnvelope } from '../taskNotifications/claudeTaskLifecycleEnvelope'
 import { formatClaudePeerMessageText, projectClaudePeerMessage } from '../attachments/claudePeerMessageProjection'
 
 /**
@@ -80,6 +81,7 @@ export class SDKToLogConverter {
     private context: ConversionContext
     private responses?: Map<string, { approved: boolean, mode?: PermissionMode, reason?: string }>
     private sidechainLastUUID = new Map<string, string>();
+    private taskNotificationProjector = createClaudeTaskNotificationToolResultProjector();
 
     constructor(
         context: Omit<ConversionContext, 'parentUuid'>,
@@ -109,14 +111,17 @@ export class SDKToLogConverter {
         this.latestMainAssistantContextUsedTokens = null
         this.context.parentUuid = null
         this.sidechainLastUUID.clear()
+        this.taskNotificationProjector.clear()
     }
 
     /**
      * Convert SDK message to log format
      */
     convert(sdkMessage: SDKMessage): RawJSONLines | null {
+        const fact = readClaudeTaskLifecycleEnvelope(sdkMessage);
         const rawType = (sdkMessage as any)?.type;
-        if (providers.claude.isClaudeInternalEventType(rawType) && rawType !== 'attachment') {
+        if (providers.claude.isClaudeInternalEventType(rawType) && rawType !== 'attachment'
+            && fact?.subtype !== 'task_notification') {
             return null;
         }
 
@@ -150,6 +155,8 @@ export class SDKToLogConverter {
             if (!isSidechain) this.lastMainUuid = uuid;
             return peerMessage;
         }
+        const taskResult = this.taskNotificationProjector.project({ ...sdkMessage, ...baseFields }, sidechainId ? { sidechainId } : undefined);
+        if (taskResult || fact?.subtype === 'task_notification') return taskResult;
         if (providers.claude.isClaudeInternalEventType(rawType)) return null;
 
         let logMessage: RawJSONLines | null = null

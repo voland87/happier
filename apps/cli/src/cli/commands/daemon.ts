@@ -18,7 +18,7 @@ import { getLatestDaemonLog } from '@/ui/logger';
 import { runDoctorCommand } from '@/ui/doctor';
 import { listDaemonStatusesForAllKnownServers, stopAllDaemonsBestEffort } from '@/daemon/multiDaemon';
 import { spawnDetachedDaemonStartSync } from '@/daemon/runtime/spawnDetachedDaemonStartSync';
-import { readCredentials } from '@/persistence';
+import { readCredentials, updateSettings } from '@/persistence';
 import { resolveLaunchAgentPlistPath, resolveSystemdUserUnitPath } from '@/daemon/service/plan';
 import { configuration } from '@/configuration';
 import { decodeJwtPayload } from '@/cloud/decodeJwtPayload';
@@ -84,6 +84,7 @@ ${chalk.bold('Usage:')}
   happier daemon restart [--takeover]  Restart the daemon (stop -> start)
   happier daemon restart --restart-session-runners  Restart the daemon, preserve sessions, then restart tracked session runners on the current CLI
   happier daemon restart-session-runners [--session-id <id>] [--dry-run] [--force-current-cli]  Restart eligible tracked session runners on the current CLI
+  happier daemon restart-session-runners --on-update on|off  Automatically restart idle stale session runners whenever the daemon starts on a newer CLI
   happier daemon stop               Stop a manual daemon (sessions stay alive; use happier service stop for installed background services)
   happier daemon stop --kill-sessions  Stop a manual daemon and its tracked sessions
   happier daemon stop --all         Stop daemons for all configured relays
@@ -126,6 +127,63 @@ function parseDaemonSessionIdOption(args: readonly string[]): string | null {
   const value = args[index + 1]?.trim() ?? '';
   if (!value || value.startsWith('--')) return '';
   return value;
+}
+
+function parseDaemonOnUpdateOption(args: readonly string[]): boolean | 'invalid' | null {
+  const index = args.indexOf('--on-update');
+  if (index < 0) return null;
+  const value = args[index + 1]?.trim().toLowerCase();
+  if (value === 'on') return true;
+  if (value === 'off') return false;
+  return 'invalid';
+}
+
+const ON_UPDATE_CONFLICTING_FLAGS = ['--session-id', '--dry-run', '--force-current-cli'] as const;
+
+async function exitWithOnUpdateError(
+  error: string,
+  message: string,
+  jsonRequested: boolean,
+): Promise<never> {
+  if (jsonRequested) {
+    await printDaemonJson({ ok: false, error, message });
+  } else {
+    console.error(message);
+  }
+  process.exit(1);
+}
+
+async function handleSessionRunnerOnUpdateOption(
+  args: readonly string[],
+  enabled: boolean | 'invalid',
+  jsonRequested: boolean,
+): Promise<never> {
+  if (enabled === 'invalid') {
+    return await exitWithOnUpdateError('invalid_on_update_value', '`--on-update` requires `on` or `off`.', jsonRequested);
+  }
+  const conflictingFlag = ON_UPDATE_CONFLICTING_FLAGS.find((flag) => args.includes(flag));
+  if (conflictingFlag) {
+    return await exitWithOnUpdateError(
+      'on_update_conflicting_options',
+      `\`--on-update\` only changes the setting and cannot be combined with \`${conflictingFlag}\`.`,
+      jsonRequested,
+    );
+  }
+
+  try {
+    await updateSettings((current) => ({ ...current, restartSessionRunnersOnUpdate: enabled }));
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    return await exitWithOnUpdateError('settings_update_failed', `Failed to save the setting: ${reason}`, jsonRequested);
+  }
+  if (jsonRequested) {
+    await printDaemonJson({ ok: true, restartSessionRunnersOnUpdate: enabled });
+  } else if (enabled) {
+    console.log('Automatic session runner restart after updates: on (takes effect the next time the daemon starts)');
+  } else {
+    console.log('Automatic session runner restart after updates: off');
+  }
+  process.exit(0);
 }
 
 function printSessionRunnerRestartSummary(result: RestartAllDaemonSessionRunnersResult, dryRun: boolean): void {
@@ -191,19 +249,15 @@ export async function handleDaemonCliCommand(context: CommandContext): Promise<v
   }
 
   if (daemonSubcommand === 'list') {
-    try {
-      const sessions = await listDaemonSessions();
+    const sessions = await listDaemonSessions();
 
-      if (sessions.length === 0) {
-        console.log(
-          'No active sessions this daemon is aware of (they might have been started by a previous version of the daemon)',
-        );
-      } else {
-        console.log('Active sessions:');
-        await writeJsonStdout(sessions, { pretty: true });
-      }
-    } catch {
-      console.log('No daemon running');
+    if (sessions.length === 0) {
+      console.log(
+        'This daemon has no tracked active sessions. Use `happier session list --active` to list active sessions on the relay.',
+      );
+    } else {
+      console.log('Active sessions:');
+      await writeJsonStdout(sessions, { pretty: true });
     }
     return;
   }
@@ -226,6 +280,10 @@ export async function handleDaemonCliCommand(context: CommandContext): Promise<v
 
   if (daemonSubcommand === 'restart-session-runners') {
     const jsonRequested = args.includes('--json');
+    const onUpdate = parseDaemonOnUpdateOption(args);
+    if (onUpdate !== null) {
+      await handleSessionRunnerOnUpdateOption(args, onUpdate, jsonRequested);
+    }
     const dryRun = args.includes('--dry-run');
     const mode = parseDaemonSessionRunnerRestartMode(args);
     const sessionId = parseDaemonSessionIdOption(args);

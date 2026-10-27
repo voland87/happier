@@ -533,3 +533,32 @@ describe('reconcileArmedAgentContinuationDisposition', () => {
             .toEqual(resolveArmedAgentContinuationDisposition(sourceStopped, LABELS).notice);
     });
 });
+
+
+describe('configured continuation identity', () => {
+    it('does not reconcile configured A as a completed switch to B', () => {
+        const reconcile = (backendId: string) => reconcileArmedAgentContinuationDisposition({
+            result: { type: 'outcome_unknown', localId: 'local-1' },
+            labels: { sourceAgentLabel: 'A', targetAgentLabel: 'B' },
+            targetAgentId: 'customAcp',
+            targetBackendTarget: { kind: 'configuredAcpBackend', backendId: 'b' },
+            facts: { currentAgentId: 'customAcp', currentBackendTarget: { kind: 'configuredAcpBackend', backendId }, sessionActive: false, input: 'absent' },
+        });
+        expect(reconcile('a').arm).toBe('keep');
+        expect(reconcile('b').arm).toBe('clear');
+    });
+    it('dispatches exact source and target identities without reducing them to customAcp', async () => {
+        machineRpcWithServerScope.mockReset();
+        machineRpcWithServerScope.mockResolvedValue({ type: 'accepted', localId: 'local-1' });
+        const sourceBackendTarget = { kind: 'configuredAcpBackend', backendId: 'a' } as const;
+        const backendTarget = { kind: 'configuredAcpBackend', backendId: 'b' } as const;
+        await continueSessionWithArmedAgent(submission({
+            intent: { v: 1, mode: 'same_session', sourceAgentId: 'customAcp', sourceBackendTarget,
+                selection: { v: 1, agentId: 'customAcp', backendTarget } },
+        }));
+        expect(machineRpcWithServerScope).toHaveBeenCalledWith(expect.objectContaining({ payload: expect.objectContaining({
+            expectedCurrentBackendTarget: sourceBackendTarget,
+            selection: expect.objectContaining({ backendTarget }),
+        }) }));
+    });
+});

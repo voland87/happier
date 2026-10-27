@@ -1,31 +1,14 @@
-// Official pinned Antigravity ACP server (EU-3).
-//
-// Provenance (2026-09-11):
-// - Asset matrix mirrors the concurrent 0.3 `packages/plugins/antigravity/src/manifest.ts`
-//   `agy-acp-server` pinnedArchive v1.1.1 (dirty, Not Committed Yet) as the best available
-//   registry-derived source.
-// - All five archive URLs verified live via primary `dl.google.com` HEAD 200 on 2026-09-11
-//   (darwin-arm64 316,014,828 bytes; linux-x86_64 681,969,407 bytes;
-//   linux-arm64 656,572,786 bytes; windows-x86_64 468,238,392 bytes;
-//   windows-arm64 468,521,191 bytes).
-// - SHA-256 values are encoded from that same 0.3 source; the installer verifies the digest
-//   on every download via `downloadGitHubReleaseAsset`, so a wrong pin fails closed at
-//   install time instead of launching an untrusted binary.
-// - Linux `--uid=` launch args and `.par`/`.exe` executable subpaths come from the same
-//   0.3 source; 0.2 has no `hstack-exec` launcher (`apps/stack/bin/hstack-exec` absent,
-//   recorded) so heavy full-archive SHA re-downloads use the nearest repo-owned path.
-//
-// Unsupported platforms (notably darwin-x64, for which Google publishes no v1.1.1 archive)
-// fail clearly instead of being emulated.
+// Official ACP registry 1.3.0 assets (reviewed 2026-10-08).
+// SHA-256 values were calculated from each complete dl.google.com archive;
+// each ZIP contains the flat server + companion localharness payload.
+// Native execution still requires the matching platform and architecture.
 
 import type { ArchiveExtractionLimits } from '@happier-dev/release-runtime/archiveExtraction';
 import { AGY_ACP_SERVER_VERSION } from '@happier-dev/protocol/installables';
 
-// The pinned v1.1.1 Linux x64 ZIP is 681,969,407 bytes and expands to
-// 2,009,327,248 bytes, including a 1,880,360,328-byte agy_acp_server.par.
-// It is the largest of the five pinned payloads. Keep these bounds local to
-// this checksum-verified release instead of relaxing generic archive limits.
-// Expansion of this 2 GB payload can exceed the generic two-minute timeout.
+// Reviewed 1.3.0 maxima: 333,727,150 archive bytes, 930,848,992 bytes
+// per file and 1,056,922,005 expanded bytes. Retain the existing release-owned
+// extraction budget, including the deadline for large executable extraction.
 const ARCHIVE_EXTRACTION_LIMITS = Object.freeze({
   maxArchiveBytes: 1024 * 1024 * 1024,
   maxFileBytes: 2 * 1024 * 1024 * 1024,
@@ -56,30 +39,35 @@ type PinnedAsset = Readonly<{
 
 const PINNED_ASSETS: Readonly<Record<string, PinnedAsset>> = Object.freeze({
   'darwin-arm64': {
-    archiveUrl: 'https://dl.google.com/agy-extensions/releases/macos/agy-acp-server-agy_acp_server_1.1.1-darwin-arm64.zip',
-    sha256: 'fdfa915652cdb7ba8085cc8fffed072cbe009251aa2c951aabdda07a8c28a189',
+    archiveUrl: 'https://dl.google.com/agy-extensions/releases/macos/agy-acp-server-1.3.0-darwin-arm64.zip',
+    sha256: '7cd97045f7b4fe81175a107cdf16f9c51484e3c78a5162cae415338bb6aa5b88',
+    executableSubpath: 'agy_acp_server.par',
+  },
+  'darwin-x64': {
+    archiveUrl: 'https://dl.google.com/agy-extensions/releases/macos/agy-acp-server-1.3.0-darwin-x86_64.zip',
+    sha256: 'bb23956b89984bf5d354af2c3725e6c57f0cc1b7228e77a0e91c9c2bc1d47646',
     executableSubpath: 'agy_acp_server.par',
   },
   'linux-x64': {
-    archiveUrl: 'https://dl.google.com/agy-extensions/releases/linux/agy-acp-server-agy_acp_server_1.1.1-linux-x86_64.zip',
-    sha256: '38f62d01b32deb0907b3d39a71ec301fd36369f6ffd1cf262d4af385177f79df',
+    archiveUrl: 'https://dl.google.com/agy-extensions/releases/linux/agy-acp-server-1.3.0-linux-x86_64.zip',
+    sha256: '9fb60956af0a9d76220a4db91ca9ac88e2a2372ad68f985ab5fceace6b825b96',
     executableSubpath: 'agy_acp_server.par',
     args: ['--uid='],
   },
   'linux-arm64': {
-    archiveUrl: 'https://dl.google.com/agy-extensions/releases/linux/agy-acp-server-agy_acp_server_1.1.1-linux-arm64.zip',
-    sha256: 'ed69e64b308fcb123ab54bf3277bf9cb0d651064f885ea5aab0ff520c7175398',
+    archiveUrl: 'https://dl.google.com/agy-extensions/releases/linux/agy-acp-server-1.3.0-linux-arm64.zip',
+    sha256: '500b0bc0fb858e88f4df404d4cedf80bf9298c178291e39e383d6c50b111cbdf',
     executableSubpath: 'agy_acp_server.par',
     args: ['--uid='],
   },
   'win32-x64': {
-    archiveUrl: 'https://dl.google.com/agy-extensions/releases/windows/agy-acp-server-agy_acp_server_1.1.1-windows-x86_64.zip',
-    sha256: '47cb50eef14f0a4655d78cfcfda869bcea7aaee5f9787e936bc2935ea612c3b8',
+    archiveUrl: 'https://dl.google.com/agy-extensions/releases/windows/agy-acp-server-1.3.0-windows-x86_64.zip',
+    sha256: '65215e0688681fa3116e048a9eab27ef53af1bbd6f3da3f1c52bd4911d8b17f9',
     executableSubpath: 'agy_acp_server.exe',
   },
   'win32-arm64': {
-    archiveUrl: 'https://dl.google.com/agy-extensions/releases/windows/agy-acp-server-agy_acp_server_1.1.1-windows-arm64.zip',
-    sha256: '35f4b1f47ba6a3fea7b0a3e30010df5ea73a64b4f0e7cf991cddc673ddfbcafc',
+    archiveUrl: 'https://dl.google.com/agy-extensions/releases/windows/agy-acp-server-1.3.0-windows-arm64.zip',
+    sha256: '4a0f469720e9beb9438a979f543fdbfad5022ebe0992c052c590bd78b3144ca3',
     executableSubpath: 'agy_acp_server.exe',
   },
 });
@@ -99,6 +87,7 @@ function resolvePlatformKey(platform: string, arch: string): string | null {
   const normalizedPlatform = normalizePlatform(platform);
   const normalizedArch = normalizeArch(arch);
   if (normalizedPlatform === 'darwin' && normalizedArch === 'arm64') return 'darwin-arm64';
+  if (normalizedPlatform === 'darwin' && normalizedArch === 'x64') return 'darwin-x64';
   if (normalizedPlatform === 'linux' && normalizedArch === 'x64') return 'linux-x64';
   if (normalizedPlatform === 'linux' && normalizedArch === 'arm64') return 'linux-arm64';
   if (normalizedPlatform === 'win32' && normalizedArch === 'x64') return 'win32-x64';

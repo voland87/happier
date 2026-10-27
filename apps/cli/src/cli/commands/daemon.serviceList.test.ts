@@ -100,9 +100,14 @@ describe('happier daemon service list', () => {
     osHomeOverrides.realHomeDir = null;
     const childProcess = await import('node:child_process');
     // Successful empty OS enumeration; individual tests override real task results.
-    vi.mocked(childProcess.spawnSync).mockReturnValue({
-      pid: 0, output: [], stdout: Buffer.alloc(0), stderr: Buffer.alloc(0), status: 0, signal: null,
-    });
+    vi.mocked(childProcess.spawnSync).mockImplementation(((cmd: string, args?: readonly string[]) => ({
+      pid: 0,
+      output: [],
+      stdout: cmd === 'powershell.exe' && args?.some((arg) => arg.includes('.GetFolder("\\Happier")')) ? '[]' : Buffer.alloc(0),
+      stderr: Buffer.alloc(0),
+      status: 0,
+      signal: null,
+    })) as unknown as typeof childProcess.spawnSync);
   });
 
   it('lists installed background services through the canonical service command', async () => {
@@ -750,8 +755,8 @@ describe('happier daemon service list', () => {
         const spawnSyncMock = vi.mocked(childProcess.spawnSync);
         spawnSyncMock.mockImplementation(((cmd: string, args?: readonly string[]) => {
           const argv = Array.isArray(args) ? args.map((a) => String(a ?? '')) : [];
-          if (cmd === 'schtasks' && argv.join(' ') === '/Query /FO CSV /NH') {
-            return { pid: 0, output: [], stdout: '', stderr: '', status: 0, signal: null } satisfies SpawnSyncReturns<string>;
+          if (cmd === 'powershell.exe' && argv.some((arg) => arg.includes('.GetFolder("\\Happier")'))) {
+            return { pid: 0, output: [], stdout: '[]', stderr: '', status: 0, signal: null } satisfies SpawnSyncReturns<string>;
           }
           if (
             cmd === 'schtasks'

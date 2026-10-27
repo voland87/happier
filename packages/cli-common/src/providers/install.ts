@@ -13,6 +13,7 @@ import type {
 } from '@happier-dev/agents';
 import { getProviderCliRuntimeSpec } from '@happier-dev/agents';
 import { fetchGitHubLatestRelease } from '@happier-dev/release-runtime';
+import { ArchiveExpandedByteLimitError } from '@happier-dev/release-runtime/archiveExtraction';
 
 import { withWorkspaceBundleLock } from '../../workspaceBundleLock.mjs';
 
@@ -73,6 +74,7 @@ export type InstallProviderCliResult =
         | 'command-exec-failed'
         | 'command-timed-out'
         | 'command-failed'
+        | 'archive-expanded-byte-limit'
         | 'managed-runtime-unavailable'
         | 'update-not-available';
       errorMessage: string;
@@ -434,10 +436,6 @@ function buildVendorRecipePath(providerId: AgentId, env: NodeJS.ProcessEnv): str
     .split(delimiter)
     .map((value) => value.trim())
     .filter(Boolean);
-  if (process.platform === 'win32') {
-    return currentEntries.join(delimiter);
-  }
-
   const homeDir = typeof env.HOME === 'string' ? env.HOME.trim() : '';
   if (!homeDir) {
     return currentEntries.join(delimiter);
@@ -1129,10 +1127,12 @@ export async function installProviderCli(params: Readonly<{
         const childEnv = {
           ...process.env,
           ...env,
-          PATH: buildVendorRecipePath(params.providerId, {
+          // Windows retains the original case-insensitive Path key. Only POSIX
+          // recipes need the additional user install directories.
+          ...(process.platform === 'win32' ? {} : { PATH: buildVendorRecipePath(params.providerId, {
             ...process.env,
             ...env,
-          }),
+          }) }),
           ...(vendorScratchDir ? { TMPDIR: vendorScratchDir, TMP: vendorScratchDir, TEMP: vendorScratchDir } : {}),
         };
         const outcome = await runLoggedProviderCommand({ cmd: c.cmd, args: c.args, env: childEnv, logPath, timeoutMs, runCommand });
@@ -1208,8 +1208,9 @@ export async function installProviderCli(params: Readonly<{
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    const code =
-      message.startsWith('Managed pnpm is unavailable') || message.startsWith('Managed JavaScript runtime is unavailable')
+    const code = error instanceof ArchiveExpandedByteLimitError
+      ? error.code
+      : message.startsWith('Managed pnpm is unavailable') || message.startsWith('Managed JavaScript runtime is unavailable')
         ? 'managed-runtime-unavailable'
         : 'command-failed';
     appendInstallLogBestEffort(logPath, message);

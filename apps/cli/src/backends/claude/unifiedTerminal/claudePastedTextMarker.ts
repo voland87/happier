@@ -51,8 +51,9 @@ export function pastedTextLineCountMatchesPrompt(params: Readonly<{
   promptText: string;
   pastedLineCount: number;
 }>): boolean {
-  const expectedNewlines = countPromptNewlines(params.promptText);
+  const expectedNewlines = countPromptNewlines(params.promptText.replace(/\r\n?/g, '\n'));
   const lowerBound = Math.max(1, expectedNewlines - 2);
   const upperBound = expectedNewlines + 3;
-  return params.pastedLineCount >= lowerBound && params.pastedLineCount <= upperBound;
+  return expectedNewlines > 0
+    && params.pastedLineCount >= lowerBound && params.pastedLineCount <= upperBound;
 }

@@ -136,6 +136,8 @@ export {
   resolveServerMigrationsEnabled,
   resolvePrismaSqliteDatabaseUrlOptionsFromEnv,
   resolveServerLightSqliteDatabaseUrlOptionsFromEnv,
+  resolvePrismaSqliteDatabaseFilePath,
+  readPrismaSqliteConnectionParams,
 } from './selfHostServerEnv.js';
 export type { PrismaSqliteDatabaseUrlOptions, SelfHostServerMigrationPlan } from './selfHostServerEnv.js';
 

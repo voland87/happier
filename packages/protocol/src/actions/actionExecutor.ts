@@ -223,6 +223,7 @@ export type ActionExecutorDeps = Readonly<{
     targetPath?: string;
     requestId?: string;
     targetSessionStorageMode?: 'direct' | 'persisted';
+    stateTransfer?: 'transfer' | 'existing';
     workspaceTransfer?: SessionHandoffWorkspaceTransfer;
     serverId?: string | null;
     signal?: AbortSignal;
@@ -765,15 +766,15 @@ function resolveServerIdForSession(deps: ActionExecutorDeps, ctx: ActionExecutor
   return deps.resolveServerIdForSessionId ? deps.resolveServerIdForSessionId(sessionId) : null;
 }
 
-function normalizeResolvedOptions(value: unknown): readonly Readonly<{ value: string; label: string; description?: string; disabled?: boolean }>[] {
-  const items = Array.isArray((value as any)?.items)
-    ? ((value as any).items as readonly Record<string, unknown>[])
-    : Array.isArray(value)
-      ? (value as readonly Record<string, unknown>[])
-      : [];
+function normalizeResolvedOptions(value: unknown, options: Readonly<{ allowEmptyValue?: boolean }> = {}): readonly Readonly<{ value: string; label: string; description?: string; disabled?: boolean }>[] {
+  const inventory = typeof value === 'object' && value !== null && 'items' in value ? value.items : value;
+  const items: readonly unknown[] = Array.isArray(inventory) ? inventory : [];
 
   return items
-    .map((item) => {
+    .map((rawItem) => {
+      if (typeof rawItem !== 'object' || rawItem === null) return null;
+      // Action-service inventories are untyped transport input.
+      const item = rawItem as Record<string, unknown>;
       const valueCandidate =
         typeof item?.targetKey === 'string'
           ? item.targetKey
@@ -786,7 +787,7 @@ function normalizeResolvedOptions(value: unknown): readonly Readonly<{ value: st
                 : typeof item?.engineId === 'string'
                   ? item.engineId
                   : null;
-      if (!valueCandidate) return null;
+      if (valueCandidate === null || (valueCandidate === '' && options.allowEmptyValue !== true)) return null;
       const labelCandidate =
         typeof item?.label === 'string'
           ? item.label
@@ -803,7 +804,7 @@ function normalizeResolvedOptions(value: unknown): readonly Readonly<{ value: st
         ...(disabledCandidate ? { disabled: true as const } : {}),
       };
     })
-    .filter(Boolean) as readonly Readonly<{ value: string; label: string; description?: string; disabled?: boolean }>[];
+    .filter((option) => option !== null);
 }
 
 function normalizeExecutionBackendOptionValue(value: string): string {
@@ -988,7 +989,7 @@ async function resolveDynamicActionOptions(params: Readonly<{
     const sessionId = resolveSessionIdFromInput(input, ctx);
     if (!sessionId) return { ok: false, errorCode: 'session_not_selected', error: 'session_not_selected' };
     const result = await deps.sessionModesList({ sessionId });
-    return { ok: true, result: normalizeResolvedOptions(result) };
+    return { ok: true, result: normalizeResolvedOptions(result, { allowEmptyValue: true }) };
   }
 
   if (route.kind === 'agentInventory') {
@@ -2088,6 +2089,7 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
               ? (parsed.data as any).targetSessionStorageMode
               : undefined;
           const targetPath = normalizeId((parsed.data as any).targetPath);
+          const stateTransfer = parsed.data.stateTransfer === 'existing' ? 'existing' : undefined;
           const workspaceTransferParsed = SessionHandoffWorkspaceTransferSchema.safeParse((parsed.data as any).workspaceTransfer);
           const workspaceTransfer = workspaceTransferParsed.success ? workspaceTransferParsed.data : undefined;
           const requestId = normalizeId(ctx.actionRequestId);
@@ -2097,10 +2099,18 @@ export function createActionExecutor(deps: ActionExecutorDeps): Readonly<{
             ...(targetPath ? { targetPath } : {}),
             ...(requestId ? { requestId } : {}),
             ...(targetSessionStorageMode ? { targetSessionStorageMode } : {}),
+            ...(stateTransfer ? { stateTransfer } : {}),
             ...(workspaceTransfer ? { workspaceTransfer } : {}),
             ...(serverId ? { serverId } : {}),
             ...(ctx.signal ? { signal: ctx.signal } : {}),
           });
+          if (res && typeof res === 'object' && 'ok' in res && res.ok === false) {
+            const errorCode = 'errorCode' in res && typeof res.errorCode === 'string' ? res.errorCode : 'handoff_failed';
+            const error = 'errorMessage' in res && typeof res.errorMessage === 'string' && res.errorMessage.trim()
+              ? res.errorMessage
+              : 'error' in res && typeof res.error === 'string' && res.error.trim() ? res.error : 'Session handoff failed';
+            return { ok: false, errorCode, error };
+          }
           return { ok: true, result: res };
         }
 

@@ -24,9 +24,11 @@ import {
 } from './ConnectedServiceRefreshCoordinator';
 import { HAPPIER_CONNECTED_SERVICE_SELECTIONS_ENV_KEY } from '../connectedServiceChildEnvironment';
 import { normalizeMaterializationKeyForPath } from '../materialize/normalizeMaterializationKeyForPath';
+import { resolveConnectedServiceSelectionHomeDir, type ConnectedServiceHomeSelection } from '../homes/resolveConnectedServiceHomeDir';
 import { buildDefaultConnectedServiceCredentialLifecycleDescriptor } from '../credentials/lifecycleTypes';
 import { ConnectedServiceRuntimeRegistry } from '../runtimeRegistry/registry';
 import { computeConnectedServiceAccessTokenFingerprint } from './credentialFreshness/tokenFingerprint';
+import { ConnectedServiceQuotasCoordinator } from '../quotas/ConnectedServiceQuotasCoordinator';
 
 const { spawnSpy } = vi.hoisted(() => ({
   spawnSpy: vi.fn(),
@@ -40,8 +42,13 @@ vi.mock('node:child_process', async (importOriginal) => {
   };
 });
 
-function resolveCodexHomeForMaterialization(baseDir: string, materializationKey: string): string {
-  return join(baseDir, normalizeMaterializationKeyForPath(materializationKey), 'codex', 'codex-home');
+function resolveCodexHomeForMaterialization(
+  activeServerDir: string,
+  selection: ConnectedServiceHomeSelection = { kind: 'profile', profileId: 'work' },
+): string {
+  return join(resolveConnectedServiceSelectionHomeDir({
+    activeServerDir, serviceId: 'openai-codex', agentId: 'codex', fallbackProfileId: 'work', selection,
+  }), 'codex-home');
 }
 
 type ExternalCredentialUpdateInput = Parameters<
@@ -178,10 +185,10 @@ afterEach(() => {
     const baseDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-refresh-'));
     const activeServerDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-server-refresh-'));
 
-    const credentials: Credentials = {
+    const credentials = {
       token: 'happy-token',
       encryption: { type: 'legacy', secret: new Uint8Array(32).fill(9) },
-    };
+    } satisfies Credentials;
     if (credentials.encryption.type !== 'legacy') throw new Error('fixture');
     const legacySecret = credentials.encryption.secret;
 
@@ -262,7 +269,7 @@ afterEach(() => {
     expect(api.acquireConnectedServiceRefreshLease).toHaveBeenCalledTimes(1);
     expect(api.registerConnectedServiceCredentialSealed).toHaveBeenCalledTimes(1);
 
-    const codexHome = resolveCodexHomeForMaterialization(baseDir, 'session-1');
+    const codexHome = resolveCodexHomeForMaterialization(activeServerDir);
     const auth = JSON.parse(await readFile(join(codexHome, 'auth.json'), 'utf8'));
     expect(auth.access_token).toBe('new-access');
     expect(api.updateConnectedServiceCredentialHealth).toHaveBeenCalledWith({
@@ -283,10 +290,10 @@ afterEach(() => {
     const baseDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-refresh-plain-'));
     const activeServerDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-server-refresh-plain-'));
 
-    const credentials: Credentials = {
+    const credentials = {
       token: 'happy-token',
       encryption: { type: 'legacy', secret: new Uint8Array(32).fill(9) },
-    };
+    } satisfies Credentials;
 
     const now = 1_000_000;
     let storedRecord = buildConnectedServiceCredentialRecord({
@@ -366,7 +373,7 @@ afterEach(() => {
     expect(typedApi.registerConnectedServiceCredentialSealed).not.toHaveBeenCalled();
     expect(storedRecord.oauth?.accessToken).toBe('new-access');
 
-    const codexHome = resolveCodexHomeForMaterialization(baseDir, 'session-plain');
+    const codexHome = resolveCodexHomeForMaterialization(activeServerDir);
     const auth = JSON.parse(await readFile(join(codexHome, 'auth.json'), 'utf8'));
     expect(auth.access_token).toBe('new-access');
   });
@@ -436,10 +443,10 @@ afterEach(() => {
     const baseDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-refresh-plain-fallback-'));
     const activeServerDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-server-refresh-plain-fallback-'));
 
-    const credentials: Credentials = {
+    const credentials = {
       token: 'happy-token',
       encryption: { type: 'legacy', secret: new Uint8Array(32).fill(9) },
-    };
+    } satisfies Credentials;
 
     const now = 1_000_000;
     let storedRecord = buildConnectedServiceCredentialRecord({
@@ -519,7 +526,7 @@ afterEach(() => {
     expect(typedApi.registerConnectedServiceCredentialSealed).not.toHaveBeenCalled();
     expect(storedRecord.oauth?.accessToken).toBe('new-access');
 
-    const codexHome = resolveCodexHomeForMaterialization(baseDir, 'session-plain-fallback');
+    const codexHome = resolveCodexHomeForMaterialization(activeServerDir);
     const auth = JSON.parse(await readFile(join(codexHome, 'auth.json'), 'utf8'));
     expect(auth.access_token).toBe('new-access');
   });
@@ -528,10 +535,10 @@ afterEach(() => {
     const baseDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-refresh-sealed-fallback-'));
     const activeServerDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-server-refresh-sealed-fallback-'));
 
-    const credentials: Credentials = {
+    const credentials = {
       token: 'happy-token',
       encryption: { type: 'legacy', secret: new Uint8Array(32).fill(9) },
-    };
+    } satisfies Credentials;
     if (credentials.encryption.type !== 'legacy') throw new Error('fixture');
     const legacySecret = credentials.encryption.secret;
 
@@ -631,7 +638,7 @@ afterEach(() => {
     expect(typedApi.registerConnectedServiceCredentialSealed).toHaveBeenCalledTimes(1);
     expect(storedRecord.oauth?.accessToken).toBe('new-access');
 
-    const codexHome = resolveCodexHomeForMaterialization(baseDir, 'session-sealed-fallback');
+    const codexHome = resolveCodexHomeForMaterialization(activeServerDir);
     const auth = JSON.parse(await readFile(join(codexHome, 'auth.json'), 'utf8'));
     expect(auth.access_token).toBe('new-access');
   });
@@ -642,10 +649,10 @@ afterEach(() => {
     const sourceCodexHome = await mkdtemp(join(tmpdir(), 'happier-source-codex-home-refresh-'));
     await writeFile(join(sourceCodexHome, 'config.toml'), 'model = "gpt-5.2-codex"\n');
 
-    const credentials: Credentials = {
+    const credentials = {
       token: 'happy-token',
       encryption: { type: 'legacy', secret: new Uint8Array(32).fill(9) },
-    };
+    } satisfies Credentials;
     if (credentials.encryption.type !== 'legacy') throw new Error('fixture');
 
     const now = 1_000_000;
@@ -742,7 +749,7 @@ afterEach(() => {
 
       await coordinator.tickOnce();
 
-      const codexHome = resolveCodexHomeForMaterialization(baseDir, 'session-1');
+      const codexHome = resolveCodexHomeForMaterialization(activeServerDir);
       const auth = JSON.parse(await readFile(join(codexHome, 'auth.json'), 'utf8'));
       expect(auth.access_token).toBe('new-access');
       await expect(lstat(join(codexHome, 'config.toml'))).rejects.toThrow();
@@ -759,10 +766,10 @@ afterEach(() => {
     const baseDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-refresh-'));
     const activeServerDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-server-refresh-'));
 
-    const credentials: Credentials = {
+    const credentials = {
       token: 'happy-token',
       encryption: { type: 'legacy', secret: new Uint8Array(32).fill(9) },
-    };
+    } satisfies Credentials;
     if (credentials.encryption.type !== 'legacy') throw new Error('fixture');
 
     const now = 1_000_000;
@@ -849,10 +856,10 @@ afterEach(() => {
     const baseDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-external-update-'));
     const activeServerDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-server-external-update-'));
 
-    const credentials: Credentials = {
+    const credentials = {
       token: 'happy-token',
       encryption: { type: 'legacy', secret: new Uint8Array(32).fill(9) },
-    };
+    } satisfies Credentials;
     if (credentials.encryption.type !== 'legacy') throw new Error('fixture');
 
     const now = 1_000_000;
@@ -924,7 +931,7 @@ afterEach(() => {
       revisionedExternalCredentialUpdate('openai-codex', 'work'),
     );
 
-    const codexHome = resolveCodexHomeForMaterialization(baseDir, 'session-openai');
+    const codexHome = resolveCodexHomeForMaterialization(activeServerDir);
     const auth = JSON.parse(await readFile(join(codexHome, 'auth.json'), 'utf8'));
     expect(auth.access_token).toBe('reconnected-access');
     expect(onAuthUpdated).toHaveBeenCalledWith(expect.objectContaining({
@@ -937,10 +944,10 @@ afterEach(() => {
   it('routes credential deletion directly to lifecycle invalidation without resolving the deleted credential', async () => {
     const baseDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-external-delete-'));
     const activeServerDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-server-external-delete-'));
-    const credentials: Credentials = {
+    const credentials = {
       token: 'happy-token',
       encryption: { type: 'legacy', secret: new Uint8Array(32).fill(9) },
-    };
+    } satisfies Credentials;
     const api = {
       getConnectedServiceCredentialSealed: vi.fn(async () => {
         throw new Error('deleted credential must not be resolved');
@@ -989,10 +996,10 @@ afterEach(() => {
   it('applies replacement lifecycle policy even for passive projection reconciliation', async () => {
     const baseDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-passive-replace-'));
     const activeServerDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-server-passive-replace-'));
-    const credentials: Credentials = {
+    const credentials = {
       token: 'happy-token',
       encryption: { type: 'legacy', secret: new Uint8Array(32).fill(9) },
-    };
+    } satisfies Credentials;
     if (credentials.encryption.type !== 'legacy') throw new Error('fixture');
     const now = 1_000_000;
     const record = buildConnectedServiceCredentialRecord({
@@ -1062,14 +1069,14 @@ afterEach(() => {
     }));
   });
 
-  it('rematerializes into the live identity root instead of an orphan sha256 root for identity-keyed targets (RD-MAT-6)', async () => {
+  it('rematerializes into the selected stable profile home without an orphan run or sha256 auth home', async () => {
     const baseDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-identity-root-'));
     const activeServerDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-server-identity-root-'));
 
-    const credentials: Credentials = {
+    const credentials = {
       token: 'happy-token',
       encryption: { type: 'legacy', secret: new Uint8Array(32).fill(9) },
-    };
+    } satisfies Credentials;
     if (credentials.encryption.type !== 'legacy') throw new Error('fixture');
 
     const now = 1_000_000;
@@ -1120,9 +1127,7 @@ afterEach(() => {
       now: () => now,
     });
 
-    // The spawn registers `materializationKey = identity.id` (csm_*). The session reads
-    // `<baseDir>/<identity.id>/codex/...`; a rematerialization that drops the identity falls back
-    // to sha256(key) and writes fresh credentials into an orphan root no session ever reads.
+    // The run identity remains an attempt key, not the owner of durable profile credentials.
     const identityId = `csm_${'a'.repeat(32)}`;
     coordinator.registerSpawnTarget({
       pid: 124,
@@ -1141,11 +1146,11 @@ afterEach(() => {
       revisionedExternalCredentialUpdate('openai-codex', 'work'),
     );
 
-    const liveIdentityHome = join(baseDir, identityId, 'codex', 'codex-home');
-    const auth = JSON.parse(await readFile(join(liveIdentityHome, 'auth.json'), 'utf8'));
+    const profileHome = resolveCodexHomeForMaterialization(activeServerDir);
+    const auth = JSON.parse(await readFile(join(profileHome, 'auth.json'), 'utf8'));
     expect(auth.access_token).toBe('rotated-access');
-    // No orphan sha256(csm_*) root may be created for an identity-keyed target.
-    const orphanHome = resolveCodexHomeForMaterialization(baseDir, identityId);
+    await expect(lstat(join(baseDir, identityId, 'codex', 'codex-home'))).rejects.toMatchObject({ code: 'ENOENT' });
+    const orphanHome = join(baseDir, normalizeMaterializationKeyForPath(identityId), 'codex', 'codex-home');
     await expect(lstat(orphanHome)).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
@@ -1162,10 +1167,10 @@ afterEach(() => {
       projects: { [sessionDirectory]: { hasTrustDialogAccepted: true } },
     }));
 
-    const credentials: Credentials = {
+    const credentials = {
       token: 'happy-token',
       encryption: { type: 'legacy', secret: new Uint8Array(32).fill(9) },
-    };
+    } satisfies Credentials;
     if (credentials.encryption.type !== 'legacy') throw new Error('fixture');
 
     const now = 1_000_000;
@@ -1255,10 +1260,10 @@ afterEach(() => {
     const sourceHomeDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-source-home-'));
     const sessionDirectory = await mkdtemp(join(tmpdir(), 'happier-connected-services-project-'));
 
-    const credentials: Credentials = {
+    const credentials = {
       token: 'happy-token',
       encryption: { type: 'legacy', secret: new Uint8Array(32).fill(9) },
-    };
+    } satisfies Credentials;
     if (credentials.encryption.type !== 'legacy') throw new Error('fixture');
 
     const now = 1_000_000;
@@ -1373,10 +1378,10 @@ afterEach(() => {
     const sourceHomeDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-source-home-freshness-'));
     const sessionDirectory = await mkdtemp(join(tmpdir(), 'happier-connected-services-project-home-freshness-'));
 
-    const credentials: Credentials = {
+    const credentials = {
       token: 'happy-token',
       encryption: { type: 'legacy', secret: new Uint8Array(32).fill(9) },
-    };
+    } satisfies Credentials;
     if (credentials.encryption.type !== 'legacy') throw new Error('fixture');
 
     const now = 1_000_000;
@@ -1496,10 +1501,10 @@ afterEach(() => {
     const sourceHomeDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-source-home-hook-'));
     const sessionDirectory = await mkdtemp(join(tmpdir(), 'happier-connected-services-project-home-hook-'));
 
-    const credentials: Credentials = {
+    const credentials = {
       token: 'happy-token',
       encryption: { type: 'legacy', secret: new Uint8Array(32).fill(9) },
-    };
+    } satisfies Credentials;
     if (credentials.encryption.type !== 'legacy') throw new Error('fixture');
 
     const now = 1_000_000;
@@ -1612,10 +1617,10 @@ afterEach(() => {
     const sourceHomeDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-source-home-fingerprint-'));
     const sessionDirectory = await mkdtemp(join(tmpdir(), 'happier-connected-services-project-home-fingerprint-'));
 
-    const credentials: Credentials = {
+    const credentials = {
       token: 'happy-token',
       encryption: { type: 'legacy', secret: new Uint8Array(32).fill(9) },
-    };
+    } satisfies Credentials;
     if (credentials.encryption.type !== 'legacy') throw new Error('fixture');
 
     const now = 1_000_000;
@@ -1739,10 +1744,10 @@ afterEach(() => {
     const sourceHomeDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-source-group-owner-'));
     const sessionDirectory = await mkdtemp(join(tmpdir(), 'happier-connected-services-project-group-owner-'));
 
-    const credentials: Credentials = {
+    const credentials = {
       token: 'happy-token',
       encryption: { type: 'legacy', secret: new Uint8Array(32).fill(9) },
-    };
+    } satisfies Credentials;
     if (credentials.encryption.type !== 'legacy') throw new Error('fixture');
 
     const now = 1_000_000;
@@ -2151,15 +2156,47 @@ afterEach(() => {
     });
   });
 
+  it('does not roll a pool home back when group truth changes after refresh credential resolution', async () => {
+    const harness = await buildGroupHomeOwnershipHarness();
+    const readCredential = vi.mocked(harness.api.getConnectedServiceCredentialSealed).getMockImplementation();
+    if (!readCredential) throw new Error('Expected the Account API fixture');
+    let switched = false;
+    vi.mocked(harness.api.getConnectedServiceCredentialSealed).mockImplementation(async (input) => {
+      const result = await readCredential(input);
+      if (!switched && input.profileId === 'workA') {
+        switched = true;
+        harness.setCanonicalGroupState('workB', 5);
+        // The Account API response arrives after another pool cutover published B.
+        await writeClaudeCodeCredentialsFile({
+          claudeConfigDir: harness.groupConfigDir,
+          payload: { claudeAiOauth: {
+            accessToken: 'member-access', expiresAt: harness.now + 60 * 60_000,
+            scopes: ['user:inference', 'user:profile', 'user:sessions:claude_code'],
+          } },
+          preserveNewerExistingCredential: false,
+        });
+      }
+      return result;
+    });
+    const rematerialize = harness.coordinator as unknown as {
+      rematerializeTargetsForBindingDetailed(binding: Readonly<{
+        serviceId: 'claude-subscription'; profileId: string;
+      }>): Promise<unknown>;
+    };
+    await rematerialize.rematerializeTargetsForBindingDetailed({ serviceId: 'claude-subscription', profileId: 'workA' });
+    const credential = JSON.parse(await readFile(join(harness.groupConfigDir, '.credentials.json'), 'utf8'));
+    expect(credential.claudeAiOauth.accessToken).toBe('member-access');
+  });
+
   it('reports runtime-auth refresh as failed when the failing active Claude home cannot be rematerialized', async () => {
     const baseDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-runtime-auth-remat-blocked-'));
     const activeServerDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-server-runtime-auth-remat-blocked-'));
     const sourceHomeDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-source-home-blocked-'));
 
-    const credentials: Credentials = {
+    const credentials = {
       token: 'happy-token',
       encryption: { type: 'legacy', secret: new Uint8Array(32).fill(9) },
-    };
+    } satisfies Credentials;
     if (credentials.encryption.type !== 'legacy') throw new Error('fixture');
 
     const now = 1_000_000;
@@ -2282,10 +2319,10 @@ afterEach(() => {
     const baseDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-runtime-auth-missing-target-'));
     const activeServerDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-server-runtime-auth-missing-target-'));
 
-    const credentials: Credentials = {
+    const credentials = {
       token: 'happy-token',
       encryption: { type: 'legacy', secret: new Uint8Array(32).fill(9) },
-    };
+    } satisfies Credentials;
     if (credentials.encryption.type !== 'legacy') throw new Error('fixture');
 
     const now = 1_000_000;
@@ -2405,10 +2442,10 @@ afterEach(() => {
     const baseDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-external-update-blocked-'));
     const activeServerDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-server-external-update-blocked-'));
 
-    const credentials: Credentials = {
+    const credentials = {
       token: 'happy-token',
       encryption: { type: 'legacy', secret: new Uint8Array(32).fill(9) },
-    };
+    } satisfies Credentials;
     if (credentials.encryption.type !== 'legacy') throw new Error('fixture');
 
     const now = 1_000_000;
@@ -2518,10 +2555,10 @@ afterEach(() => {
     const baseDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-external-update-multi-blocked-'));
     const activeServerDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-server-external-update-multi-blocked-'));
 
-    const credentials: Credentials = {
+    const credentials = {
       token: 'happy-token',
       encryption: { type: 'legacy', secret: new Uint8Array(32).fill(9) },
-    };
+    } satisfies Credentials;
     if (credentials.encryption.type !== 'legacy') throw new Error('fixture');
     const legacySecret = credentials.encryption.secret;
 
@@ -2646,10 +2683,10 @@ afterEach(() => {
     const baseDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-refresh-'));
     const activeServerDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-server-refresh-'));
 
-    const credentials: Credentials = {
+    const credentials = {
       token: 'happy-token',
       encryption: { type: 'legacy', secret: new Uint8Array(32).fill(9) },
-    };
+    } satisfies Credentials;
     if (credentials.encryption.type !== 'legacy') throw new Error('fixture');
 
     const now = 1_000_000;
@@ -2737,14 +2774,14 @@ afterEach(() => {
     });
   });
 
-  it('directly refreshes a Codex group active profile and updates only the group-home bridge response', async () => {
+  it.each([false, true])('refreshes Codex bridge tokens without rolling back a superseding pool cutover (cutover=%s)', async (cutover) => {
     const baseDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-refresh-'));
     const activeServerDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-server-refresh-'));
 
-    const credentials: Credentials = {
+    const credentials = {
       token: 'happy-token',
       encryption: { type: 'legacy', secret: new Uint8Array(32).fill(9) },
-    };
+    } satisfies Credentials;
     if (credentials.encryption.type !== 'legacy') throw new Error('fixture');
 
     const now = 1_000_000;
@@ -2772,22 +2809,39 @@ afterEach(() => {
       randomBytes: (length) => randomBytes(length),
     });
 
+    let groupReads = 0;
+    let superseded = false;
+    const codexHome = resolveCodexHomeForMaterialization(activeServerDir, { kind: 'group', groupId: 'main' });
     const api = {
-      getConnectedServiceCredentialSealed: vi.fn(async () => ({
-        sealed: { format: 'account_scoped_v1', ciphertext: sealedCiphertext },
-        metadata: { kind: 'oauth', providerEmail: 'alice@example.com', providerAccountId: 'chatgpt-account', expiresAt: now + 90_000 },
-      })),
+      getConnectedServiceCredentialSealed: vi.fn(async () => {
+        if (cutover && !superseded && groupReads >= 3) {
+          // Real Account HTTP response boundary: the bridge's post-rotation distribution captured
+          // A, then another pool cutover published B before the under-lock currentness read.
+          superseded = true;
+          await mkdir(codexHome, { recursive: true });
+          await writeFile(join(codexHome, 'auth.json'), JSON.stringify({
+            access_token: 'current-pool-access', refresh_token: 'current-pool-refresh',
+          }));
+        }
+        return {
+          sealed: { format: 'account_scoped_v1', ciphertext: sealedCiphertext },
+          metadata: { kind: 'oauth', providerEmail: 'alice@example.com', providerAccountId: 'chatgpt-account', expiresAt: now + 90_000 },
+        };
+      }),
       acquireConnectedServiceRefreshLease: vi.fn(async () => ({ acquired: true, leaseUntil: now + 60_000 })),
       registerConnectedServiceCredentialSealed: vi.fn(async (params: { sealed: { ciphertext: string } }) => {
         sealedCiphertext = params.sealed.ciphertext;
       }),
       // Canonical group state matches the bridge request and registered target.
-      getConnectedServiceAuthGroup: vi.fn(async () => ({
-        serviceId: 'openai-codex',
-        groupId: 'main',
-        activeProfileId: 'backup',
-        generation: 7,
-      })),
+      getConnectedServiceAuthGroup: vi.fn(async () => {
+        groupReads += 1;
+        return {
+          serviceId: 'openai-codex',
+          groupId: 'main',
+          activeProfileId: superseded ? 'current' : 'backup',
+          generation: superseded ? 8 : 7,
+        };
+      }),
     } as unknown as ApiClient;
     completeCredentialAuthorityBoundaryFixture(api);
 
@@ -2849,15 +2903,21 @@ afterEach(() => {
       // Exercise the rotation path explicitly (F6: rotation now requires near-expiry OR force).
       forceRefresh: true,
     };
-    const result = await coordinator.refreshOpenAiCodexChatGptTokensForBridge(request);
-
-    expect(result).toEqual({
-      accessToken: 'new-access',
-      chatgptAccountId: 'chatgpt-account',
-      chatgptPlanType: 'plus',
-      credentialRevision: 'csr_0000000000000000000001',
-    });
-    expect(result).not.toHaveProperty('refreshToken');
+    const refresh = coordinator.refreshOpenAiCodexChatGptTokensForBridge(request);
+    if (cutover) {
+      await expect(refresh).rejects.toMatchObject({ name: 'ConnectedServiceBridgeSelectionAuthorizationError' });
+    } else {
+      const result = await refresh;
+      expect(result).toEqual({
+        accessToken: 'new-access',
+        chatgptAccountId: 'chatgpt-account',
+        chatgptPlanType: 'plus',
+        credentialRevision: 'csr_0000000000000000000001',
+        selection: { kind: 'group', serviceId: 'openai-codex', groupId: 'main',
+          activeProfileId: 'backup', fallbackProfileId: 'work', generation: 7 },
+      });
+      expect(result).not.toHaveProperty('refreshToken');
+    }
     expect(api.acquireConnectedServiceRefreshLease).toHaveBeenCalledWith({
       serviceId: 'openai-codex',
       profileId: 'backup',
@@ -2879,20 +2939,20 @@ afterEach(() => {
       }),
     });
 
-    const codexHome = resolveCodexHomeForMaterialization(baseDir, 'openai-codex-refresh-backup');
     const auth = JSON.parse(await readFile(join(codexHome, 'auth.json'), 'utf8'));
-    expect(auth.access_token).toBe('new-access');
-    expect(auth.refresh_token).toBe('rotated-refresh');
+    expect(superseded).toBe(cutover);
+    expect(auth.access_token).toBe(cutover ? 'current-pool-access' : 'new-access');
+    expect(auth.refresh_token).toBe(cutover ? 'current-pool-refresh' : 'rotated-refresh');
   });
 
-  it('refreshes Codex bridge tokens into the registered target materialized home', async () => {
+  it('refreshes Codex bridge tokens into the selected stable profile home', async () => {
     const baseDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-refresh-bridge-target-'));
     const activeServerDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-server-refresh-bridge-target-'));
 
-    const credentials: Credentials = {
+    const credentials = {
       token: 'happy-token',
       encryption: { type: 'legacy', secret: new Uint8Array(32).fill(9) },
-    };
+    } satisfies Credentials;
     if (credentials.encryption.type !== 'legacy') throw new Error('fixture');
 
     const now = 1_000_000;
@@ -2984,21 +3044,22 @@ afterEach(() => {
       chatgptAccountId: 'chatgpt-account',
       chatgptPlanType: 'team',
       credentialRevision: 'csr_0000000000000000000001',
+      selection: { kind: 'profile', serviceId: 'openai-codex', profileId: 'work' },
     });
-    const activeCodexHome = resolveCodexHomeForMaterialization(baseDir, 'session-bridge');
+    const activeCodexHome = resolveCodexHomeForMaterialization(activeServerDir);
     const activeAuth = JSON.parse(await readFile(join(activeCodexHome, 'auth.json'), 'utf8'));
     expect(activeAuth.access_token).toBe('new-access');
     expect(activeAuth.refresh_token).toBe('rotated-refresh');
-    await expect(lstat(resolveCodexHomeForMaterialization(baseDir, 'openai-codex-refresh-work'))).rejects.toThrow();
+    await expect(lstat(join(baseDir, normalizeMaterializationKeyForPath('openai-codex-refresh-work'), 'codex', 'codex-home'))).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
   it('returns the CURRENT Codex access token without rotating when valid and forceRefresh is not set (F6)', async () => {
     const baseDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-refresh-bridge-noforce-'));
     const activeServerDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-server-refresh-bridge-noforce-'));
-    const credentials: Credentials = {
+    const credentials = {
       token: 'happy-token',
       encryption: { type: 'legacy', secret: new Uint8Array(32).fill(11) },
-    };
+    } satisfies Credentials;
     if (credentials.encryption.type !== 'legacy') throw new Error('fixture');
 
     const now = 1_000_000;
@@ -3075,6 +3136,7 @@ afterEach(() => {
       chatgptAccountId: 'chatgpt-account',
       chatgptPlanType: 'plus',
       credentialRevision: 'csr_abcdefghijklmnopqrstuv',
+      selection: { kind: 'profile', serviceId: 'openai-codex', profileId: 'work' },
     });
     // No provider refresh, no lease, no rotation/persist when the token is still valid.
     expect(fetchMock).not.toHaveBeenCalled();
@@ -3085,10 +3147,10 @@ afterEach(() => {
   it('does not cold-cache adopt a future-dated Codex token contradicted by canonical credential health', async () => {
     const baseDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-refresh-bridge-health-gate-'));
     const activeServerDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-server-bridge-health-gate-'));
-    const credentials: Credentials = {
+    const credentials = {
       token: 'happy-token',
       encryption: { type: 'legacy', secret: new Uint8Array(32).fill(19) },
-    };
+    } satisfies Credentials;
     if (credentials.encryption.type !== 'legacy') throw new Error('fixture');
     const now = 1_000_000;
     const record = buildConnectedServiceCredentialRecord({
@@ -3180,10 +3242,10 @@ afterEach(() => {
   it('adopts a newer current Codex token despite stale predecessor reauth health', async () => {
     const baseDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-refresh-bridge-newer-token-'));
     const activeServerDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-server-bridge-newer-token-'));
-    const credentials: Credentials = {
+    const credentials = {
       token: 'happy-token',
       encryption: { type: 'legacy', secret: new Uint8Array(32).fill(20) },
-    };
+    } satisfies Credentials;
     if (credentials.encryption.type !== 'legacy') throw new Error('fixture');
     const now = 1_000_000;
     const currentAccessToken = 'newer-current-access';
@@ -3266,10 +3328,10 @@ afterEach(() => {
     // foreign `victim-profile` serves the session's OWN `owner-profile` token, never the victim's.
     const baseDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-refresh-bridge-authz-'));
     const activeServerDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-server-bridge-authz-'));
-    const credentials: Credentials = {
+    const credentials = {
       token: 'happy-token',
       encryption: { type: 'legacy', secret: new Uint8Array(32).fill(12) },
-    };
+    } satisfies Credentials;
     if (credentials.encryption.type !== 'legacy') throw new Error('fixture');
 
     const now = 1_000_000;
@@ -3346,6 +3408,7 @@ afterEach(() => {
       chatgptAccountId: 'chatgpt-owner',
       chatgptPlanType: 'plus',
       credentialRevision: 'csr_abcdefghijklmnopqrstuv',
+      selection: { kind: 'profile', serviceId: 'openai-codex', profileId: 'owner-profile' },
     });
     expect(getSealed).toHaveBeenCalledWith(expect.objectContaining({ profileId: 'owner-profile' }));
     expect(fetchMock).not.toHaveBeenCalled();
@@ -3355,10 +3418,10 @@ afterEach(() => {
   it('accepts Codex bridge requests for the session-owned profile binding', async () => {
     const baseDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-refresh-bridge-authz-ok-'));
     const activeServerDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-server-bridge-authz-ok-'));
-    const credentials: Credentials = {
+    const credentials = {
       token: 'happy-token',
       encryption: { type: 'legacy', secret: new Uint8Array(32).fill(13) },
-    };
+    } satisfies Credentials;
     if (credentials.encryption.type !== 'legacy') throw new Error('fixture');
 
     const now = 1_000_000;
@@ -3430,6 +3493,7 @@ afterEach(() => {
       chatgptAccountId: 'chatgpt-owner',
       chatgptPlanType: 'plus',
       credentialRevision: 'csr_abcdefghijklmnopqrstuv',
+      selection: { kind: 'profile', serviceId: 'openai-codex', profileId: 'owner-profile' },
     });
     expect(fetchMock).not.toHaveBeenCalled();
     expect(api.acquireConnectedServiceRefreshLease).not.toHaveBeenCalled();
@@ -3438,10 +3502,10 @@ afterEach(() => {
   it('rejects Codex bridge requests from unknown sessions', async () => {
     const baseDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-refresh-bridge-authz-unknown-'));
     const activeServerDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-server-bridge-authz-unknown-'));
-    const credentials: Credentials = {
+    const credentials = {
       token: 'happy-token',
       encryption: { type: 'legacy', secret: new Uint8Array(32).fill(14) },
-    };
+    } satisfies Credentials;
     if (credentials.encryption.type !== 'legacy') throw new Error('fixture');
     const now = 1_000_000;
     const api = {
@@ -3478,10 +3542,10 @@ afterEach(() => {
     const baseDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-refresh-lease-wait-'));
     const activeServerDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-server-lease-wait-'));
 
-    const credentials: Credentials = {
+    const credentials = {
       token: 'happy-token',
       encryption: { type: 'legacy', secret: new Uint8Array(32).fill(15) },
-    };
+    } satisfies Credentials;
     if (credentials.encryption.type !== 'legacy') throw new Error('fixture');
 
     const now = 1_000_000;
@@ -3585,10 +3649,10 @@ afterEach(() => {
     async (candidateKind) => {
       const baseDir = await mkdtemp(join(tmpdir(), `happier-connected-services-refresh-lease-unusable-${candidateKind}-`));
       const activeServerDir = await mkdtemp(join(tmpdir(), `happier-connected-services-server-lease-unusable-${candidateKind}-`));
-      const credentials: Credentials = {
+      const credentials = {
         token: 'happy-token',
         encryption: { type: 'legacy', secret: new Uint8Array(32).fill(17) },
-      };
+      } satisfies Credentials;
       if (credentials.encryption.type !== 'legacy') throw new Error('fixture');
       const now = 1_000_000;
       const staleRecord = buildConnectedServiceCredentialRecord({
@@ -3844,10 +3908,10 @@ afterEach(() => {
     const sourceRevision = 'csr_abcdefghijklmnopqrstuv';
     const mintedRevision = 'csr_bcdefghijklmnopqrstuvw';
     const supersedingRevision = 'csr_cdefghijklmnopqrstuvwx';
-    const credentials: Credentials = {
+    const credentials = {
       token: 'happy-token',
       encryption: { type: 'legacy', secret: new Uint8Array(32).fill(21) },
-    };
+    } satisfies Credentials;
     let storedRecord = buildConnectedServiceCredentialRecord({
       now,
       serviceId: 'openai-codex',
@@ -3925,10 +3989,10 @@ afterEach(() => {
     const activeServerDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-server-lease-clock-'));
     let clock = 1_000_000;
     const initialNow = clock;
-    const credentials: Credentials = {
+    const credentials = {
       token: 'happy-token',
       encryption: { type: 'legacy', secret: new Uint8Array(32).fill(18) },
-    };
+    } satisfies Credentials;
     const predecessor = buildConnectedServiceCredentialRecord({
       now: initialNow,
       serviceId: 'openai-codex',
@@ -4023,10 +4087,10 @@ afterEach(() => {
     const baseDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-refresh-singleflight-'));
     const activeServerDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-server-refresh-singleflight-'));
 
-    const credentials: Credentials = {
+    const credentials = {
       token: 'happy-token',
       encryption: { type: 'legacy', secret: new Uint8Array(32).fill(9) },
-    };
+    } satisfies Credentials;
     if (credentials.encryption.type !== 'legacy') throw new Error('fixture');
 
     const now = 1_000_000;
@@ -4114,10 +4178,10 @@ afterEach(() => {
     const baseDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-refresh-singleflight-timeout-'));
     const activeServerDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-server-refresh-singleflight-timeout-'));
 
-    const credentials: Credentials = {
+    const credentials = {
       token: 'happy-token',
       encryption: { type: 'legacy', secret: new Uint8Array(32).fill(9) },
-    };
+    } satisfies Credentials;
     if (credentials.encryption.type !== 'legacy') throw new Error('fixture');
 
     const now = 1_000_000;
@@ -4215,10 +4279,10 @@ afterEach(() => {
     const baseDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-refresh-join-not-needed-'));
     const activeServerDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-server-refresh-join-not-needed-'));
     const now = 1_000_000;
-    const credentials: Credentials = {
+    const credentials = {
       token: 'happy-token',
       encryption: { type: 'legacy', secret: new Uint8Array(32).fill(9) },
-    };
+    } satisfies Credentials;
     if (credentials.encryption.type !== 'legacy') throw new Error('fixture');
     const record = buildConnectedServiceCredentialRecord({
       now,
@@ -4311,10 +4375,10 @@ afterEach(() => {
     const baseDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-refresh-force-class-'));
     const activeServerDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-server-refresh-force-class-'));
 
-    const credentials: Credentials = {
+    const credentials = {
       token: 'happy-token',
       encryption: { type: 'legacy', secret: new Uint8Array(32).fill(9) },
-    };
+    } satisfies Credentials;
     if (credentials.encryption.type !== 'legacy') throw new Error('fixture');
 
     const now = 1_000_000;
@@ -4417,10 +4481,10 @@ afterEach(() => {
     const baseDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-refresh-coalesce-rotation-'));
     const activeServerDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-server-refresh-coalesce-rotation-'));
 
-    const credentials: Credentials = {
+    const credentials = {
       token: 'happy-token',
       encryption: { type: 'legacy', secret: new Uint8Array(32).fill(9) },
-    };
+    } satisfies Credentials;
     if (credentials.encryption.type !== 'legacy') throw new Error('fixture');
 
     const now = 1_000_000;
@@ -4529,10 +4593,10 @@ afterEach(() => {
     const baseDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-refresh-forced-join-forced-'));
     const activeServerDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-server-refresh-forced-join-forced-'));
 
-    const credentials: Credentials = {
+    const credentials = {
       token: 'happy-token',
       encryption: { type: 'legacy', secret: new Uint8Array(32).fill(9) },
-    };
+    } satisfies Credentials;
     if (credentials.encryption.type !== 'legacy') throw new Error('fixture');
 
     const now = 1_000_000;
@@ -4621,10 +4685,10 @@ afterEach(() => {
     const baseDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-refresh-sequential-forced-'));
     const activeServerDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-server-refresh-sequential-forced-'));
 
-    const credentials: Credentials = {
+    const credentials = {
       token: 'happy-token',
       encryption: { type: 'legacy', secret: new Uint8Array(32).fill(9) },
-    };
+    } satisfies Credentials;
     if (credentials.encryption.type !== 'legacy') throw new Error('fixture');
 
     const now = 1_000_000;
@@ -4712,10 +4776,10 @@ afterEach(() => {
     const baseDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-refresh-distinct-bindings-'));
     const activeServerDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-server-refresh-distinct-bindings-'));
 
-    const credentials: Credentials = {
+    const credentials = {
       token: 'happy-token',
       encryption: { type: 'legacy', secret: new Uint8Array(32).fill(9) },
-    };
+    } satisfies Credentials;
     if (credentials.encryption.type !== 'legacy') throw new Error('fixture');
 
     const now = 1_000_000;
@@ -4801,10 +4865,10 @@ afterEach(() => {
     const baseDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-refresh-error-propagation-'));
     const activeServerDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-server-refresh-error-propagation-'));
 
-    const credentials: Credentials = {
+    const credentials = {
       token: 'happy-token',
       encryption: { type: 'legacy', secret: new Uint8Array(32).fill(9) },
-    };
+    } satisfies Credentials;
     if (credentials.encryption.type !== 'legacy') throw new Error('fixture');
 
     const now = 1_000_000;
@@ -4867,10 +4931,10 @@ afterEach(() => {
   it('revision-guards missing-refresh-token health against a superseding credential', async () => {
     const now = 1_000_000;
     const leasedRevision = 'csr_abcdefghijklmnopqrstuv';
-    const credentials: Credentials = {
+    const credentials = {
       token: 'happy-token',
       encryption: { type: 'legacy', secret: new Uint8Array(32).fill(17) },
-    };
+    } satisfies Credentials;
     const record = buildConnectedServiceCredentialRecord({
       now,
       serviceId: 'openai-codex',
@@ -4941,10 +5005,10 @@ afterEach(() => {
     const baseDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-refresh-invalid-grant-'));
     const activeServerDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-server-refresh-invalid-grant-'));
 
-    const credentials: Credentials = {
+    const credentials = {
       token: 'happy-token',
       encryption: { type: 'legacy', secret: new Uint8Array(32).fill(9) },
-    };
+    } satisfies Credentials;
     if (credentials.encryption.type !== 'legacy') throw new Error('fixture');
 
     const now = 1_000_000;
@@ -5113,10 +5177,10 @@ afterEach(() => {
     const baseDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-claude-harvest-'));
     const activeServerDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-server-claude-harvest-'));
 
-    const credentials: Credentials = {
+    const credentials = {
       token: 'happy-token',
       encryption: { type: 'legacy', secret: new Uint8Array(32).fill(9) },
-    };
+    } satisfies Credentials;
     if (credentials.encryption.type !== 'legacy') throw new Error('fixture');
 
     const now = 1_000_000;
@@ -5258,10 +5322,10 @@ afterEach(() => {
     const baseDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-refresh-health-warn-'));
     const activeServerDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-server-refresh-health-warn-'));
 
-    const credentials: Credentials = {
+    const credentials = {
       token: 'happy-token',
       encryption: { type: 'legacy', secret: new Uint8Array(32).fill(9) },
-    };
+    } satisfies Credentials;
     if (credentials.encryption.type !== 'legacy') throw new Error('fixture');
 
     const now = 1_000_000;
@@ -5363,10 +5427,10 @@ afterEach(() => {
     const baseDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-refresh-needs-reauth-'));
     const activeServerDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-server-refresh-needs-reauth-'));
 
-    const credentials: Credentials = {
+    const credentials = {
       token: 'happy-token',
       encryption: { type: 'legacy', secret: new Uint8Array(32).fill(9) },
-    };
+    } satisfies Credentials;
     if (credentials.encryption.type !== 'legacy') throw new Error('fixture');
 
     const now = 1_000_000;
@@ -5470,10 +5534,10 @@ afterEach(() => {
     const baseDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-refresh-needs-reauth-backoff-'));
     const activeServerDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-server-refresh-needs-reauth-backoff-'));
 
-    const credentials: Credentials = {
+    const credentials = {
       token: 'happy-token',
       encryption: { type: 'legacy', secret: new Uint8Array(32).fill(9) },
-    };
+    } satisfies Credentials;
     if (credentials.encryption.type !== 'legacy') throw new Error('fixture');
 
     let now = 1_000_000;
@@ -5579,10 +5643,10 @@ afterEach(() => {
     const baseDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-spawn-health-gate-'));
     const activeServerDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-server-spawn-health-gate-'));
 
-    const credentials: Credentials = {
+    const credentials = {
       token: 'happy-token',
       encryption: { type: 'legacy', secret: new Uint8Array(32).fill(9) },
-    };
+    } satisfies Credentials;
     if (credentials.encryption.type !== 'legacy') throw new Error('fixture');
 
     const now = 1_000_000;
@@ -5671,10 +5735,10 @@ afterEach(() => {
     const baseDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-forced-claude-spawn-refresh-'));
     const activeServerDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-server-forced-claude-spawn-refresh-'));
 
-    const credentials: Credentials = {
+    const credentials = {
       token: 'happy-token',
       encryption: { type: 'legacy', secret: new Uint8Array(32).fill(9) },
-    };
+    } satisfies Credentials;
     if (credentials.encryption.type !== 'legacy') throw new Error('fixture');
 
     const now = 1_000_000;
@@ -5768,10 +5832,10 @@ afterEach(() => {
     const baseDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-spawn-health-read-redaction-'));
     const activeServerDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-server-spawn-health-read-redaction-'));
 
-    const credentials: Credentials = {
+    const credentials = {
       token: 'happy-token',
       encryption: { type: 'legacy', secret: new Uint8Array(32).fill(9) },
-    };
+    } satisfies Credentials;
     if (credentials.encryption.type !== 'legacy') throw new Error('fixture');
 
     const now = 1_000_000;
@@ -5849,10 +5913,10 @@ afterEach(() => {
     const baseDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-quota-health-gate-'));
     const activeServerDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-server-quota-health-gate-'));
 
-    const credentials: Credentials = {
+    const credentials = {
       token: 'happy-token',
       encryption: { type: 'legacy', secret: new Uint8Array(32).fill(9) },
-    };
+    } satisfies Credentials;
     if (credentials.encryption.type !== 'legacy') throw new Error('fixture');
 
     const now = 1_000_000;
@@ -5953,10 +6017,10 @@ afterEach(() => {
     const baseDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-refresh-'));
     const activeServerDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-server-refresh-'));
 
-    const credentials: Credentials = {
+    const credentials = {
       token: 'happy-token',
       encryption: { type: 'legacy', secret: new Uint8Array(32).fill(9) },
-    };
+    } satisfies Credentials;
     if (credentials.encryption.type !== 'legacy') throw new Error('fixture');
 
     const now = 1_000_000;
@@ -6073,7 +6137,7 @@ afterEach(() => {
       profileId: 'backup',
     });
 
-    const codexHome = resolveCodexHomeForMaterialization(baseDir, 'session-1');
+    const codexHome = resolveCodexHomeForMaterialization(activeServerDir, { kind: 'group', groupId: 'main' });
     const auth = JSON.parse(await readFile(join(codexHome, 'auth.json'), 'utf8'));
     expect(auth.access_token).toBe('new-access');
     expect(auth.refresh_token).toBe('new-refresh');
@@ -6083,10 +6147,10 @@ afterEach(() => {
     const baseDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-refresh-'));
     const activeServerDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-server-refresh-'));
 
-    const credentials: Credentials = {
+    const credentials = {
       token: 'happy-token',
       encryption: { type: 'legacy', secret: new Uint8Array(32).fill(9) },
-    };
+    } satisfies Credentials;
     if (credentials.encryption.type !== 'legacy') throw new Error('fixture');
 
     const now = 1_000_000;
@@ -6233,14 +6297,138 @@ afterEach(() => {
     expect(JSON.stringify(logRefreshDiagnostic.mock.calls)).not.toContain('old-refresh');
   });
 
+  it.each(['missing', 'joined', 'present', 'unavailable', 'different_user'] as const)(
+    'enriches unexpired provider context through the credential authority (%s)', async (context) => {
+      const baseDir = await mkdtemp(join(tmpdir(), 'happier-context-enrichment-'));
+      const activeServerDir = await mkdtemp(join(tmpdir(), 'happier-context-server-'));
+      const now = 1_000_000;
+      const credentials = {
+        token: 'happy-token',
+        encryption: { type: 'legacy', secret: new Uint8Array(32).fill(9) },
+      } satisfies Credentials;
+      let storedRecord = buildConnectedServiceCredentialRecord({
+        now: now - 100,
+        serviceId: 'claude-subscription', profileId: 'work', kind: 'oauth', expiresAt: now + 3_600_000,
+        oauth: {
+          accessToken: 'unchanged-access', refreshToken: 'unchanged-refresh', idToken: null,
+          scope: 'user:profile', tokenType: 'Bearer', providerAccountId: 'acct', providerEmail: 'user@example.com',
+          raw: context === 'present' ? { claudeAiOauth: { organizationUuid: 'org-existing' } } : null,
+        },
+      });
+      const originalRecord = structuredClone(storedRecord);
+      let credentialRevision = 'csr_abcdefghijklmnopqrstuv';
+      let releaseRead = () => {};
+      let markReadStarted = () => {};
+      const readReleased = new Promise<void>((resolve) => { releaseRead = resolve; });
+      const readStarted = new Promise<void>((resolve) => { markReadStarted = resolve; });
+      let readCount = 0;
+      const readBoundary = vi.fn(async () => {
+        readCount += 1;
+        if (context === 'joined' && readCount === 1) {
+          markReadStarted();
+          await readReleased;
+        }
+        return {
+          revisionSemantics: 'revisioned' as const, credentialRevision,
+          content: { t: 'plain' as const, v: storedRecord },
+        };
+      });
+      const writeBoundary = vi.fn(async (params: { content: { v: typeof storedRecord } }) => {
+        storedRecord = params.content.v;
+        credentialRevision = 'csr_bcdefghijklmnopqrstuvw';
+        return { success: true as const, credentialRevision };
+      });
+      const healthBoundary = vi.fn(async () => ({ success: true as const }));
+      // The API persistence/lease transport is the genuine boundary; all refresh logic stays real.
+      const api = {
+        getAccountEncryptionMode: async () => 'plain' as const,
+        getConnectedServiceCredentialPlain: readBoundary,
+        acquireConnectedServiceRefreshLease: async () => ({
+          acquired: true, leaseUntil: now + 60_000, ownerId: 'machine-context', credentialRevision,
+        }),
+        registerConnectedServiceCredentialPlain: writeBoundary,
+        updateConnectedServiceCredentialHealth: healthBoundary,
+        getConnectedServiceQuotaSnapshotPlain: async () => null,
+        getConnectedServiceQuotaSnapshotSealed: async () => null,
+      } as unknown as ApiClient;
+      const providerRequests: Array<{ url: string; method: string }> = [];
+      vi.stubGlobal('fetch', vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+        providerRequests.push({ url: String(url), method: init?.method ?? 'GET' });
+        return new Response(JSON.stringify({
+          account: { uuid: context === 'different_user' ? 'other-acct' : 'acct' },
+          organization: { uuid: 'org-attested' },
+        }), { status: context === 'unavailable' ? 503 : 200 });
+      }));
+      const coordinator = new ConnectedServiceRefreshCoordinator({
+        api, credentials, machineIdProvider: () => 'machine-context', activeServerDir, baseDir,
+        refreshWindowMs: 60_000, refreshLeaseMs: 30_000, now: () => now,
+      });
+      const ordinary = context === 'joined' ? coordinator.refreshConnectedServiceCredentialForSpawnPreflight({
+        serviceId: 'claude-subscription', profileId: 'work', force: false,
+      }) : null;
+      if (ordinary) await readStarted;
+      const quotaRecords: unknown[] = [];
+      let quotaRefreshResult: Awaited<ReturnType<typeof coordinator.refreshConnectedServiceCredentialForQuota>> | undefined;
+      const quotaCoordinator = new ConnectedServiceQuotasCoordinator({
+        api, credentials, now: () => now, randomBytes,
+        quotaFetchers: [{ serviceId: 'claude-subscription', fetch: async ({ record }) => {
+          quotaRecords.push(record);
+          return null;
+        } }],
+        refreshConnectedServiceCredentialForQuota: async (input) => {
+          quotaRefreshResult = await coordinator.refreshConnectedServiceCredentialForQuota(input);
+          return quotaRefreshResult;
+        },
+      });
+      quotaCoordinator.registerSpawnTarget({
+        pid: 123,
+        connectedServicesBindingsRaw: { v: 1, bindingsByServiceId: {
+          'claude-subscription': { source: 'connected', profileId: 'work' },
+        } },
+      });
+      const enrichment = context === 'missing'
+        ? quotaCoordinator.tickOnce().then(() => quotaRefreshResult)
+        : coordinator.refreshConnectedServiceCredentialForQuota({
+          serviceId: 'claude-subscription', profileId: 'work', force: false, reason: 'provider_context',
+        });
+      releaseRead();
+      if (ordinary) await ordinary;
+      const result = await enrichment;
+      expect(providerRequests.every((request) => request.method === 'GET')).toBe(true);
+      expect(providerRequests).toHaveLength(context === 'present' ? 0 : 1);
+      const shouldEnrich = context === 'missing' || context === 'joined';
+      expect(storedRecord.oauth).toEqual(shouldEnrich
+        ? { ...originalRecord.oauth, raw: { claudeAiOauth: { organizationUuid: 'org-attested' } } }
+        : originalRecord.oauth);
+      expect(storedRecord.expiresAt).toBe(originalRecord.expiresAt);
+      expect(writeBoundary).toHaveBeenCalledTimes(shouldEnrich ? 1 : 0);
+      expect(healthBoundary).not.toHaveBeenCalled();
+      expect(result?.record).toEqual(storedRecord);
+      expect(result?.credentialRevision).toBe(credentialRevision);
+      if (context === 'missing') expect(quotaRecords).toEqual([expect.objectContaining({
+        oauth: expect.objectContaining({ raw: { claudeAiOauth: { organizationUuid: 'org-attested' } } }),
+      })]);
+      if (shouldEnrich) {
+        expect(writeBoundary).toHaveBeenCalledWith(expect.objectContaining({
+          expectedCredentialRevision: 'csr_abcdefghijklmnopqrstuv', refreshLeaseOwnerId: 'machine-context',
+        }));
+        const again = await coordinator.refreshConnectedServiceCredentialForQuota({
+          serviceId: 'claude-subscription', profileId: 'work', force: false, reason: 'provider_context',
+        });
+        expect(again.record).toEqual(storedRecord);
+        expect(providerRequests).toHaveLength(1);
+      }
+    },
+  );
+
   it('preserves stored OAuth scope and token type when refresh omits them', async () => {
     const baseDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-refresh-scope-preserve-'));
     const activeServerDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-server-refresh-scope-preserve-'));
     const now = 1_000_000;
-    const credentials: Credentials = {
+    const credentials = {
       token: 'happy-token',
       encryption: { type: 'legacy', secret: new Uint8Array(32).fill(9) },
-    };
+    } satisfies Credentials;
     let storedRecord = buildConnectedServiceCredentialRecord({
       now,
       serviceId: 'claude-subscription',
@@ -6322,10 +6510,10 @@ afterEach(() => {
     const baseDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-refresh-scope-update-'));
     const activeServerDir = await mkdtemp(join(tmpdir(), 'happier-connected-services-server-refresh-scope-update-'));
     const now = 1_000_000;
-    const credentials: Credentials = {
+    const credentials = {
       token: 'happy-token',
       encryption: { type: 'legacy', secret: new Uint8Array(32).fill(9) },
-    };
+    } satisfies Credentials;
     let storedRecord = buildConnectedServiceCredentialRecord({
       now,
       serviceId: 'claude-subscription',

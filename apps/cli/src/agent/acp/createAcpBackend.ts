@@ -60,6 +60,7 @@ export interface CreateAcpBackendOptions {
 
   /** Optional authentication selected only after a successful ACP initialize response. */
   authentication?: AcpAuthentication;
+  isAuthenticationSetupFailure?: AcpBackendOptions['isAuthenticationSetupFailure'];
 
   /** Optional ACP initialize _meta payload for provider-specific extension negotiation. */
   initializeMeta?: Record<string, unknown>;
@@ -115,6 +116,7 @@ export function createAcpBackend(options: CreateAcpBackendOptions): AcpBackend {
     permissionHandler: options.permissionHandler,
     transportHandler: options.transportHandler ?? new DefaultTransport(options.agentName),
     authentication: options.authentication,
+    isAuthenticationSetupFailure: options.isAuthenticationSetupFailure,
     initializeMeta: options.initializeMeta,
     initializeClientCapabilitiesMeta: options.initializeClientCapabilitiesMeta,
     extensionHandlers: options.extensionHandlers,

@@ -23,6 +23,7 @@ import type { SessionListRenderableSession } from '../domains/session/listing/se
 import type { MachineDisplayRenderable } from '../domains/machines/machineDisplayRenderable';
 import type { CustomerInfo } from '../domains/purchases/types';
 import type { ApplyMachinesOptions } from './domains/machines';
+import type { SessionListRenderableReplacementOptions } from './domains/sessionListRenderableStoreUpdate';
 import type { SessionMessages } from './domains/messages';
 import type { SessionPending } from './domains/pending';
 import type { PetsDomain } from './domains/pets';
@@ -75,6 +76,9 @@ export interface LegacySessionsSlice {
 }
 
 export interface SessionsDomainSlice {
+    sessionArchiveOperations: import('../domains/session/listing/sessionArchiveState').SessionArchiveOperations;
+    beginSessionArchive: (sessionId: string, serverId: string) => import('../domains/session/listing/sessionArchiveState').SessionArchiveOperation | null;
+    finishSessionArchive: (operation: import('../domains/session/listing/sessionArchiveState').SessionArchiveOperation) => void;
     sessions: Record<string, Session>;
     sessionLocalStateScope: ServerAccountScope | null;
     sessionListRenderables: Record<string, SessionListRenderableSession>;
@@ -98,13 +102,18 @@ export interface SessionsDomainSlice {
     activateSessionLocalStateScope: (scope: ServerAccountScope, legacyScopes?: readonly ServerAccountScope[]) => void;
     clearSessionLocalStateScope: () => void;
     applySessions: (sessions: (Omit<Session, 'presence'> & { presence?: 'online' | number })[]) => void;
-    replaceSessionListRenderables: (sessions: SessionListRenderableSession[]) => void;
+    replaceSessionListRenderables: (
+        sessions: SessionListRenderableSession[],
+        options?: SessionListRenderableReplacementOptions,
+    ) => void;
     mergeSessionListRenderables: (sessions: SessionListRenderableSession[]) => void;
+    /** Omit the scope for active-server patches; explicit scopes are canonical server IDs. */
     applySessionListRenderablePatches: (
         patches: ReadonlyArray<Readonly<{
             sessionId: string;
             patch: Readonly<Partial<Omit<SessionListRenderableSession, 'id'>>>;
         }>>,
+        serverId?: string | null,
     ) => void;
     applyScmStatus: (sessionId: string, status: ScmStatus | null) => void;
     getActiveSessions: () => Session[];

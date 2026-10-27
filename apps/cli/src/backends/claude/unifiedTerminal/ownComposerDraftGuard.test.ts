@@ -48,6 +48,21 @@ function readFixture(name: string): string {
 }
 
 describe('clearOwnLeftoverComposerDraft (C11: idle pre-injection own-leftover guard)', () => {
+  it('clears a collapsed own paste whose outer blank lines are absent from semantic identity', async () => {
+    const body = Array.from({ length: 14 }, (_, index) => `Line ${index}: ${'x'.repeat(170)}`).join('\n');
+    const captures = [idleScreen('[Pasted text #1 +18 lines]'), idleScreen('')];
+    let cleared = false;
+    const result = await clearOwnLeftoverComposerDraft({
+      captureInputState: async () => ({ currentInput: captures.shift() ?? idleScreen('') }),
+      sendClearKey: async () => { cleared = true; },
+      ownComposerTexts: ownLog(`\n\n${body}\n\n\n`),
+      wait: async () => undefined,
+    });
+
+    expect(result.status).toBe('cleared');
+    expect(cleared).toBe(true);
+  });
+
   it('reports no_draft for an empty composer', async () => {
     const result = await clearOwnLeftoverComposerDraft({
       captureInputState: async () => ({ currentInput: idleScreen('') }),

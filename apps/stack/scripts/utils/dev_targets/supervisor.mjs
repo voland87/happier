@@ -2,12 +2,13 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
-import { killProcessTree, spawnProc } from '../proc/proc.mjs';
+import { killProcessTree, runCaptureResult, spawnProc } from '../proc/proc.mjs';
 import { fetchHappierHealth } from '../server/server.mjs';
 import {
   buildMutagenProjectArgs,
   isEquivalentMutagenProject,
   isMutagenProjectOwnedBy,
+  loadSiblingMutagenOwner,
   renderMutagenProject,
   resolveMutagenSessionName,
 } from './mutagen_project.mjs';
@@ -53,9 +54,8 @@ export function resolveDefaultRemoteExpoPort({
 }
 
 async function defaultRunProcess({ label, command, args, env }) {
-  const child = spawnProc(label, command, args, env);
-  const result = await child.completion;
-  return result;
+  const result = await runCaptureResult(command, args, { env, streamLabel: label });
+  return { ...result, code: result.exitCode };
 }
 
 function defaultSpawnProcess({ label, command, args, env }) {
@@ -208,10 +208,15 @@ export async function startStackDevTargets(
     ...env,
     HAPPIER_STACK_PROCESS_KIND: 'infra',
   };
-  const mutagenDir = join(stackBaseDir, 'mutagen');
-  const mutagenDataDir = join(mutagenDir, 'data');
-  const projectFile = join(mutagenDir, 'mutagen.yml');
-  const openSsh = await prepareOpenSsh({ targets: synchronizedTargets, mutagenDir, env });
+  const siblingOwner = await loadSiblingMutagenOwner(sourceDir);
+  const sharedRuntime = siblingOwner?.resolveRuntime({ stackBaseDir, sourceDir, env });
+  const mutagenDir = sharedRuntime?.mutagenDir ?? join(stackBaseDir, 'mutagen');
+  const mutagenDataDir = sharedRuntime?.dataDir ?? join(mutagenDir, 'data');
+  const projectFile = sharedRuntime?.projectFile ?? join(mutagenDir, 'mutagen.yml');
+  const sessionNameForTarget = siblingOwner?.resolveSessionName ?? resolveMutagenSessionName;
+  const openSsh = siblingOwner
+    ? { sshArgs: ['-F', join(sharedRuntime.opensshDir, 'config')], mutagenEnv: sharedRuntime.env }
+    : await prepareOpenSsh({ targets: synchronizedTargets, mutagenDir, env });
   const {
     HAPPIER_STACK_PROCESS_KIND: _inheritedStackProcessKind,
     ...mutagenServiceBaseEnv
@@ -225,7 +230,7 @@ export async function startStackDevTargets(
     ...mutagenEnv,
     HAPPIER_STACK_PROCESS_KIND: 'infra',
   };
-  await mkdir(mutagenDataDir, { recursive: true });
+  if (!siblingOwner) await mkdir(mutagenDataDir, { recursive: true });
 
     const workersByTarget = new Map();
     const tunnelsByTarget = new Map();
@@ -243,6 +248,7 @@ export async function startStackDevTargets(
     resolveCloseRequested = resolve;
   });
   const releaseProjectIfOwned = async (action) => {
+    if (siblingOwner) return;
     const contents = await readFile(projectFile, 'utf8').catch(() => null);
     if (!isMutagenProjectOwnedBy(contents, instanceId)) return;
     await runProcess({
@@ -253,54 +259,72 @@ export async function startStackDevTargets(
     });
   };
   try {
-    requireSuccessful(
-      await runProcess({ label: 'mutagen', command: 'mutagen', args: ['version'], env: mutagenEnv }),
-      'Mutagen preflight',
-    );
+    if (siblingOwner) {
+      // Adapt the canonical generated project, without taking its lifecycle.
+      // Names alone cannot prove that the borrowed mirror has the same endpoints.
+      const project = await readFile(projectFile, 'utf8');
+      for (const target of synchronizedTargets) {
+        const endpoints = `  ${sessionNameForTarget(target.name)}:\n    alpha: ${JSON.stringify(String(sourceDir))}\n    beta: ${JSON.stringify(`${target.ssh}:${target.repoDir}`)}\n`;
+        if (!project.includes(endpoints)) {
+          throw new Error(`[dev-targets] shared synchronization endpoints do not match ${target.name}; configure the sibling sync owner first`);
+        }
+      }
+      const borrowed = await siblingOwner.ensureProject({
+        stackBaseDir, sourceDir, targets: synchronizedTargets, ownerId: instanceId, borrowOnly: true, env,
+      }, { runProcess });
+      if (borrowed.unhealthyTargets.size > 0) {
+        throw new Error(`[dev-targets] shared synchronization is unavailable: ${[...borrowed.unhealthyTargets].map(([name, state]) => `${name} (${state})`).join(', ')}`);
+      }
+    } else {
+      requireSuccessful(
+        await runProcess({ label: 'mutagen', command: 'mutagen', args: ['version'], env: mutagenEnv }),
+        'Mutagen preflight',
+      );
 
-    const desiredProject = renderMutagenProject({ sourceDir, targets: synchronizedTargets, ownerId: instanceId });
-    const existingProject = await readFile(projectFile, 'utf8').catch(() => null);
-    const canResumeProject = isEquivalentMutagenProject(existingProject, desiredProject);
-    await writeFile(projectFile, desiredProject, 'utf8');
+      const desiredProject = renderMutagenProject({ sourceDir, targets: synchronizedTargets, ownerId: instanceId });
+      const existingProject = await readFile(projectFile, 'utf8').catch(() => null);
+      const canResumeProject = isEquivalentMutagenProject(existingProject, desiredProject);
+      await writeFile(projectFile, desiredProject, 'utf8');
 
-    let resumedProject = false;
-    if (canResumeProject) {
-      const resumeResult = await runProcess({
-        label: 'mutagen',
-        command: 'mutagen',
-        args: buildMutagenProjectArgs('resume', projectFile),
-        env: mutagenEnv,
-      });
-      resumedProject = resumeResult?.code === 0;
-    }
-    if (!resumedProject) {
-      await runProcess({
-        label: 'mutagen',
-        command: 'mutagen',
-        args: buildMutagenProjectArgs('terminate', projectFile),
-        env: mutagenEnv,
-      });
+      let resumedProject = false;
+      if (canResumeProject) {
+        const resumeResult = await runProcess({
+          label: 'mutagen',
+          command: 'mutagen',
+          args: buildMutagenProjectArgs('resume', projectFile),
+          env: mutagenEnv,
+        });
+        resumedProject = resumeResult?.code === 0;
+      }
+      if (!resumedProject) {
+        await runProcess({
+          label: 'mutagen',
+          command: 'mutagen',
+          args: buildMutagenProjectArgs('terminate', projectFile),
+          env: mutagenEnv,
+        });
+        requireSuccessful(
+          await runProcess({
+            label: 'mutagen',
+            command: 'mutagen',
+            args: buildMutagenProjectArgs('start', projectFile),
+            env: mutagenEnv,
+          }),
+          'Mutagen project start',
+        );
+        projectCreated = true;
+      }
+      projectStarted = true;
       requireSuccessful(
         await runProcess({
           label: 'mutagen',
           command: 'mutagen',
-          args: buildMutagenProjectArgs('start', projectFile),
+          args: buildMutagenProjectArgs('list', projectFile),
           env: mutagenEnv,
         }),
-        'Mutagen project start',
+        'Mutagen project status',
       );
-      projectCreated = true;
     }
-    projectStarted = true;
-    requireSuccessful(
-      await runProcess({
-        label: 'mutagen',
-        command: 'mutagen',
-        args: buildMutagenProjectArgs('list', projectFile),
-        env: mutagenEnv,
-      }),
-      'Mutagen project status',
-    );
     monitorWorker = spawnProcess({
       label: 'mutagen',
       command: 'mutagen',
@@ -308,7 +332,7 @@ export async function startStackDevTargets(
         'sync',
         'monitor',
         '--long',
-        ...synchronizedTargets.map((target) => resolveMutagenSessionName(target.name)),
+        ...synchronizedTargets.map((target) => sessionNameForTarget(target.name)),
       ],
       env: mutagenMonitorEnv,
     });
@@ -430,24 +454,28 @@ export async function startStackDevTargets(
             `${target.name} directory bootstrap`,
           );
           beginPhase('sync');
-          requireSuccessful(
-            await runProcess({
-              label: `remote:${target.name}`,
-              command: 'mutagen',
-              args: ['sync', 'resume', resolveMutagenSessionName(target.name)],
-              env: mutagenEnv,
-            }),
-            `${target.name} Mutagen resume`,
-          );
-          requireSuccessful(
-            await runProcess({
-              label: `remote:${target.name}`,
-              command: 'mutagen',
-              args: ['sync', 'flush', resolveMutagenSessionName(target.name)],
-              env: mutagenEnv,
-            }),
-            `${target.name} Mutagen initial flush`,
-          );
+          if (siblingOwner) {
+            await siblingOwner.flush({ target, env: mutagenEnv }, runProcess === defaultRunProcess ? {} : { runProcess });
+          } else {
+            requireSuccessful(
+              await runProcess({
+                label: `remote:${target.name}`,
+                command: 'mutagen',
+                args: ['sync', 'resume', sessionNameForTarget(target.name)],
+                env: mutagenEnv,
+              }),
+              `${target.name} Mutagen resume`,
+            );
+            requireSuccessful(
+              await runProcess({
+                label: `remote:${target.name}`,
+                command: 'mutagen',
+                args: ['sync', 'flush', sessionNameForTarget(target.name)],
+                env: mutagenEnv,
+              }),
+              `${target.name} Mutagen initial flush`,
+            );
+          }
           if (!deferCompanionPreparation) {
             await prepareRemoteServices();
           }

@@ -140,7 +140,8 @@ vi.mock('@/components/sessions/shell/SessionInvalidLinkFallback', () => ({
     SessionInvalidLinkFallback: () => React.createElement('SessionInvalidLinkFallback'),
 }));
 
-vi.mock('@/components/ui/feedback/ActivitySpinner', () => ({
+vi.mock('@/components/ui/feedback/ActivitySpinner', async (importOriginal) => ({
+    ...await importOriginal<typeof import('@/components/ui/feedback/ActivitySpinner')>(),
     ActivitySpinner: (props: Record<string, unknown>) => React.createElement('ActivitySpinner', props),
 }));
 

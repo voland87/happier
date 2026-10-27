@@ -7,7 +7,7 @@ import { installSessionGuidanceCommonModuleMocks } from './sessionGuidanceTestHe
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
 const clipboardMocks = vi.hoisted(() => ({
-  setStringAsync: vi.fn(async (_text: string) => {}),
+  setStringAsync: vi.fn(async (_text: string) => true),
 }));
 const mockEnv = vi.hoisted(() => ({
   iconsRenderAsText: false,

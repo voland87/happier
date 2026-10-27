@@ -11,6 +11,8 @@ import {
 } from '@happier-dev/agents';
 import {
     buildConnectedServiceCredentialRecord,
+    buildUsageLimitIssueFingerprint,
+    type SessionRuntimeIssueV1,
     SESSION_MEDIA_MESSAGE_MAX_ENTRIES_V1,
     SessionMediaMessageMetaEnvelopeV1Schema,
     SESSION_USAGE_LIMIT_RECOVERY_METADATA_KEY,
@@ -39,6 +41,8 @@ import { setActiveAccountSettingsSnapshot } from '@/settings/accountSettings/act
 import { normalizePermissionModeForAgentStart } from '@/settings/permissions/permissionModeSeed';
 import { HAPPIER_SPAWN_EXPLICIT_ENV_KEYS_JSON_ENV_VAR } from '@/daemon/spawn/spawnExplicitEnvKeysMarker';
 import { logger } from '@/ui/logger';
+import { resolveConnectedServiceSelectionHomeDir } from '@/daemon/connectedServices/homes/resolveConnectedServiceHomeDir';
+import { writeCodexAuthStoreFile } from '../connectedServices/writeCodexAuthStoreFile';
 
 import {
     createCodexAppServerRuntime as createCodexAppServerRuntimeProduction,
@@ -1413,6 +1417,25 @@ async function writeFakeCodexAppServerScript(params: Readonly<{
         '            setTimeout(() => {',
         '                process.stdout.write(JSON.stringify({ method: "turn/completed", params: { threadId: msg.params?.threadId ?? null, turn: { id: turnId } } }) + "\\n");',
         '            }, 18);',
+        '            continue;',
+        '        }',
+        '        if (text === "bridge-child-resume" || text === "bridge-child-resume-without-output") {',
+        '            const child = "thread-resumed-child";',
+        '            const emit = (method, params, delay) => setTimeout(() => process.stdout.write(JSON.stringify({ method, params }) + "\\n"), delay);',
+        '            emit("item/agentMessage/delta", { threadId: child, turnId: "child-first", itemId: "child_msg", delta: "First child output" }, 6);',
+        '            emit("turn/completed", { threadId: child, turn: { id: "child-first", status: "completed" } }, 10);',
+        '            emit("turn/started", { threadId: child, turn: { id: "child-resumed", status: "inProgress" } }, 14);',
+        '            if (text === "bridge-child-resume") emit("item/agentMessage/delta", { threadId: child, turnId: "child-resumed", itemId: "child_msg", delta: "Resumed child output" }, 15);',
+        '            emit("turn/completed", { threadId: child, turn: { id: "child-first", status: "completed" } }, 18);',
+        '            emit("item/started", { threadId: msg.params?.threadId ?? null, turnId, item: { id: "resume-check", type: "commandExecution", command: "pwd", cwd: "/parent" } }, 19);',
+        '            emit("item/completed", { threadId: msg.params?.threadId ?? null, turnId, item: { id: "resume-check", type: "commandExecution", stdout: "/parent", exitCode: 0 } }, 20);',
+        '            emit("turn/completed", { threadId: child, turn: { id: "child-resumed", status: "completed" } }, 180);',
+        '            emit("turn/completed", { threadId: msg.params?.threadId ?? null, turn: { id: turnId, status: "completed" } }, 200);',
+        '            continue;',
+        '        }',
+        '        if (text === "bridge-child-failed" || text === "bridge-child-interrupted") {',
+        '            setTimeout(() => process.stdout.write(JSON.stringify({ method: "turn/completed", params: { threadId: "thread-child-outcome", turn: { id: "turn-child-outcome", status: text === "bridge-child-failed" ? "failed" : "interrupted", error: text === "bridge-child-failed" ? { message: "Child execution failed", additionalDetails: "Provider failure detail" } : null } } }) + "\\n"), 6);',
+        '            setTimeout(() => process.stdout.write(JSON.stringify({ method: "turn/completed", params: { threadId: msg.params?.threadId ?? null, turn: { id: turnId, status: "completed", error: null } } }) + "\\n"), 180);',
         '            continue;',
         '        }',
         '        if (text === "bridge-late-child-terminal") {',
@@ -4528,6 +4551,7 @@ describe('createCodexAppServerRuntime', () => {
                 providerEmail: 'replacement@example.test',
             },
         });
+        await writeCodexAuthStoreFile({ codexHome: join(root, 'codex-home'), record: replacement });
         const applyValidGeneration = () => runtime.applyConnectedServiceAuthGeneration({
             serviceId: 'openai-codex',
             reason: 'diagnostic',
@@ -6522,7 +6546,7 @@ describe('createCodexAppServerRuntime', () => {
 
         const childAssistantMessages = committedCalls
             .map(([, body]) => body)
-            .filter((body) => body?.type === 'message' && body.sidechainId === 'thread-child')
+            .filter((body) => body?.type === 'message' && body.sidechainId === JSON.stringify(['thread-child', 'turn-child']))
             .map((body) => String(body.message ?? ''));
         expect(childAssistantMessages.some((value) => value.includes('Child'))).toBe(true);
         expect(childAssistantMessages.some((value) => value.includes('final'))).toBe(true);
@@ -6541,7 +6565,7 @@ describe('createCodexAppServerRuntime', () => {
             expect.arrayContaining([
                 ['codex', expect.objectContaining({
                     type: 'tool-call',
-                    callId: 'thread-child',
+                    callId: JSON.stringify(['thread-child', 'turn-child']),
                     name: 'SubAgent',
                     input: expect.objectContaining({
                         threadId: 'thread-child',
@@ -6551,16 +6575,16 @@ describe('createCodexAppServerRuntime', () => {
                     type: 'tool-call',
                     callId: 'child_cmd',
                     name: 'CodexBash',
-                    sidechainId: 'thread-child',
+                    sidechainId: JSON.stringify(['thread-child', 'turn-child']),
                 })],
                 ['codex', expect.objectContaining({
                     type: 'tool-call-result',
                     callId: 'child_cmd',
-                    sidechainId: 'thread-child',
+                    sidechainId: JSON.stringify(['thread-child', 'turn-child']),
                 })],
                 ['codex', expect.objectContaining({
                     type: 'tool-result',
-                    callId: 'thread-child',
+                    callId: JSON.stringify(['thread-child', 'turn-child']),
                     output: expect.objectContaining({
                         status: 'completed',
                         threadId: 'thread-child',
@@ -6568,6 +6592,67 @@ describe('createCodexAppServerRuntime', () => {
                 })],
             ]),
         );
+    });
+
+    it.each(['with-output', 'without-output'] as const)('publishes a new native occurrence when the same child resumes %s and ignores its old terminal', async (mode) => {
+        const { root } = await createRuntimeFixture('happier-codex-child-resume-');
+        const sendAgentMessage = vi.fn();
+        const sendCodexMessage = vi.fn();
+        const sendAgentMessageCommitted = vi.fn(async (_provider: string, _body: ACPMessageData, _options?: TestCommittedMessageOptions) => {});
+        const runtime = createCodexAppServerRuntime({ directory: root, onThinkingChange: vi.fn(),
+            session: { updateMetadata: vi.fn(), sendAgentMessage, sendAgentMessageCommitted, sendCodexMessage } as any,
+        });
+        await runtime.startOrLoad({});
+        const completion = runtime.sendPrompt(mode === 'with-output' ? 'bridge-child-resume' : 'bridge-child-resume-without-output');
+        const occurrence = (turnId: string) => JSON.stringify(['thread-resumed-child', turnId]);
+        await waitForCondition(() => sendAgentMessage.mock.calls.some(([, body]) => body?.type === 'tool-call'
+            && body.callId === occurrence('child-resumed')), { timeoutMs: 1_000, intervalMs: 2, label: 'resumed native child launch' });
+        await waitForCondition(() => sendCodexMessage.mock.calls.some(([body]) => body?.type === 'tool-call-result'
+            && body.callId === 'resume-check'), { timeoutMs: 1_000, intervalMs: 2, label: 'parent progress after stale child terminal' });
+        expect(sendAgentMessage.mock.calls.filter(([, body]) => body?.type === 'tool-result'
+            && body.callId === occurrence('child-resumed'))).toHaveLength(0);
+        await completion;
+        for (const turnId of ['child-first', 'child-resumed']) {
+            expect(sendAgentMessage.mock.calls.filter(([, body]) => body?.type === 'tool-call'
+                && body.callId === occurrence(turnId))).toEqual([['codex', expect.objectContaining({
+                    name: 'SubAgent', input: expect.objectContaining({ threadId: 'thread-resumed-child', providerTurnId: turnId, sidechainId: occurrence(turnId) }),
+                })]]);
+            expect(sendAgentMessage.mock.calls.filter(([, body]) => body?.type === 'tool-result'
+                && body.callId === occurrence(turnId))).toHaveLength(1);
+            if (turnId === 'child-first' || mode === 'with-output') {
+                expect(sendAgentMessageCommitted.mock.calls.some(([, body]) => body?.type === 'message'
+                    && body.sidechainId === occurrence(turnId) && body.message.includes(turnId === 'child-first' ? 'First child' : 'Resumed child'))).toBe(true);
+            }
+        }
+    });
+
+    it.each(['failed', 'interrupted'] as const)('preserves child %s outcome from turn/completed while primary remains pending', async (status) => {
+        const { root } = await createRuntimeFixture('happier-codex-child-outcome-');
+        const sessionTurnLifecycle = createSessionTurnLifecycleTestDouble();
+        const sendAgentMessage = vi.fn();
+        const runtime = createCodexAppServerRuntime({
+            directory: root,
+            onThinkingChange: vi.fn(),
+            session: { updateMetadata: vi.fn(), sessionTurnLifecycle, sendAgentMessage } as any,
+        });
+        await runtime.startOrLoad({});
+        const completion = runtime.sendPrompt(`bridge-child-${status}`);
+        await waitForCondition(() => sendAgentMessage.mock.calls.some(([, message]) => (
+            message?.type === 'tool-result' && message.callId === JSON.stringify(['thread-child-outcome', 'turn-child-outcome'])
+        )), { timeoutMs: 1_000, intervalMs: 2, label: 'child failure outcome' });
+        expect(runtime.isTurnInFlight()).toBe(true);
+        expect(sessionTurnLifecycle.completeTurn).not.toHaveBeenCalled();
+        expect(sendAgentMessage.mock.calls).toEqual(expect.arrayContaining([
+            ['codex', expect.objectContaining({
+                type: 'tool-result', callId: JSON.stringify(['thread-child-outcome', 'turn-child-outcome']), isError: true,
+                output: expect.objectContaining({
+                    status, threadId: 'thread-child-outcome',
+                    ...(status === 'failed' ? { error: 'Child execution failed\n\nProvider failure detail' } : {}),
+                }),
+            })],
+        ]));
+        await completion;
+        expect(sessionTurnLifecycle.completeTurn).toHaveBeenCalledTimes(1);
     });
 
     it('finalizes a known child whose terminal arrives after the primary turn has cleared', async () => {
@@ -6591,7 +6676,7 @@ describe('createCodexAppServerRuntime', () => {
         expect(runtime.isTurnInFlight()).toBe(false);
         expect(sessionTurnLifecycle.completeTurn).toHaveBeenCalledTimes(1);
         await waitForCondition(() => sendAgentMessage.mock.calls.some(([, message]) => (
-            message?.type === 'tool-result' && message.callId === 'thread-late-child'
+            message?.type === 'tool-result' && message.callId === JSON.stringify(['thread-late-child', 'turn-late-child'])
         )), {
             timeoutMs: 1_000,
             intervalMs: 2,
@@ -6599,7 +6684,7 @@ describe('createCodexAppServerRuntime', () => {
         });
         await new Promise((resolve) => setTimeout(resolve, 40));
         expect(sendAgentMessage.mock.calls.filter(([, message]) => (
-            message?.type === 'tool-result' && message.callId === 'thread-late-child'
+            message?.type === 'tool-result' && message.callId === JSON.stringify(['thread-late-child', 'turn-late-child'])
         ))).toHaveLength(1);
         expect(runtime.isTurnInFlight()).toBe(false);
         expect(sessionTurnLifecycle.completeTurn).toHaveBeenCalledTimes(1);
@@ -6929,7 +7014,7 @@ describe('createCodexAppServerRuntime', () => {
             resolved = true;
         });
         await waitForCondition(() => sendAgentMessage.mock.calls.some(([, message]) => (
-            message?.type === 'tool-result' && message.callId === 'thread-child-terminal'
+            message?.type === 'tool-result' && message.callId === JSON.stringify(['thread-child-terminal', 'turn-child-terminal'])
         )), {
             timeoutMs: 200,
             intervalMs: 2,
@@ -6942,7 +7027,7 @@ describe('createCodexAppServerRuntime', () => {
         expect(sendAgentMessage.mock.calls).toEqual(expect.arrayContaining([
             ['codex', expect.objectContaining({
                 type: 'tool-result',
-                callId: 'thread-child-terminal',
+                callId: JSON.stringify(['thread-child-terminal', 'turn-child-terminal']),
                 output: expect.objectContaining({
                     status: 'completed',
                     threadId: 'thread-child-terminal',
@@ -8764,6 +8849,55 @@ describe('createCodexAppServerRuntime', () => {
         }));
     });
 
+    it('reports the canonical failed-turn fingerprint to group recovery and admits the next failed turn', async () => {
+        const { root, fakeAppServer } = await createRuntimeFixture('happier-codex-canonical-failure-witness-');
+        const failedIssues: SessionRuntimeIssueV1[] = [];
+        let releaseFailureWrite: () => void = () => {};
+        const pendingFailureWrite = new Promise<void>((resolve) => { releaseFailureWrite = resolve; });
+        const sessionTurnLifecycle = createSessionTurnLifecycle({
+            sessionId: 'canonical-failure-session',
+            enqueueSessionTurn: async (mutation) => {
+                if (mutation.action === 'fail' && mutation.issue) {
+                    failedIssues.push(mutation.issue);
+                    if (failedIssues.length === 1) await pendingFailureWrite;
+                }
+            },
+        });
+        const reports: Array<Parameters<NonNullable<Parameters<typeof createCodexAppServerRuntime>[0]['onUsageLimitGroupRecovery']>>[0]> = [];
+        const runtime = createCodexAppServerRuntime({
+            directory: root, processEnv: createCodexAppServerProcessEnv(fakeAppServer), onThinkingChange: () => {},
+            initialConnectedServiceRuntimeIdentity: { serviceId: 'openai-codex', activeAccountId: 'provider-user',
+                profileId: 'primary', groupId: 'pool', generation: 1, credentialFingerprint: 'sha256:account1',
+                source: 'spawn_selection', accountLabel: null },
+            onUsageLimitGroupRecovery: async (report) => {
+                reports.push(report);
+                return { handled: false, report: null, statusCode: null, statusMessage: null };
+            },
+            session: { sessionId: 'canonical-failure-session', updateMetadata: async () => {}, sessionTurnLifecycle,
+                sendCodexMessage: () => {}, sendSessionEvent: () => {} } as unknown as Parameters<typeof createCodexAppServerRuntime>[0]['session'],
+        });
+        try {
+            await runtime.startOrLoad({});
+            for (let turn = 0; turn < 2; turn += 1) {
+                const failed = runtime.sendPrompt(turn === 0 ? 'usage-limit-structured' : 'usage-limit-after-mid-turn-auth-apply');
+                const expected = failed.catch(error => error as unknown);
+                if (turn === 0) {
+                    await waitForCondition(() => failedIssues.length === 1, { timeoutMs: 1_000, intervalMs: 1, label: 'accepted canonical failed-turn issue' });
+                    // Recovery consumes the accepted failure even while its durable publication is held.
+                    await waitForCondition(() => reports.length === 1, { timeoutMs: 1_000, intervalMs: 1, label: 'canonical failed-turn recovery report before durable write' });
+                    releaseFailureWrite();
+                }
+                await expect(failed).rejects.toMatchObject({ runtimeAuthClassification: { kind: 'usage_limit' } });
+                const issue = failedIssues[turn];
+                if (!issue) throw new Error('Missing canonical failed-turn issue');
+                const fingerprint = buildUsageLimitIssueFingerprint(issue);
+                if (turn === 0) expect(reports[0]?.classification).toMatchObject({ runtimeIssueFingerprint: fingerprint });
+                expect(await expected).toMatchObject({ runtimeAuthClassification: { runtimeIssueFingerprint: fingerprint } });
+            }
+            expect(buildUsageLimitIssueFingerprint(failedIssues[1]!)).not.toBe(buildUsageLimitIssueFingerprint(failedIssues[0]!));
+        } finally { releaseFailureWrite(); await runtime.reset(); }
+    });
+
     it('carries selected Codex group context on app-server usage-limit failures', async () => {
         const { root, fakeAppServer } = await createRuntimeFixture('happier-codex-app-server-runtime-usage-limit-group-');
         const sessionTurnLifecycle = createSessionTurnLifecycleTestDouble();
@@ -8874,7 +9008,10 @@ describe('createCodexAppServerRuntime', () => {
             session: {
                 sessionId: 'session-plan-incompatible-group',
                 updateMetadata: vi.fn(),
-                sessionTurnLifecycle: createSessionTurnLifecycleTestDouble(),
+                sessionTurnLifecycle: createSessionTurnLifecycle({
+                    sessionId: 'session-plan-incompatible-group',
+                    enqueueSessionTurn: async () => {},
+                }),
                 sendCodexMessage: vi.fn(),
                 sendSessionEvent: vi.fn(),
             } as unknown as Parameters<typeof createCodexAppServerRuntime>[0]['session'],
@@ -8982,6 +9119,7 @@ describe('createCodexAppServerRuntime', () => {
                 providerEmail: 'replacement@example.test',
             },
         });
+        await writeCodexAuthStoreFile({ codexHome: join(root, 'codex-home'), record: replacement });
 
         try {
             await runtime.startOrLoad({});
@@ -9121,6 +9259,7 @@ describe('createCodexAppServerRuntime', () => {
                 providerEmail: 'replacement@example.test',
             },
         });
+        await writeCodexAuthStoreFile({ codexHome: join(root, 'codex-home'), record: replacement });
 
         try {
             await runtime.startOrLoad({});
@@ -9247,7 +9386,13 @@ describe('createCodexAppServerRuntime', () => {
                 },
             },
         });
-        const sessionTurnLifecycle = createSessionTurnLifecycleTestDouble();
+        const failedIssues: SessionRuntimeIssueV1[] = [];
+        const sessionTurnLifecycle = createSessionTurnLifecycle({
+            sessionId: 'session-stale-env-group',
+            enqueueSessionTurn: async (mutation) => {
+                if (mutation.action === 'fail' && mutation.issue) failedIssues.push(mutation.issue);
+            },
+        });
         let metadata: Metadata = {
             path: root,
             host: 'test-host',
@@ -9334,18 +9479,16 @@ describe('createCodexAppServerRuntime', () => {
                     failingAccessTokenFingerprint: 'sha256:deadbeef',
                 },
             });
-            expect(sessionTurnLifecycle.failTurn).toHaveBeenCalledWith(expect.objectContaining({
+            expect(failedIssues).toContainEqual(expect.objectContaining({
                 provider: 'codex',
-                issue: expect.objectContaining({
-                    source: 'usage_limit',
-                    usageLimit: expect.objectContaining({
-                        recoverability: 'switch_account',
-                        connectedService: {
-                            serviceId: 'openai-codex',
-                            profileId: 'backup',
-                            groupId: 'happier',
-                        },
-                    }),
+                source: 'usage_limit',
+                usageLimit: expect.objectContaining({
+                    recoverability: 'switch_account',
+                    connectedService: {
+                        serviceId: 'openai-codex',
+                        profileId: 'backup',
+                        groupId: 'happier',
+                    },
                 }),
             }));
             expect(onRateLimitSnapshot).toHaveBeenCalledWith({
@@ -10191,8 +10334,23 @@ describe('createCodexAppServerRuntime', () => {
         }
     });
 
-    it('arms usage-limit recovery from the latest issue before probing on check-now', async () => {
+    it.each([false, true])('arms usage-limit recovery from the latest issue before probing on check-now (older wait=%s)', async (olderWait) => {
         const { root, fakeAppServer, requestLogPath } = await createRuntimeFixture('happier-codex-app-server-runtime-usage-check-now-');
+        const codexHome = join(root, 'codex-home');
+        await mkdir(codexHome, { recursive: true });
+        await writeFile(join(codexHome, 'auth.json'), JSON.stringify({
+            tokens: { access_token: 'native-access', account_id: 'native-account' },
+        }));
+        const creditRequestHeaders: Headers[] = [];
+        vi.stubGlobal('fetch', async (_url: unknown, options?: RequestInit) => {
+            creditRequestHeaders.push(new Headers(options?.headers));
+            return new Response(JSON.stringify({ credits: [] }), { status: 200 });
+        });
+        // runCodex installs this bridge even for native sessions. With no
+        // connected selection it rejects rather than returning native tokens.
+        const onChatGptAuthTokensRefresh = vi.fn(async () => {
+            throw new Error('connected_service_chatgpt_refresh_selection_unavailable');
+        });
         let metadata: Metadata = {
             path: root,
             host: 'test-host',
@@ -10200,19 +10358,27 @@ describe('createCodexAppServerRuntime', () => {
             happyHomeDir: join(root, '.happier'),
             happyLibDir: join(root, '.happier', 'lib'),
             happyToolsDir: join(root, '.happier', 'tools'),
+            ...(olderWait ? { sessionUsageLimitRecoveryV1: {
+                v: 1 as const, status: 'waiting' as const,
+                issueFingerprint: 'usage-limit:codex:old-turn:1:no-reset', armedAtMs: 1,
+                resetAtMs: null, nextCheckAtMs: null, attemptCount: 3, maxAttempts: 3,
+                lastProbeError: null, resumePromptMode: 'standard' as const,
+                selectedAuth: { kind: 'native' as const, serviceId: 'openai-codex' as const },
+            } } : {}),
         };
         const updateMetadata = vi.fn(async (handler: (current: Metadata) => Metadata) => {
             metadata = handler(metadata);
         });
         const sessionTurnLifecycle = createSessionTurnLifecycleTestDouble();
         const processEnv = createCodexAppServerProcessEnv(fakeAppServer, {
-            CODEX_HOME: join(root, 'codex-home'),
+            CODEX_HOME: codexHome,
             OPENAI_API_KEY: 'test-openai-key',
         });
         const runtime = createCodexAppServerRuntime({
             directory: root,
             processEnv,
             onThinkingChange: vi.fn(),
+            onChatGptAuthTokensRefresh,
             session: {
                 sessionId: 'session-usage-check-now',
                 updateMetadata,
@@ -10250,6 +10416,10 @@ describe('createCodexAppServerRuntime', () => {
                     selectedAuth: { kind: 'native', serviceId: 'openai-codex' },
                 },
             });
+            expect(onChatGptAuthTokensRefresh).not.toHaveBeenCalled();
+            expect(creditRequestHeaders.length).toBeGreaterThan(0);
+            expect(creditRequestHeaders.every(headers => headers.get('Authorization') === 'Bearer native-access'
+                && headers.get('ChatGPT-Account-Id') === 'native-account')).toBe(true);
             await expect(runtimeControls.checkUsageLimitRecoveryNow?.({ sessionId: 'session-usage-check-now' })).resolves.toMatchObject({
                 ok: true,
                 status: 'rate_limited',
@@ -10759,7 +10929,10 @@ describe('createCodexAppServerRuntime', () => {
             session: {
                 sessionId: 'session-usage-probe-token-invalid-unhandled',
                 updateMetadata: vi.fn(async (handler: (current: Metadata) => Metadata) => { metadata = handler(metadata); }),
-                sessionTurnLifecycle: createSessionTurnLifecycleTestDouble(),
+                sessionTurnLifecycle: createSessionTurnLifecycle({
+                    sessionId: 'session-usage-probe-token-invalid-unhandled',
+                    enqueueSessionTurn: async () => {},
+                }),
                 getMetadataSnapshot: () => metadata,
                 sendCodexMessage: vi.fn(),
                 sendSessionEvent: vi.fn(),
@@ -10935,6 +11108,7 @@ describe('createCodexAppServerRuntime', () => {
                 providerEmail: 'replacement@example.test',
             },
         });
+        await writeCodexAuthStoreFile({ codexHome: join(root, 'codex-home'), record: replacement });
 
         try {
             await runtime.startOrLoad({});
@@ -10978,6 +11152,51 @@ describe('createCodexAppServerRuntime', () => {
                     lastProbeError: 'codex_app_server_rate_limit_probe_unavailable',
                 },
             });
+        } finally {
+            await runtime.reset();
+        }
+    });
+
+    it('reads reset credits with the current daemon account instead of the launch-home credential', async () => {
+        const { root, fakeAppServer } = await createRuntimeFixture('happier-codex-reset-current-account-');
+        setActiveAccountSettingsSnapshot({ source: 'network',
+            settings: { usageLimitRecoverySettingsV1: { v: 1, mode: 'auto_wait' } } as AccountSettings,
+            settingsVersion: 1, loadedAtMs: Date.now(), settingsSecretsReadKeys: [],
+        });
+        const codexHome = join(root, 'codex-home');
+        await mkdir(codexHome, { recursive: true });
+        await writeFile(join(codexHome, 'auth.json'), JSON.stringify({
+            tokens: { access_token: 'launch-A', account_id: 'account-A' },
+        }));
+        const headers: Headers[] = [];
+        vi.stubGlobal('fetch', async (_url: unknown, options?: RequestInit) => {
+            headers.push(new Headers(options?.headers));
+            return new Response(JSON.stringify({ credits: [] }), { status: 200 });
+        });
+        const session = createMutableApiSessionClientFixture({ metadata: createRuntimeMetadata(root),
+            overrides: {
+                sendCodexMessage: vi.fn(), sendSessionEvent: vi.fn(),
+            },
+        });
+        const runtime = createCodexAppServerRuntime({
+            directory: root, processEnv: createCodexAppServerProcessEnv(fakeAppServer, { CODEX_HOME: codexHome }),
+            onThinkingChange: vi.fn(), session,
+            initialConnectedServiceRuntimeIdentity: {
+                serviceId: 'openai-codex', activeAccountId: 'account-B', accountLabel: null,
+                profileId: 'current', credentialFingerprint: null, source: 'applied_credential',
+            },
+            onChatGptAuthTokensRefresh: async () => ({
+                accessToken: 'current-B', chatgptAccountId: 'account-B', chatgptPlanType: null,
+            }),
+        });
+        try {
+            await runtime.startOrLoad({});
+            await expect(runtime.sendPrompt('usage-limit-structured')).rejects.toMatchObject({
+                runtimeAuthClassification: { kind: 'usage_limit' },
+            });
+            expect(headers.length).toBeGreaterThan(0);
+            expect(headers.every(value => value.get('Authorization') === 'Bearer current-B'
+                && value.get('ChatGPT-Account-Id') === 'account-B')).toBe(true);
         } finally {
             await runtime.reset();
         }
@@ -11381,6 +11600,48 @@ describe('createCodexAppServerRuntime', () => {
                 planType: 'pro',
             },
         });
+    });
+
+    it.each(['acct_123', 'acct_rotated'])('injects selected external ChatGPT tokens and records the applied account %s before starting each new app-server process without rewriting disk auth', async (appliedAccountId) => {
+        const { root, requestLogPath } = await createRuntimeFixture('happier-codex-app-server-initial-chatgpt-auth-');
+        const codexHome = join(root, 'codex-home');
+        await mkdir(codexHome, { recursive: true });
+        const authPath = join(codexHome, 'auth.json');
+        const originalAuth = JSON.stringify({ tokens: { access_token: 'persisted-access', account_id: 'acct_123' } });
+        await writeFile(authPath, originalAuth);
+        const runtime = createCodexAppServerRuntime({
+            directory: root,
+            processEnv: { ...process.env, CODEX_HOME: codexHome },
+            onThinkingChange: vi.fn(),
+            initializeChatGptAuthTokens: true,
+            initialConnectedServiceRuntimeIdentity: {
+                serviceId: 'openai-codex', activeAccountId: 'acct_123', accountLabel: null,
+                profileId: 'primary', credentialFingerprint: null, source: 'spawn_selection',
+            },
+            onChatGptAuthTokensRefresh: async () => ({
+                accessToken: 'selected-current-access', chatgptAccountId: appliedAccountId, chatgptPlanType: null,
+                selection: { kind: 'profile' as const, serviceId: 'openai-codex' as const,
+                    profileId: appliedAccountId === 'acct_123' ? 'primary' : 'rotated' },
+            }),
+            session: createApiSessionClientFixture(),
+        });
+        await runtime.startOrLoad({});
+        const requests = await readRequestLog(requestLogPath);
+        expect(requests.find(entry => entry.method === 'account/login/start')).toMatchObject({
+            params: { type: 'chatgptAuthTokens', accessToken: 'selected-current-access', chatgptAccountId: appliedAccountId },
+        });
+        await expect(runtime.readConnectedServiceRuntimeIdentity({ serviceId: 'openai-codex', reason: 'diagnostic' }))
+            .resolves.toMatchObject({ ok: true,
+                identity: { providerAccountId: appliedAccountId, source: 'applied_credential' },
+                runtime: { profileId: appliedAccountId === 'acct_123' ? 'primary' : 'rotated' },
+            });
+        expect(requests.findIndex(entry => entry.method === 'account/login/start'))
+            .toBeLessThan(requests.findIndex(entry => entry.method === 'thread/start'));
+        expect(await readFile(authPath, 'utf8')).toBe(originalAuth);
+        await runtime.reset();
+        await runtime.startOrLoad({});
+        expect((await readRequestLog(requestLogPath)).filter(entry => entry.method === 'account/login/start')).toHaveLength(2);
+        expect(await readFile(authPath, 'utf8')).toBe(originalAuth);
     });
 
     it('handles Codex ChatGPT token refresh requests without returning refresh tokens', async () => {
@@ -11888,6 +12149,7 @@ describe('createCodexAppServerRuntime', () => {
         const refreshSelectionUpdates: unknown[] = [];
         const runtime = createCodexAppServerRuntime({
             directory: root,
+            activeServerDir: join(root, 'server'),
             onThinkingChange: vi.fn(),
             onRateLimitSnapshot: vi.fn(async (rawSnapshot, context) => {
                 quotaSnapshots.push({ rawSnapshot, context });
@@ -11925,6 +12187,29 @@ describe('createCodexAppServerRuntime', () => {
             fallbackProfileId: 'old',
             generation: 8,
         } as const;
+
+        // Pool publication belongs to the daemon's guarded preparation, before
+        // the process applies tokens. The runtime verifies rather than rewrites it.
+        const poolHome = join(resolveConnectedServiceSelectionHomeDir({
+                activeServerDir: join(root, 'server'),
+                serviceId: 'openai-codex',
+                agentId: 'codex',
+                fallbackProfileId: candidate.profileId,
+                selection,
+            }), 'codex-home');
+        await writeCodexAuthStoreFile({
+            codexHome: poolHome,
+            record: candidate,
+        });
+        // A native disk-auth client can rotate tokens without changing Happier's
+        // source credential. That still constitutes the prepared account projection.
+        const poolAuthPath = join(poolHome, 'auth.json');
+        const nativeRotatedProjection = JSON.stringify({
+            auth_mode: 'chatgpt', OPENAI_API_KEY: null, last_refresh: new Date().toISOString(),
+            tokens: { account_id: 'acct_target', access_token: 'native-rotated-access',
+                refresh_token: 'native-rotated-refresh', id_token: 'target-id' },
+        });
+        await writeFile(poolAuthPath, nativeRotatedProjection);
 
         await runtime.startOrLoad({});
 
@@ -12005,9 +12290,105 @@ describe('createCodexAppServerRuntime', () => {
                 accountLabel: 'target@example.test',
             },
         });
-        await expect(readFile(join(root, 'codex-home', 'auth.json'), 'utf8'))
-            .resolves
-            .toContain('"account_id": "acct_target"');
+        expect(await readFile(poolAuthPath, 'utf8')).toBe(nativeRotatedProjection);
+    });
+
+    it.each([
+        { name: 'different account', accountId: 'acct_current', malformed: false },
+        { name: 'newer credentials for the same account', accountId: 'acct_old', malformed: false },
+        { name: 'an account-only malformed projection', accountId: 'acct_old', malformed: true },
+    ])('does not overwrite or accept $name when an older pool live apply settles', async ({ accountId, malformed }) => {
+        const { root } = await createRuntimeFixture('happier-codex-live-auth-superseded-pool-');
+        const poolHome = join(root, 'server', 'daemon', 'connected-services', 'homes', 'openai-codex', '__groups', 'main', 'codex', 'codex-home');
+        const currentCredential = buildConnectedServiceCredentialRecord({
+            now: 1000, serviceId: 'openai-codex', profileId: 'current', kind: 'oauth', expiresAt: 2000,
+            oauth: { accessToken: 'current-access', refreshToken: 'current-refresh', idToken: 'current-id',
+                scope: null, tokenType: null, providerAccountId: accountId, providerEmail: null },
+        });
+        await writeCodexAuthStoreFile({ codexHome: poolHome, record: currentCredential });
+        if (malformed) await writeFile(join(poolHome, 'auth.json'), JSON.stringify({ tokens: { account_id: accountId } }));
+        const currentProjection = await readFile(join(poolHome, 'auth.json'), 'utf8');
+        const runtime = createCodexAppServerRuntime({
+            directory: root, activeServerDir: join(root, 'server'), onThinkingChange: vi.fn(),
+            onConnectedServiceAuthGenerationApplied: async () => {},
+            session: createApiSessionClientFixture({ metadata: createRuntimeMetadata(root) }),
+        });
+        await runtime.startOrLoad({});
+        const candidate = buildConnectedServiceCredentialRecord({
+            now: 1000, serviceId: 'openai-codex', profileId: 'old', kind: 'oauth', expiresAt: 2000,
+            oauth: { accessToken: 'old-access', refreshToken: 'old-refresh', idToken: 'old-id',
+                scope: null, tokenType: null, providerAccountId: 'acct_old', providerEmail: null },
+        });
+        await expect(runtime.applyConnectedServiceAuthGeneration({
+            serviceId: 'openai-codex', reason: 'usage_limit',
+            authGeneration: { credential: candidate, selection: {
+                kind: 'group', serviceId: 'openai-codex', groupId: 'main', activeProfileId: 'old', fallbackProfileId: 'old', generation: 7,
+            } },
+        })).resolves.toMatchObject({ ok: false, partialState: 'runtime_auth_applied', durability: { persisted: false } });
+        expect(await readFile(join(poolHome, 'auth.json'), 'utf8')).toBe(currentProjection);
+    });
+
+    it('uses the daemon-prepared target account projection without rewriting it during a standalone hot switch', async () => {
+        const { root } = await createRuntimeFixture('happier-codex-live-auth-account-home-');
+        const launchAuthPath = join(root, 'codex-home', 'auth.json');
+        const launchAuth = JSON.stringify({ tokens: { account_id: 'acct_original', access_token: 'original-access' } });
+        await mkdir(join(root, 'codex-home'), { recursive: true });
+        await writeFile(launchAuthPath, launchAuth);
+        const runtime = createCodexAppServerRuntime({
+            directory: root,
+            activeServerDir: join(root, 'server'),
+            onThinkingChange: vi.fn(),
+            session: createApiSessionClientFixture({ metadata: createRuntimeMetadata(root) }),
+            onConnectedServiceAuthGenerationApplied: async () => {},
+        });
+        await runtime.startOrLoad({});
+        const candidate = buildConnectedServiceCredentialRecord({
+            now: 1000, serviceId: 'openai-codex', profileId: 'target', kind: 'oauth', expiresAt: 2000,
+            oauth: { accessToken: 'target-access', refreshToken: 'target-refresh', idToken: 'target-id',
+                scope: null, tokenType: null, providerAccountId: 'acct_target', providerEmail: null },
+        });
+        const targetHome = join(resolveConnectedServiceSelectionHomeDir({
+            activeServerDir: join(root, 'server'), serviceId: 'openai-codex', agentId: 'codex',
+            fallbackProfileId: 'target', selection: { kind: 'profile', profileId: 'target' },
+        }), 'codex-home');
+        await writeCodexAuthStoreFile({ codexHome: targetHome, record: candidate });
+        const preparedAuth = await readFile(join(targetHome, 'auth.json'), 'utf8');
+        await expect(runtime.applyConnectedServiceAuthGeneration({
+            serviceId: 'openai-codex', reason: 'manual',
+            authGeneration: { credential: candidate, selection: { kind: 'profile', serviceId: 'openai-codex', profileId: 'target' } },
+        })).resolves.toMatchObject({ ok: true, verification: { activeAccountId: 'acct_target' } });
+        expect(await readFile(launchAuthPath, 'utf8')).toBe(launchAuth);
+        expect(await readFile(join(targetHome, 'auth.json'), 'utf8')).toBe(preparedAuth);
+    });
+
+    it('does not roll back a newer daemon credential when a stale standalone hot apply reaches the target home', async () => {
+        const { root } = await createRuntimeFixture('happier-codex-live-auth-stale-account-home-');
+        const selection = { kind: 'profile', serviceId: 'openai-codex', profileId: 'target' } as const;
+        const candidate = buildConnectedServiceCredentialRecord({
+            now: 1000, serviceId: 'openai-codex', profileId: 'target', kind: 'oauth', expiresAt: 2000,
+            oauth: { accessToken: 'stale-access', refreshToken: 'stale-refresh', idToken: 'stale-id',
+                scope: null, tokenType: null, providerAccountId: 'acct_target', providerEmail: null },
+        });
+        if (candidate.kind !== 'oauth') throw new Error('Expected OAuth fixture');
+        const targetHome = join(resolveConnectedServiceSelectionHomeDir({
+            activeServerDir: join(root, 'server'), serviceId: 'openai-codex', agentId: 'codex',
+            fallbackProfileId: 'target', selection,
+        }), 'codex-home');
+        await writeCodexAuthStoreFile({ codexHome: targetHome, record: {
+            ...candidate, oauth: { ...candidate.oauth, accessToken: 'newer-access', refreshToken: 'newer-refresh' },
+        } });
+        const currentProjection = await readFile(join(targetHome, 'auth.json'), 'utf8');
+        const runtime = createCodexAppServerRuntime({
+            directory: root, activeServerDir: join(root, 'server'), onThinkingChange: vi.fn(),
+            onConnectedServiceAuthGenerationApplied: async () => {},
+            session: createApiSessionClientFixture({ metadata: createRuntimeMetadata(root) }),
+        });
+        await runtime.startOrLoad({});
+        const applied = await runtime.applyConnectedServiceAuthGeneration({
+            serviceId: 'openai-codex', reason: 'manual', authGeneration: { credential: candidate, selection },
+        });
+        expect(await readFile(join(targetHome, 'auth.json'), 'utf8')).toBe(currentProjection);
+        expect(applied).toMatchObject({ ok: false, partialState: 'runtime_auth_applied', durability: { persisted: false } });
     });
 
     it('keeps exact direct-live proof when account-read diagnostics fail after live auth apply', async () => {
@@ -12050,6 +12431,7 @@ describe('createCodexAppServerRuntime', () => {
                 providerEmail: 'target@example.test',
             },
         });
+        await writeCodexAuthStoreFile({ codexHome: join(root, 'codex-home'), record: candidate });
 
         await runtime.startOrLoad({});
 
@@ -12133,6 +12515,7 @@ describe('createCodexAppServerRuntime', () => {
                 providerEmail: 'target@example.test',
             },
         });
+        await writeCodexAuthStoreFile({ codexHome: join(root, 'codex-home'), record: candidate });
 
         await runtime.startOrLoad({});
         let applySettled = false;
@@ -12736,6 +13119,7 @@ describe('createCodexAppServerRuntime', () => {
                 providerEmail: null,
             },
         });
+        await writeCodexAuthStoreFile({ codexHome: join(root, 'codex-home'), record: candidate });
 
         await runtime.startOrLoad({});
         const promptPromise = runtime.sendPrompt('overlap-start');
@@ -12839,6 +13223,7 @@ describe('createCodexAppServerRuntime', () => {
                 providerEmail: null,
             },
         });
+        await writeCodexAuthStoreFile({ codexHome: join(root, 'codex-home'), record: candidate });
 
         await runtime.startOrLoad({});
         const inFlightPrompt = runtime.sendPrompt('overlap-start');

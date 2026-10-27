@@ -53,6 +53,6 @@ describe('agy shared agent facts (EU-3)', () => {
     const model = AGENT_MODEL_CONFIG['agy' as keyof typeof AGENT_MODEL_CONFIG] as unknown as Record<string, unknown> | undefined;
     expect(model).toMatchObject({ supportsSelection: true, dynamicProbe: 'auto' });
     const descriptor = AGENT_SESSION_MODE_DESCRIPTORS['agy' as keyof typeof AGENT_SESSION_MODE_DESCRIPTORS] as unknown as Record<string, unknown> | undefined;
-    expect(descriptor).toMatchObject({ source: 'none', semantics: 'none' });
+    expect(descriptor).toMatchObject({ source: 'acp', semantics: 'agent-modes', runtimeSwitch: 'acp-setSessionMode' });
   });
 });

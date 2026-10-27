@@ -1,3 +1,4 @@
+import type { SessionEncryptionContext } from '@/session/transport/encryption/sessionEncryptionContext';
 import { randomUUID } from 'node:crypto';
 
 import {
@@ -23,7 +24,7 @@ import {
   isSessionUserMessage,
   type SessionTurnActivity,
 } from '@/session/query/detectSessionTurnInFlight';
-import { fetchSessionById } from '@/session/transport/http/sessionsHttp';
+import { fetchSessionById, type RawSessionRecord } from '@/session/transport/http/sessionsHttp';
 import { callSessionRpc } from '@/session/transport/rpc/sessionRpc';
 import { waitForIdleViaSocket } from '@/session/transport/socket/sessionSocketAgentState';
 import {
@@ -80,10 +81,7 @@ function sleep(ms: number): Promise<void> {
 
 function decryptTranscriptRowContent(params: Readonly<{
   content: { t: 'encrypted'; c: string } | { t: 'plain'; v: unknown };
-  ctx: Readonly<{
-    encryptionKey: Uint8Array;
-    encryptionVariant: 'legacy' | 'dataKey';
-  }>;
+  ctx: SessionEncryptionContext;
 }>): unknown | null {
   if (params.content.t === 'plain') {
     return params.content.v;
@@ -198,10 +196,7 @@ async function resolveCurrentTurnAfterSeqExclusive(params: Readonly<{
   sessionId: string;
   localId: string;
   materializedSeq: number;
-  ctx: Readonly<{
-    encryptionKey: Uint8Array;
-    encryptionVariant: 'legacy' | 'dataKey';
-  }>;
+  ctx: SessionEncryptionContext;
 }>): Promise<number> {
   const materializedSeq = Math.max(0, Math.trunc(params.materializedSeq));
   const fallbackAfterSeqExclusive = Math.max(0, materializedSeq - 1);
@@ -329,10 +324,7 @@ async function readAssistantTurnOutcomeAfterCurrentUserTurn(params: Readonly<{
   sessionId: string;
   localId: string;
   materializedSeq: number;
-  ctx: Readonly<{
-    encryptionKey: Uint8Array;
-    encryptionVariant: 'legacy' | 'dataKey';
-  }>;
+  ctx: SessionEncryptionContext;
 }>): Promise<AssistantTurnOutcome> {
   const afterSeq = Math.max(0, Math.trunc(params.materializedSeq) - 1);
   const rows = await fetchEncryptedTranscriptPageAfterSeq({
@@ -370,10 +362,7 @@ async function waitForAssistantOutcomeAfterCurrentUserTurn(params: Readonly<{
   sessionId: string;
   localId: string;
   materializedSeq: number;
-  ctx: Readonly<{
-    encryptionKey: Uint8Array;
-    encryptionVariant: 'legacy' | 'dataKey';
-  }>;
+  ctx: SessionEncryptionContext;
   maxWaitMs: number;
 }>): Promise<AssistantTurnOutcome> {
   const deadlineMs = Date.now() + Math.max(1, Math.trunc(params.maxWaitMs));
@@ -417,6 +406,8 @@ export async function sendSessionMessage(params: Readonly<{
   modelOverride?: string | null;
   requestedAction?: PendingRequestedActionV1;
   pendingAdmissionMode?: 'continuation_if_no_queued_user_input';
+  /** Recheck a synthetic input's authority after transport lookup, before Pending custody. */
+  canAdmit?: (context: Readonly<{ rawSession: RawSessionRecord; metadata: Record<string, unknown> | null }>) => boolean | Promise<boolean>;
 }>): Promise<SendSessionMessageResult> {
   const sessionTarget = await resolveSessionTransportContext({
     credentials: params.credentials,
@@ -462,6 +453,9 @@ export async function sendSessionMessage(params: Readonly<{
 
   const shouldUseRuntimeRpc = sessionTarget.rawSession.active === true;
   const shouldResumeInactiveSession = !shouldUseRuntimeRpc && params.resumeInactiveSession !== false;
+  if (params.canAdmit && !(await params.canAdmit({ rawSession: sessionTarget.rawSession, metadata: asRecord(decryptedMetadata) }))) {
+    return { ok: true, sessionId, localId, waited: false, suppressed: true };
+  }
   const admission = await admitSessionUserMessageToPendingQueue({
     credentials: params.credentials,
     sessionId,

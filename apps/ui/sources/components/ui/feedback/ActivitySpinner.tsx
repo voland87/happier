@@ -26,6 +26,15 @@ import { resolveSpinnerMotion } from './activitySpinner/dotSpinnerMotion';
 const DEFAULT_SMALL_SPINNER_SIZE = 20;
 const DEFAULT_LARGE_SPINNER_SIZE = 36;
 const DEFAULT_NUMERIC_SPINNER_SIZE = 20;
+
+/**
+ * The spinner that stands alone on an otherwise empty screen or pane: a session opening cold, the
+ * session list before its first load. Inline and status spinners keep `small`.
+ *
+ * 54 keeps the dot styles on whole pixels: a dot is a sixth of the size (9 px) on a pitch of a third
+ * (18 px), so the mark is the small one scaled up, not a softer redraw of it.
+ */
+export const HERO_SPINNER_SIZE = 54;
 const STEPPED_WEB_SPINNER_MAX_SIZE = DEFAULT_SMALL_SPINNER_SIZE;
 const STEPPED_WEB_SPINNER_TIMING_FUNCTION = 'steps(6, end)';
 const SPINNER_ANIMATION_NAME = 'happierActivitySpinnerSpin';

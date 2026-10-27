@@ -8,6 +8,7 @@ import {
 } from '../../prompts/codingPromptBehaviorV1.js';
 import {
   ConnectedServicesDefaultAuthByAgentIdV1Schema,
+  ConnectedServicesAdditionalDefaultAuthByAgentIdV1Schema,
   ConnectedServicesProviderStateSharingSettingsV1Schema,
   DEFAULT_CONNECTED_SERVICES_DEFAULT_AUTH_BY_AGENT_ID_V1,
   DEFAULT_CONNECTED_SERVICES_PROVIDER_STATE_SHARING_SETTINGS_V1,
@@ -382,6 +383,9 @@ export const AccountSettingsSchema = z.preprocess(
       ),
       sessionAgentSpawnPolicyV1: SessionAgentSpawnPolicyV1Schema.default(DEFAULT_SESSION_AGENT_SPAWN_POLICY_V1),
       connectedServicesDefaultAuthByAgentIdV1: ConnectedServicesDefaultAuthByAgentIdV1Schema.default(
+        DEFAULT_CONNECTED_SERVICES_DEFAULT_AUTH_BY_AGENT_ID_V1,
+      ),
+      connectedServicesAdditionalDefaultAuthByAgentIdV1: ConnectedServicesAdditionalDefaultAuthByAgentIdV1Schema.default(
         DEFAULT_CONNECTED_SERVICES_DEFAULT_AUTH_BY_AGENT_ID_V1,
       ),
       connectedServicesProviderStateSharingSettingsV1:

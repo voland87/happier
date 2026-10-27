@@ -35,6 +35,20 @@ function rawSession(metadata: Record<string, unknown>, overrides: Record<string,
 }
 
 describe('evaluateSessionContinuationTargetSupport', () => {
+  it('distinguishes two configured targets sharing one executable', () => {
+    const settings = { acpCatalogSettingsV1: { v: 2, backends: ['a', 'b'].map((id) => ({
+      id, name: id, title: id, command: 'harmless-acp', args: ['--configuration', id], env: {}, createdAt: 1, updatedAt: 1,
+    })) } };
+    const selection = { v: 1, agentId: 'customAcp', backendTarget: { kind: 'configuredAcpBackend', backendId: 'b' } } as const;
+    expect(evaluateSessionContinuationTargetSupport({ selection, sourceAgentId: 'customAcp',
+      sourceBackendTarget: { kind: 'configuredAcpBackend', backendId: 'a' }, accountSettings: settings,
+    })).toMatchObject({ type: 'supported', targetAgentId: 'customAcp' });
+    expect(evaluateSessionContinuationTargetSupport({ selection, sourceAgentId: 'customAcp',
+      sourceBackendTarget: selection.backendTarget, accountSettings: settings,
+    })).toEqual({ type: 'unsupported', code: 'same_target' });
+    expect(evaluateSessionContinuationTargetSupport({ selection, sourceAgentId: 'claude', accountSettings: {} }))
+      .toEqual({ type: 'unsupported', code: 'target_unavailable' });
+  });
   it('accepts another catalog Agent', () => {
     expect(evaluateSessionContinuationTargetSupport({
       selection: { v: 1, agentId: 'codex' },

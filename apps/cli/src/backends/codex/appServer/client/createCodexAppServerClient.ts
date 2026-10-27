@@ -6,6 +6,7 @@ import { expandHomeDirPath } from '@happier-dev/cli-common/providers';
 import { resolveWindowsCommandInvocation } from '@happier-dev/cli-common/process';
 
 import { resolveCodexCliInvocation } from '../../utils/resolveCodexCliInvocation';
+import { withCodexNativeStartupLock } from '../../utils/withCodexNativeStartupLock';
 import { appendCodexCliConfigOverridesArgs } from '../../utils/appendCodexCliConfigOverridesArgs';
 import { resolveConfiguredCodexConfigTomlPath } from '../../utils/resolveConfiguredCodexHome';
 import { createCodexAppServerJsonLineReader } from './codexAppServerJsonLineReader';
@@ -365,7 +366,7 @@ function readCodexMcpServerKeysFromConfigToml(env: NodeJS.ProcessEnv): string[] 
     return Array.from(keys).sort((a, b) => a.localeCompare(b));
 }
 
-export async function createCodexAppServerClient(params: Readonly<{
+type CreateCodexAppServerClientParams = Readonly<{
     processEnv?: NodeJS.ProcessEnv;
     cwd?: string;
     configOverrides?: ReadonlyArray<string>;
@@ -376,7 +377,28 @@ export async function createCodexAppServerClient(params: Readonly<{
         | Readonly<{ kind: 'stdio' }>
         | Readonly<{ kind: 'daemonProxy' }>
         | Readonly<{ kind: 'unixWebSocket'; socketPath: string }>;
-}>): Promise<DisposableCodexAppServerClient> {
+}>;
+
+export async function createCodexAppServerClient(params: CreateCodexAppServerClientParams): Promise<DisposableCodexAppServerClient> {
+    if (params.transport && params.transport.kind !== 'stdio') return await createUnlockedCodexAppServerClient(params);
+    const timeoutMs = params.initializeRequestOptions?.timeoutMs
+        ?? readCodexAppServerRequestTimeoutMs('initialize', params.processEnv ?? process.env);
+    return await withCodexNativeStartupLock(timeoutMs ?? Number.POSITIVE_INFINITY, async () => (
+        await createUnlockedCodexAppServerClient(params)
+    ), params.initializeRequestOptions?.signal);
+}
+
+/** Warm managed disk-auth homes through the same native initialization owner. */
+export async function bootstrapCodexNativeHome(params: Omit<CreateCodexAppServerClientParams, 'transport'>): Promise<void> {
+    const timeoutMs = params.initializeRequestOptions?.timeoutMs
+        ?? readCodexAppServerRequestTimeoutMs('initialize', params.processEnv ?? process.env);
+    await withCodexNativeStartupLock(timeoutMs ?? Number.POSITIVE_INFINITY, async () => {
+        const client = await createUnlockedCodexAppServerClient(params);
+        await client.dispose();
+    }, params.initializeRequestOptions?.signal);
+}
+
+async function createUnlockedCodexAppServerClient(params: CreateCodexAppServerClientParams): Promise<DisposableCodexAppServerClient> {
     params.initializeRequestOptions?.signal?.throwIfAborted();
     const sourceProcessEnv = params.processEnv ?? process.env;
     const rpcLogger = createRpcLogger(sourceProcessEnv);
@@ -561,7 +583,7 @@ export async function createCodexAppServerClient(params: Readonly<{
         // Snapshot and terminate descendants before closing stdio. Ending stdin first can let a
         // JavaScript launcher exit and re-parent its native Codex child before the tree walk.
         terminateTransportPromise = child
-            ? killProcessTree(child, { graceMs: 250 }).catch(() => undefined)
+            ? killProcessTree(child, { graceMs: 250 }).then(() => undefined).catch(() => undefined)
             : Promise.resolve();
         return terminateTransportPromise;
     };

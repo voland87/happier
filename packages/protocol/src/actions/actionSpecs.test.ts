@@ -11,6 +11,10 @@ import {
 import { serializeActionSpec } from './actionCatalog.js';
 import { ActionApprovalSchema, ActionOperationDeclarationV1Schema, ActionSpecSchema, ActionSurfaceSchema, getActionSpec, isActionSpecSurfacedOn, listActionSpecs, listActionSpecsForSurface, listVoicePromptHotPathSpecs, resolveActionApprovalFlow } from './actionSpecs.js';
 
+it('accepts the existing empty mode id to clear a native override', () => {
+  expect(getActionSpec('session.mode.set').inputSchema.safeParse({ modeId: '' }).success).toBe(true);
+});
+
 const RESULT_REQUIRED_BLOCKING_ACTION_IDS = [
   'action.spec.search',
   'action.spec.get',
@@ -98,6 +102,7 @@ const RESULT_OPTIONAL_DEFERRED_ACTION_IDS = [
 ] as const;
 
 const EXTERNALLY_CONTROLLABLE_SESSION_AGENT_UNSUPPORTED_ACTIONS = {
+  'session.handoff': 'moving the current session between machines stays an external orchestration decision.',
   'voice_agent.start': 'voice-agent launches are a separate user-facing runtime surface, not an in-session self-control primitive.',
   'session.spawn_picker': 'the interactive spawn picker remains UI/external-client only; in-session agents use session.spawn_new.',
   'session.terminalComposer.clear': 'clearing a human terminal composer is an explicit human/UI decision.',

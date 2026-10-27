@@ -1,5 +1,6 @@
 import {
     ConnectedServicesDefaultAuthByAgentIdV1Schema,
+    ConnectedServicesAdditionalDefaultAuthByAgentIdV1Schema,
     ConnectedServicesProviderStateSharingSettingsV1Schema,
     DEFAULT_CONNECTED_SERVICES_DEFAULT_AUTH_BY_AGENT_ID_V1,
     DEFAULT_CONNECTED_SERVICES_PROVIDER_STATE_SHARING_SETTINGS_V1,
@@ -139,6 +140,12 @@ export const ACCOUNT_CONNECTED_SERVICES_SETTING_DEFINITIONS = defineSettingDefin
                 return objectKeyCount(parsed.bindingsByAgentId);
             },
         },
+    },
+    connectedServicesAdditionalDefaultAuthByAgentIdV1: {
+        schema: ConnectedServicesAdditionalDefaultAuthByAgentIdV1Schema,
+        default: DEFAULT_CONNECTED_SERVICES_DEFAULT_AUTH_BY_AGENT_ID_V1,
+        description: 'Default auth bindings for services newer than the released V1 reader',
+        storageScope: 'account',
     },
     connectedServicesDefaultAuthPoolAdoptionDismissedByKey: {
         schema: z.record(z.string(), z.boolean()).default({}),

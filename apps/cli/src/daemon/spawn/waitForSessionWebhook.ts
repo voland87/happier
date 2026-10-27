@@ -1,5 +1,5 @@
 import type { SpawnSessionResult } from '@/rpc/handlers/registerSessionHandlers';
-import { SPAWN_SESSION_ERROR_CODES } from '@/rpc/handlers/registerSessionHandlers';
+import { SPAWN_SESSION_ERROR_CODES } from '@happier-dev/protocol';
 
 import type { TrackedSession } from '../types';
 

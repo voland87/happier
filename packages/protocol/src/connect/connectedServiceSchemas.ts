@@ -199,14 +199,14 @@ const OauthCredentialPayloadSchema = z.object({
     tokenType: z.string().min(1).nullable(),
     providerAccountId: z.string().min(1).nullable(),
     providerEmail: z.string().min(1).nullable(),
-    raw: z.unknown().nullable(),
+    raw: z.unknown().nullable().optional(),
 });
 
 const TokenCredentialPayloadSchema = z.object({
     token: z.string().min(1),
     providerAccountId: z.string().min(1).nullable(),
     providerEmail: z.string().min(1).nullable(),
-    raw: z.unknown().nullable(),
+    raw: z.unknown().nullable().optional(),
 });
 
 const ConnectedServiceCredentialBaseSchema = z.object({
@@ -328,6 +328,22 @@ export const ConnectedServiceQuotaRecoveryCreditsV1Schema = z
     });
 export type ConnectedServiceQuotaRecoveryCreditsV1 =
     z.infer<typeof ConnectedServiceQuotaRecoveryCreditsV1Schema>;
+
+/** Presentation facts only; credit status and availableCount own usability. */
+export const ConnectedServiceQuotaRecoveryCreditDetailsV1Schema = z.object({
+    remainingCount: z.number().int().nonnegative(),
+    appliesToProviderLimitIds: z.array(z.string().trim().min(1)).default([]),
+    unavailableReason: z.enum([
+        'paused', 'cooldown', 'ineligible', 'not_selected', 'provider_unavailable',
+        'not_started', 'expired', 'consumed', 'unknown',
+    ]).optional(),
+}).strict();
+export type ConnectedServiceQuotaRecoveryCreditDetailsV1 = z.infer<typeof ConnectedServiceQuotaRecoveryCreditDetailsV1Schema>;
+
+export const ConnectedServiceQuotaRecoveryCreditDetailsByIdV1Schema = z.record(
+    z.string().trim().min(1), ConnectedServiceQuotaRecoveryCreditDetailsV1Schema,
+);
+export type ConnectedServiceQuotaRecoveryCreditDetailsByIdV1 = z.infer<typeof ConnectedServiceQuotaRecoveryCreditDetailsByIdV1Schema>;
 
 export const ConnectedServiceQuotaMeterScopeV1Schema = z.enum([
     'primary',
@@ -481,6 +497,7 @@ export const ConnectedServiceQuotaSnapshotV1Schema = z
         accountLabel: z.string().min(1).nullable(),
         providerId: z.string().trim().min(1).optional(),
         activeAccountId: z.string().trim().min(1).optional(),
+        providerOrganizationId: z.string().trim().min(1).max(256).optional(),
         fetchedAtMs: z.number().int().nonnegative().optional(),
         staleAtMs: z.number().int().nonnegative().optional(),
         source: ConnectedServiceQuotaSourceV1Schema.optional(),
@@ -488,6 +505,7 @@ export const ConnectedServiceQuotaSnapshotV1Schema = z
         evidence: ConnectedServiceQuotaEvidenceV1Schema.optional(),
         meters: z.array(ConnectedServiceQuotaMeterV1Schema),
         recoveryCredits: ConnectedServiceQuotaRecoveryCreditsV1Schema.optional(),
+        recoveryCreditDetails: ConnectedServiceQuotaRecoveryCreditDetailsByIdV1Schema.optional(),
         subscription: ProviderAccountSubscriptionV1Schema.optional(),
     });
 
@@ -497,12 +515,15 @@ export const SealedConnectedServiceQuotaSnapshotV1Schema = z.object({
     format: ConnectedServiceCredentialFormatSchema,
     ciphertext: z.string().min(1),
     subscription: SealedProviderAccountSubscriptionV1Schema.optional(),
+    recoveryCreditDetails: z.object({ ciphertext: z.string().min(1) }).strict().optional(),
 });
 
 export type SealedConnectedServiceQuotaSnapshotV1 = z.infer<typeof SealedConnectedServiceQuotaSnapshotV1Schema>;
 
 // Explicit reader negotiation: older strict V1 readers cannot accept the opt-in field.
 export const CONNECTED_SERVICE_AUTO_QUOTA_RESET_HEADER = 'accept';
+// CLI-only optional switch provenance; older strict active-profile bodies remain unchanged.
+export const CONNECTED_SERVICE_AUTH_GROUP_SWITCH_REASON_HEADER = 'x-happier-connected-service-switch-reason';
 export const CONNECTED_SERVICE_AUTO_QUOTA_RESET_HEADER_VALUE = 'application/json; happier-connected-service-auto-quota-reset=1';
 export const CONNECTED_SERVICE_AUTO_DISABLE_PLAN_INVALID_QUERY_KEY = 'happierAutoDisablePlanInvalidAccounts';
 export const CONNECTED_SERVICE_POOL_QUOTA_LIMIT_SELECTION_QUERY_KEY = 'happierPoolQuotaLimitSelection';

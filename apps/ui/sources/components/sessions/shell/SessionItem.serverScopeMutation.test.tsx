@@ -270,18 +270,18 @@ describe('SessionItem server-scoped mutations', () => {
         );
 
         expect(modalConfirmSpy).toHaveBeenCalledWith(
-            'sessionInfo.archiveSession',
-            'sessionInfo.archiveSessionConfirm',
+            'sessionInfo.stopSession',
+            'sessionInfo.stopSessionConfirm',
             {
                 cancelText: 'common.cancel',
-                confirmText: 'sessionInfo.archiveSession',
+                confirmText: 'sessionInfo.stopSession',
                 destructive: true,
             },
         );
         expect(modalAlertSpy).not.toHaveBeenCalled();
 
         expect(stopSpy).toHaveBeenCalledWith('sess_1', { serverId: 'server_a' });
-        expect(archiveSpy).toHaveBeenCalledWith('sess_1', { serverId: 'server_a' });
+        expect(archiveSpy).toHaveBeenCalledWith('sess_1', { serverId: 'server_a', signal: expect.any(AbortSignal) });
     });
 
     it('archives inactive sessions using server scope when serverId is provided', async () => {
@@ -331,15 +331,7 @@ describe('SessionItem server-scoped mutations', () => {
             'session swipe action',
         );
 
-        expect(modalConfirmSpy).toHaveBeenCalledWith(
-            'sessionInfo.archiveSession',
-            'sessionInfo.archiveSessionConfirm',
-            {
-                cancelText: 'common.cancel',
-                confirmText: 'sessionInfo.archiveSession',
-                destructive: true,
-            },
-        );
+        expect(modalConfirmSpy).not.toHaveBeenCalled();
         expect(modalAlertSpy).not.toHaveBeenCalled();
 
         expect(archiveSpy).toHaveBeenCalledWith('sess_2', { serverId: 'server_b' });
@@ -401,11 +393,11 @@ describe('SessionItem server-scoped mutations', () => {
         );
 
         expect(modalConfirmSpy).toHaveBeenCalledWith(
-            'sessionInfo.archiveSession',
-            'sessionInfo.archiveSessionConfirm',
+            'sessionInfo.stopSession',
+            'sessionInfo.stopSessionConfirm',
             {
                 cancelText: 'common.cancel',
-                confirmText: 'sessionInfo.archiveSession',
+                confirmText: 'sessionInfo.stopSession',
                 destructive: true,
             },
         );
@@ -413,7 +405,7 @@ describe('SessionItem server-scoped mutations', () => {
         expect(stopSpy).toHaveBeenCalledWith('sess_stale_inactive', { serverId: 'server_b' });
         expect(archiveSpy).toHaveBeenCalledTimes(2);
         expect(archiveSpy).toHaveBeenNthCalledWith(1, 'sess_stale_inactive', { serverId: 'server_b' });
-        expect(archiveSpy).toHaveBeenNthCalledWith(2, 'sess_stale_inactive', { serverId: 'server_b' });
+        expect(archiveSpy).toHaveBeenNthCalledWith(2, 'sess_stale_inactive', { serverId: 'server_b', signal: expect.any(AbortSignal) });
     });
 
     it('archives active sessions from the swipe action when hidden inactive sessions are enabled', async () => {
@@ -465,18 +457,18 @@ describe('SessionItem server-scoped mutations', () => {
         );
 
         expect(modalConfirmSpy).toHaveBeenCalledWith(
-            'sessionInfo.archiveSession',
-            'sessionInfo.archiveSessionConfirm',
+            'sessionInfo.stopSession',
+            'sessionInfo.stopSessionConfirm',
             {
                 cancelText: 'common.cancel',
-                confirmText: 'sessionInfo.archiveSession',
+                confirmText: 'sessionInfo.stopSession',
                 destructive: true,
             },
         );
         expect(modalAlertSpy).not.toHaveBeenCalled();
 
         expect(stopSpy).toHaveBeenCalledWith('sess_3', { serverId: 'server_c' });
-        expect(archiveSpy).toHaveBeenCalledWith('sess_3', { serverId: 'server_c' });
+        expect(archiveSpy).toHaveBeenCalledWith('sess_3', { serverId: 'server_c', signal: expect.any(AbortSignal) });
     });
 
     it('offers an archive action for active sessions in the more menu and stops before archiving', async () => {
@@ -531,18 +523,18 @@ describe('SessionItem server-scoped mutations', () => {
         });
 
         expect(modalConfirmSpy).toHaveBeenCalledWith(
-            'sessionInfo.archiveSession',
-            'sessionInfo.archiveSessionConfirm',
+            'sessionInfo.stopSession',
+            'sessionInfo.stopSessionConfirm',
             {
                 cancelText: 'common.cancel',
-                confirmText: 'sessionInfo.archiveSession',
+                confirmText: 'sessionInfo.stopSession',
                 destructive: true,
             },
         );
         expect(modalAlertSpy).not.toHaveBeenCalled();
 
         expect(stopSpy).toHaveBeenCalledWith('sess_active_archive', { serverId: 'server_d' });
-        expect(archiveSpy).toHaveBeenCalledWith('sess_active_archive', { serverId: 'server_d' });
+        expect(archiveSpy).toHaveBeenCalledWith('sess_active_archive', { serverId: 'server_d', signal: expect.any(AbortSignal) });
     });
 
     it('does not expose archive for active shared-admin sessions owned by another user', async () => {
@@ -937,17 +929,17 @@ describe('SessionItem server-scoped mutations', () => {
         );
 
         expect(modalConfirmSpy).toHaveBeenCalledWith(
-            'sessionInfo.archiveSession',
-            'sessionInfo.archiveSessionConfirm',
+            'sessionInfo.stopSession',
+            'sessionInfo.stopSessionConfirm',
             {
                 cancelText: 'common.cancel',
-                confirmText: 'sessionInfo.archiveSession',
+                confirmText: 'sessionInfo.stopSession',
                 destructive: true,
             },
         );
         expect(modalAlertSpy).not.toHaveBeenCalled();
 
         expect(stopSpy).toHaveBeenCalledWith('sess_4', { serverId: 'server_d' });
-        expect(archiveSpy).toHaveBeenCalledWith('sess_4', { serverId: 'server_d' });
+        expect(archiveSpy).toHaveBeenCalledWith('sess_4', { serverId: 'server_d', signal: expect.any(AbortSignal) });
     });
 });

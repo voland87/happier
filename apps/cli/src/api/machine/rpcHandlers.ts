@@ -14,6 +14,7 @@ import {
 } from '@/rpc/handlers/registerSessionHandlers';
 import { resolveCanonicalCodexBackendMode } from '@/rpc/handlers/codexBackendMode';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { RpcError } from '@happier-dev/protocol/rpcErrors';
 import {
   AcpConfigOptionOverridesV1Schema,
   AgentRuntimeDescriptorV1Schema,
@@ -82,6 +83,8 @@ import { registerMachineTerminalRpcHandlers } from './rpcHandlers.terminal';
 import { registerMachineMcpServersRpcHandlers } from './rpcHandlers.mcpServers';
 import { registerMachineDirectSessionsRpcHandlers } from './rpcHandlers.directSessions';
 import { registerMachineConnectedServiceQuotaRpcHandlers } from './rpcHandlers.connectedServiceQuotas';
+import { registerMachineConnectedServiceImportRpcHandlers } from './rpcHandlers.connectedServiceImport';
+import type { ConnectedServiceImportAccount } from '@/cloud/connectedServices/connectedServiceImport';
 import {
   registerMachineSessionHandoffRpcHandlers,
   type SessionHandoffDirectPeerTransferHandle,
@@ -247,6 +250,7 @@ export type MachineRpcHandlers = {
   stopSession: (sessionId: string) => Promise<MachineStopSessionHandlerResult>;
   isSessionActive?: (sessionId: string) => Promise<boolean>;
   loadLocalSessionMetadata?: (sessionId: string) => Promise<SessionHandoffLocalMetadataSource | null>;
+  resolveExistingStateEnvironment?: NonNullable<Parameters<typeof registerMachineSessionHandoffRpcHandlers>[0]['resolveExistingStateEnvironment']>;
   requestShutdown: () => void;
   memory?: MemoryWorkerHandle;
   daemonServerWorkScheduler?: Pick<DaemonServerWorkScheduler, 'getSnapshot'>;
@@ -258,6 +262,7 @@ export type MachineRpcHandlers = {
 };
 
 export type MachineRpcHandlerDeps = Readonly<{
+  connectedServiceImportAccount?: ConnectedServiceImportAccount;
   runReplaySummaryForDialog?: typeof runReplaySummaryForDialog;
   promptAssetsHomedir?: () => string;
   promptAssetsHappierHomeDir?: () => string;
@@ -267,6 +272,7 @@ export type MachineRpcHandlerDeps = Readonly<{
   emitActionOperationRevision?: (snapshot: ActionOperationSnapshotV1) => void;
   createAccountPet?: (request: AccountPetCreateRequestV1) => Promise<AccountPetCreateResponseV1>;
   resumeInactiveSessionWhenUsageLimitReady?: ResumeInactiveSessionWhenUsageLimitReady;
+  checkRuntimeAuthUsageLimitRecovery?: (input: Readonly<{ sessionId: string; attemptId: string; resumePromptMode?: 'standard' | 'off' | 'custom' }>) => Promise<unknown>;
   scheduleInactiveSessionUsageLimitRecoveryCheck?: ScheduleInactiveSessionUsageLimitRecoveryCheck;
   cancelInactiveSessionUsageLimitRecoveryCheck?: CancelInactiveSessionUsageLimitRecoveryCheck;
   cancelConnectedServiceRuntimeAuthRecovery?: CancelConnectedServiceRuntimeAuthRecovery;
@@ -1173,9 +1179,14 @@ export function registerMachineRpcHandlers(params: Readonly<{
   registerMachineConnectedServiceQuotaRpcHandlers({
     rpcHandlerManager,
   });
+  registerMachineConnectedServiceImportRpcHandlers({
+    rpcHandlerManager,
+    account: params.deps?.connectedServiceImportAccount,
+  });
   registerMachineSessionGoalRpcHandlers({
     rpcHandlerManager,
     deps: {
+      checkRuntimeAuthUsageLimitRecovery: params.deps?.checkRuntimeAuthUsageLimitRecovery,
       ...(params.deps?.resumeInactiveSessionWhenUsageLimitReady
         ? { resumeInactiveSessionWhenUsageLimitReady: params.deps.resumeInactiveSessionWhenUsageLimitReady }
         : {}),
@@ -1204,6 +1215,17 @@ export function registerMachineRpcHandlers(params: Readonly<{
   });
   registerMachineSessionHandoffRpcHandlers({
     rpcHandlerManager,
+    probeHandoffCapability: async (machineId) => {
+      const scope = await actionOperationRuntime?.getScope();
+      if (scope?.machineId === machineId) {
+        return await rpcHandlerManager.invokeLocal(RPC_METHODS.DAEMON_SESSION_HANDOFF_CAPABILITY_V2_GET, {});
+      }
+      const credentials = await readCredentials();
+      if (!credentials) throw new RpcError('Authentication is required', 'not_authenticated');
+      return await callMachineRpc(buildTrackedSessionHandoffMachineCall({
+        credentials, machineId, method: RPC_METHODS.DAEMON_SESSION_HANDOFF_CAPABILITY_V2_GET, request: {},
+      }));
+    },
     ...(actionOperationRuntime ? {
       wrapStartHandler: (startUntracked) => createTrackedSessionHandoffStart({
         runner: actionOperationRuntime.runner,
@@ -1240,6 +1262,13 @@ export function registerMachineRpcHandlers(params: Readonly<{
             request: payload,
           }));
           const coordinator = createSessionHandoffCoordinator({
+            assertExistingStateSupported: async () => {
+              const { resolveExistingSessionHandoffEligibilityThroughCatalog } = await import('@/backends/catalog');
+              const eligibility = resolveExistingSessionHandoffEligibilityThroughCatalog(sourceMetadata);
+              if (!eligibility.eligible) {
+                throw Object.assign(new Error(`Existing-state handoff is unsupported: ${eligibility.reasonCode}`), { errorCode: 'existing_state_unsupported' });
+              }
+            },
             readServerFeatures: async (signal) => await readSessionHandoffServerFeatures({
               token: credentials.token,
               ...(signal ? { signal } : {}),
@@ -1248,6 +1277,7 @@ export function registerMachineRpcHandlers(params: Readonly<{
             preferredTransportStrategies: request.preferredTransportStrategies,
             transportStrategy: request.negotiatedTransportStrategy,
             probeTargetCapability: async () => await targetRpc(RPC_METHODS.DAEMON_SESSION_HANDOFF_CAPABILITY_V2_GET, {}),
+            probeSourceCapability: async () => await rpcHandlerManager.invokeLocal(RPC_METHODS.DAEMON_SESSION_HANDOFF_CAPABILITY_V2_GET, {}),
             startSource,
             prepareTarget: async (payload) => await targetRpc(RPC_METHODS.DAEMON_SESSION_HANDOFF_PREPARE_TARGET_V2, payload),
             getTargetPrepareResult: async (payload) => await targetRpc(
@@ -1270,6 +1300,7 @@ export function registerMachineRpcHandlers(params: Readonly<{
             targetMachineId: request.targetMachineId,
             ...(request.targetPath ? { targetPath: request.targetPath } : {}),
             sessionStorageMode: request.sessionStorageMode,
+            ...(request.stateTransfer ? { stateTransfer: request.stateTransfer } : {}),
             ...(request.targetSessionStorageMode ? { targetSessionStorageMode: request.targetSessionStorageMode } : {}),
             ...(request.workspaceTransfer ? { workspaceTransfer: request.workspaceTransfer } : {}),
             ...(connectedServices !== undefined ? { connectedServices } : {}),
@@ -1287,6 +1318,7 @@ export function registerMachineRpcHandlers(params: Readonly<{
       return await stopSessionConfirmed(sessionId) ? 'stopped' : 'failed';
     },
     ...(handlers.loadLocalSessionMetadata ? { loadLocalSessionMetadata: handlers.loadLocalSessionMetadata } : {}),
+    ...(handlers.resolveExistingStateEnvironment ? { resolveExistingStateEnvironment: handlers.resolveExistingStateEnvironment } : {}),
     ...(handlers.machineTransferChannel ? { machineTransferChannel: handlers.machineTransferChannel } : {}),
     ...(handlers.directPeerTransfer ? { directPeerTransfer: handlers.directPeerTransfer } : {}),
   });
@@ -2179,7 +2211,7 @@ export function registerMachineRpcHandlers(params: Readonly<{
     return await inspectSessionContinuation({ credentials, request: parsed.data });
   });
 
-  rpcHandlerManager.registerHandler(RPC_METHODS.SESSION_CONTINUATION_INSPECT_BATCH, async (raw: unknown) => {
+  const inspectContinuationBatch = async (raw: unknown) => {
     const parsed = SessionContinuationInspectionBatchRequestV1Schema.safeParse(raw);
     if (!parsed.success) {
       return SessionContinuationInspectionBatchResultV1Schema.parse({ v: 1, inspections: [] });
@@ -2197,7 +2229,9 @@ export function registerMachineRpcHandlers(params: Readonly<{
     return SessionContinuationInspectionBatchResultV1Schema.parse(
       await inspectSessionContinuations({ credentials, request: parsed.data }),
     );
-  });
+  };
+  rpcHandlerManager.registerHandler(RPC_METHODS.SESSION_CONTINUATION_INSPECT_BATCH, inspectContinuationBatch);
+  rpcHandlerManager.registerHandler(RPC_METHODS.SESSION_CONTINUATION_INSPECT_BACKEND_TARGETS, inspectContinuationBatch);
 
   rpcHandlerManager.registerHandler(
     RPC_METHODS.SESSION_AGENT_TRANSITION_BRIEF_PREVIEW,

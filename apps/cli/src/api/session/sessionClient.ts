@@ -27,6 +27,16 @@ import {
     type CommittedClaudeJsonlMessageBaseline,
 } from '@/backends/claude/utils/claudeJsonlMessageKey';
 import { randomUUID } from 'node:crypto';
+import {
+    openAgentStateRequestSettlement,
+    sealAgentStateRequestSettlement,
+    type AgentStateRequestSettlementEncryptionScope,
+} from './agentStateRequestSettlementEncryption';
+import {
+    AgentStateRequestSettlementSchema,
+    applyAgentStateRequestSettlement,
+    buildAgentStateRequestSettlement,
+} from './agentStateRequestSettlement';
 import { AsyncLock } from '@/utils/lock';
 import { RpcHandlerManager } from '../rpc/RpcHandlerManager';
 import { registerSessionHandlers } from '@/rpc/handlers/registerSessionHandlers';
@@ -50,6 +60,8 @@ import type { PermissionRequestPushSender } from '@/agent/permissions/BasePermis
 import { SessionPermissionRpcRouter } from '@/agent/permissions/sessionPermissionRpcRouter';
 import { ExecutionBudgetRegistry } from '@/daemon/executionBudget/ExecutionBudgetRegistry';
 import { readCredentials, readAccountChangesCursor } from '@/persistence';
+import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { callMachineRpc } from '@/session/transport/rpc/machineRpc';
 import {
     applyAccountSettingsV2Update,
     bootstrapAccountSettingsContext,
@@ -282,7 +294,7 @@ import {
 import { normalizeExecutionRunWaitTimeoutMs } from '@/session/services/executionRunWaitTiming';
 import { createEventShapeLoggerForLog } from '@/diagnostics/eventShapeForLog';
 import { runSupervisedRequest } from '@/api/connection/requestSupervision/runSupervisedRequest';
-import { updateAgentStateBestEffort, updateMetadataBestEffort } from './sessionWritesBestEffort';
+import { updateAgentStateBestEffort, updateMetadataBestEffort, type AgentStateWriteOptions } from './sessionWritesBestEffort';
 import { readCliClientUpgradeRequired } from '@/api/clientCompatibility/cliClientCompatibility';
 import { normalizeAgentPromptPayload } from '@/agent/core/AgentPromptPayload';
 import type {
@@ -297,6 +309,7 @@ import {
 } from './committedUserMessageSeqTracker';
 import {
     createSessionMutationOutbox,
+    SessionMutationJournalAdmissionBlockedError,
     type RuntimeActivitySnapshotTail,
     type SessionMutationOutbox,
 } from './mutations/createSessionMutationOutbox';
@@ -319,7 +332,6 @@ import {
 import {
     applyKnownPendingQueueState,
     countMaterializablePendingRows,
-    derivePendingQueueStateAfterMaterializeResult,
     readKnownPendingQueueState,
     UNKNOWN_PENDING_QUEUE_STATE,
     type KnownPendingQueueState,
@@ -576,6 +588,7 @@ export class ApiSessionClient extends EventEmitter {
     private static readonly STARTUP_MESSAGE_CATCH_UP_RETRY_DELAYS_MS = [250, 1_000, 2_500] as const;
 
     private readonly token: string;
+    private readonly requestSettlementEncryptionScope: AgentStateRequestSettlementEncryptionScope;
     readonly sessionId: string;
     private metadata: Metadata | null;
     private runtimeWorkingDirectory: string | null = null;
@@ -592,7 +605,9 @@ export class ApiSessionClient extends EventEmitter {
     private sessionPermissionRpcRouter: SessionPermissionRpcRouter | null = null;
     private executionRunPermissionHandler: CodexLikePermissionHandler | null = null;
     private readonly rpcLifecycleRegistrations: RpcLifecycleRegistration[] = [];
+    private executionRunLifecycleRegistration: RpcLifecycleRegistration | null = null;
     private agentStateLock = new AsyncLock();
+    private requestSettlementAdmissionLock = new AsyncLock();
     private metadataLock = new AsyncLock();
     private encryptionKey: Uint8Array;
     private encryptionVariant: 'legacy' | 'dataKey';
@@ -738,7 +753,7 @@ export class ApiSessionClient extends EventEmitter {
         },
     });
     private daemonTurnLifecycleNotifyTail: Promise<void> = Promise.resolve();
-    private readonly pendingSessionTurnWrites = new Set<Promise<void>>();
+    private readonly pendingDurableSessionWrites = new Set<Promise<void>>();
     private readonly committedUserMessageSeqTracker = new CommittedUserMessageSeqTracker();
     private readonly sessionMutationOutbox: SessionMutationOutbox;
     private readonly runtimeActivitySnapshotPublisher: RuntimeActivitySnapshotSessionMutationPublisher;
@@ -837,6 +852,11 @@ export class ApiSessionClient extends EventEmitter {
             `[API] Socket not connected; queueing ${context} until supervised reconnect.`,
             details
         );
+    }
+
+    subscribeToSessionConnectionState(listener: (state: ManagedConnectionState) => void): () => void {
+        this.on(SESSION_CONNECTION_STATE_EVENT, listener);
+        return () => { this.off(SESSION_CONNECTION_STATE_EVENT, listener); };
     }
 
     private isSessionSocketOnlineForAckWrite(): boolean {
@@ -944,6 +964,10 @@ export class ApiSessionClient extends EventEmitter {
 	        super()
 	        this.token = token;
 	        this.sessionId = session.id;
+            this.requestSettlementEncryptionScope = {
+                token, sessionId: session.id, serverId: configuration.activeServerId,
+                installationIdentityPath: configuration.installationIdentityFile,
+            };
 	        this.metadata = normalizeSessionMetadataForRead(session.metadata);
 	        this.metadataVersion = session.metadataVersion;
             this.sessionSocketMachineId = resolveSessionSocketMachineIdForBootstrap(session.metadata);
@@ -1014,6 +1038,7 @@ export class ApiSessionClient extends EventEmitter {
         this.executionRunPermissionHandler = new CodexLikePermissionHandler({
             session: this,
             logPrefix: '[ExecutionRun]',
+            requestScope: 'execution_run',
             pushSender: permissionNotifications?.permissionRequestPushSender ?? null,
             getAccountSettings: () => getActiveAccountSettingsSnapshot()?.settings ?? null,
             getAccountSettingsSecretsReadKeys: () =>
@@ -1035,6 +1060,7 @@ export class ApiSessionClient extends EventEmitter {
                 return { status: 'ready' };
             },
             sessionRuntimeControls: this.sessionRuntimeControls,
+            getUsageLimitRecoveryCheckNow: () => this.resolveUsageLimitRecoveryCheckNow(),
             // QAE-1: a user "Stop waiting" handled session-side (provider runtime
             // control or metadata fallback) must also cancel the daemon's durable
             // recovery wait state, or it resumes the session involuntarily later.
@@ -1083,6 +1109,22 @@ export class ApiSessionClient extends EventEmitter {
             sessionId: this.sessionId,
             getSocket: () => this.socket as any,
             requestReconnect: (reason) => this.kickSessionSocketReconnectForDurableMutation(reason),
+            deliverAgentStateRequestSettlement: async (mutation) => {
+                const decrypted = await openAgentStateRequestSettlement(this.requestSettlementEncryptionScope, mutation.content);
+                // The crypto boundary also returns null for a wrong key. Retain that
+                // ciphertext for recovery rather than permanently quarantining it.
+                if (decrypted === null) throw new Error('Request settlement recovery could not decrypt payload');
+                const settlement = AgentStateRequestSettlementSchema.safeParse(decrypted);
+                if (!settlement.success) {
+                    logger.infoFile('[API] Invalid durable request settlement payload', {
+                        sessionId: this.sessionId,
+                        mutationId: mutation.mutationId,
+                    });
+                    return { status: 'permanent_invalid_payload', reason: 'invalid_agent_state_request_settlement' };
+                }
+                await this.updateAgentState((state) => applyAgentStateRequestSettlement(state, settlement.data));
+                return { status: 'delivered', path: 'socket' };
+            },
         });
         this.runtimeActivitySnapshotPublisher = createRuntimeActivitySnapshotSessionMutationPublisher({
             sessionId: this.sessionId,
@@ -1091,6 +1133,8 @@ export class ApiSessionClient extends EventEmitter {
         // Always register execution-run RPC methods so callers never see "RPC method not available".
         // Feature gating is enforced inside the handler implementations.
         const streamedTranscriptSession = {
+            subscribeToSessionConnectionState: (listener: (state: ManagedConnectionState) => void) =>
+                this.subscribeToSessionConnectionState(listener),
             enqueueAgentMessageCommitted: (provider: ACPProvider, body: ACPMessageData, opts: { localId: string; meta?: Record<string, unknown>; provenance: SessionTranscriptObservationProvenanceV1 }) =>
                 this.enqueueAgentMessageCommitted(provider, body, opts),
             sendAgentMessageCommitted: (provider: ACPProvider, body: ACPMessageData, opts: { localId: string; meta?: Record<string, unknown> }) =>
@@ -1105,7 +1149,7 @@ export class ApiSessionClient extends EventEmitter {
             getEphemeralStreamConnectionEpoch: () => this.getEphemeralStreamConnectionEpoch(),
         };
 
-        registerExecutionRunHandlers(this.rpcHandlerManager, {
+        this.executionRunLifecycleRegistration = registerExecutionRunHandlers(this.rpcHandlerManager, {
             sessionId: this.sessionId,
             cwd: this.resolveWorkingDirectory(),
             resolveCwd: () => this.resolveWorkingDirectory(),
@@ -1164,6 +1208,8 @@ export class ApiSessionClient extends EventEmitter {
                 return context.settings ?? null;
             },
         });
+
+        this.rpcLifecycleRegistrations.push(this.executionRunLifecycleRegistration);
 
         registerEphemeralTaskHandlers(this.rpcHandlerManager, {
           workingDirectory: this.resolveWorkingDirectory(),
@@ -1642,7 +1688,9 @@ export class ApiSessionClient extends EventEmitter {
         if (this.acceptedCanonicalPendingDeliveryResolutionLocalIdsInFlight.has(localId)) return;
         this.acceptedCanonicalPendingDeliveryResolutionLocalIdsInFlight.add(localId);
         try {
-            for (let attempt = 0; attempt < 2; attempt += 1) {
+            // Retain one settlement operation for the accepted localId until it commits or its
+            // existing session/runtime authority ends. Retrying settlement never invokes input.
+            for (let attempt = 0; ; attempt += 1) {
                 if (
                     !this.isAcceptedCanonicalPendingDeliveryOperationCurrent(authority)
                     || !this.canonicalPendingDeliveryByLocalId.has(localId)
@@ -1708,7 +1756,9 @@ export class ApiSessionClient extends EventEmitter {
                         && 'retryable' in error
                         && (error as { retryable?: unknown }).retryable === true,
                     );
-                    if ((!retryDirective && !isResponseLoss) || attempt > 0) {
+                    const isInternalFailure = error instanceof PendingQueueAcceptedSettlementError
+                        && error.settlementError === 'internal';
+                    if (!retryDirective && !isResponseLoss && !isInternalFailure) {
                         logger.infoFile('[pendingQueue] accepted provider delivery remains unresolved', {
                             sessionId: this.sessionId,
                             localId,
@@ -1721,6 +1771,13 @@ export class ApiSessionClient extends EventEmitter {
                     const retryAfterMs = retryDirective
                         ? Math.min(60_000, Math.max(250, retryDirective.retryAfterMs))
                         : 1_000;
+                    logger.infoFile('[pendingQueue] accepted provider delivery settlement retry scheduled', {
+                        sessionId: this.sessionId,
+                        localId,
+                        attempt: attempt + 1,
+                        retryAfterMs,
+                        error: serializedError,
+                    });
                     await delayUnrefAbortable(retryAfterMs, authority.abortSignal);
                 } else {
                     return;
@@ -2437,6 +2494,41 @@ export class ApiSessionClient extends EventEmitter {
         this.explicitUserRecoveryCheckedLocalIdCleanupTimers.set(localId, timer);
     }
 
+    private resolveUsageLimitRecoveryCheckNow(): SessionRuntimeControls['checkUsageLimitRecoveryNow'] {
+        const recovery = SessionUsageLimitRecoveryV1Schema.safeParse(
+            this.metadata?.[SESSION_USAGE_LIMIT_RECOVERY_METADATA_KEY],
+        );
+        const providerCheck = this.sessionRuntimeControls.checkUsageLimitRecoveryNow;
+        if (!recovery.success || !recovery.data.runtimeAuthRecoveryAttemptId) return providerCheck;
+
+        // The durable attempt owns reset checks for active and inactive sessions alike.
+        // Provider-only actions retain their existing owner; a failed daemon check
+        // must not fall back to a second scheduler or resume the provider locally.
+        return async (request) => {
+            if (request.operation && request.operation !== 'check_now') {
+                return providerCheck
+                    ? await providerCheck(request)
+                    : { ok: false, errorCode: 'unsupported_session_runtime_method' };
+            }
+            if (request.sessionId !== this.sessionId) return { ok: false, errorCode: 'invalid_input' };
+            const unavailable = { ok: false, errorCode: 'session_usage_limit_recovery_control_remote_unavailable' };
+            try {
+                const credentials = await readCredentials();
+                const machineId = this.metadata?.machineId?.trim();
+                if (!credentials || credentials.token !== this.token || !machineId) return unavailable;
+                return await callMachineRpc({
+                    credentials,
+                    machineId,
+                    method: RPC_METHODS.DAEMON_SESSION_USAGE_LIMIT_CHECK_NOW,
+                    request,
+                    authorization: { kind: 'session.write', sessionId: this.sessionId },
+                });
+            } catch {
+                return unavailable;
+            }
+        };
+    }
+
     private async revalidateUsageLimitRecoveryForExplicitUserPrompt(localId: string): Promise<ExplicitUserRecoveryDecision> {
         const existing = this.explicitUserRecoveryDecisionsByLocalId.get(localId);
         if (existing) return await existing;
@@ -2445,7 +2537,16 @@ export class ApiSessionClient extends EventEmitter {
             if (hasClearedConnectedServiceTransitionConstraint(this.metadata)) {
                 return { status: 'ready' };
             }
-            const checkNow = this.sessionRuntimeControls.checkUsageLimitRecoveryNow;
+            const recovery = SessionUsageLimitRecoveryV1Schema.safeParse(
+                this.metadata?.[SESSION_USAGE_LIMIT_RECOVERY_METADATA_KEY],
+            );
+            if (recovery.success && recovery.data.runtimeAuthRecoveryAttemptId) {
+                // Explicit input belongs in Pending before the daemon can decide
+                // whether an automatic continuation still has work to resume.
+                // Waking recovery here can enqueue old work and reject the new input.
+                return { status: 'ready' };
+            }
+            const checkNow = this.resolveUsageLimitRecoveryCheckNow();
             if (typeof checkNow !== 'function') {
                 return hasBlockingExplicitUserRecoveryEvidence(this.metadata)
                     ? {
@@ -4613,6 +4714,20 @@ export class ApiSessionClient extends EventEmitter {
     ): Promise<void> {
         const content = this.buildUserTextMessageContent(text, opts.meta);
         const payload = this.buildOutboundSessionMessagePayload(content);
+        if (opts.provenance !== undefined) {
+            const result = await this.sessionMutationOutbox.enqueueTranscriptMessage(createTranscriptMessageAppendMutation({
+                sessionId: this.sessionId,
+                localId: opts.localId,
+                content: payload,
+                sidechainId: null,
+                messageRole: 'user',
+                provenance: opts.provenance,
+            }));
+            if (!result.persisted) {
+                throw new SessionMutationJournalAdmissionBlockedError(new Error('Session transcript journal is closed'));
+            }
+            return;
+        }
         await this.enqueueMessageCommit('required', {
             operation: 'user-message-commit',
             details: {
@@ -4791,8 +4906,17 @@ export class ApiSessionClient extends EventEmitter {
     async sendAgentMessageCommitted(
         provider: ACPProvider,
         body: ACPMessageData,
-        opts: { localId: string; meta?: Record<string, unknown> },
+        opts: { localId: string; meta?: Record<string, unknown>; provenance?: SessionTranscriptObservationProvenanceV1 },
     ): Promise<void> {
+        // Explicit observation provenance opts into durable journal custody. Callers without
+        // provenance retain the required remote-acknowledgement contract below.
+        if (opts.provenance !== undefined) {
+            const result = await this.enqueueAgentMessageCommitted(provider, body, { ...opts, provenance: opts.provenance });
+            if (!result.persisted) {
+                throw new SessionMutationJournalAdmissionBlockedError(new Error('Session transcript journal is closed'));
+            }
+            return;
+        }
         const { normalizedBody, content, localId, sidechainId } = this.prepareAcpAgentMessage({
             provider,
             body,
@@ -5520,7 +5644,8 @@ export class ApiSessionClient extends EventEmitter {
         return this.metadataLock.inLock(async () => {
             await this.waitForSessionSocketOnlineForAckWrite('update-metadata');
             await updateSessionMetadataWithAck({
-                socket: this.socket as any,
+                socket: this.socket,
+                getSocket: () => this.socket,
                 sessionId: this.sessionId,
                 sessionEncryptionMode: this.sessionEncryptionMode,
                 encryptionKey: this.encryptionKey,
@@ -5547,7 +5672,8 @@ export class ApiSessionClient extends EventEmitter {
         return this.metadataLock.inLock(async () => {
             await this.waitForSessionSocketOnlineForAckWrite('update-metadata');
             return await updateSessionMetadataWithAckResult({
-                socket: this.socket as any,
+                socket: this.socket,
+                getSocket: () => this.socket,
                 sessionId: this.sessionId,
                 sessionEncryptionMode: this.sessionEncryptionMode,
                 encryptionKey: this.encryptionKey,
@@ -5667,29 +5793,110 @@ export class ApiSessionClient extends EventEmitter {
      * Update session agent state
      * @param handler - Handler function that returns the updated agent state
      */
-    updateAgentState(handler: (metadata: AgentState) => AgentState): Promise<void> {
+    updateAgentState(handler: (state: AgentState) => AgentState, options?: AgentStateWriteOptions): Promise<void> {
         logger.debugLargeJson('Updating agent state', this.agentState);
-        return this.agentStateLock.inLock(async () => {
-            await this.waitForSessionSocketOnlineForAckWrite('update-state');
-            await updateSessionAgentStateWithAck({
-                socket: this.socket as any,
-                sessionId: this.sessionId,
-                sessionEncryptionMode: this.sessionEncryptionMode,
-                encryptionKey: this.encryptionKey,
-                encryptionVariant: this.encryptionVariant,
-                getAgentState: () => this.agentState,
-                setAgentState: (agentState) => {
-                    this.agentState = agentState;
-                },
-                getAgentStateVersion: () => this.agentStateVersion,
-                setAgentStateVersion: (version) => {
-                    this.agentStateVersion = version;
-                },
-                syncSessionSnapshotFromServer: async () => {
-                    await this.syncSessionSnapshotFromServer({ reason: 'waitForMetadataUpdate' });
-                },
-                handler,
+        let retentionAdmission: Promise<void> | undefined;
+        const update = this.agentStateLock.inLock(async () => {
+            let captured: ReturnType<typeof buildAgentStateRequestSettlement> = { v: 1, entries: [] };
+            let handlerInvoked = false;
+            const capture = (state: AgentState) => {
+                handlerInvoked = true;
+                const updated = handler(state);
+                if (options?.retainPermissionCompletionsOnFailure) {
+                    captured = buildAgentStateRequestSettlement(state, updated, { automaticHistory: true });
+                }
+                return updated;
+            };
+            try {
+                await this.waitForSessionSocketOnlineForAckWrite('update-state');
+                await updateSessionAgentStateWithAck({
+                    socket: this.socket,
+                    getSocket: () => this.socket,
+                    sessionId: this.sessionId,
+                    sessionEncryptionMode: this.sessionEncryptionMode,
+                    encryptionKey: this.encryptionKey,
+                    encryptionVariant: this.encryptionVariant,
+                    getAgentState: () => this.agentState,
+                    setAgentState: (agentState) => { this.agentState = agentState; },
+                    getAgentStateVersion: () => this.agentStateVersion,
+                    setAgentStateVersion: (version) => { this.agentStateVersion = version; },
+                    syncSessionSnapshotFromServer: async () => {
+                        await this.syncSessionSnapshotFromServer({ reason: 'waitForMetadataUpdate' });
+                    },
+                    handler: capture,
+                });
+            } catch (error) {
+                if (options?.retainPermissionCompletionsOnFailure) {
+                    retentionAdmission = (async () => {
+                        // Capture and reserve admission under the state lock; await sealing and
+                        // disk persistence only after releasing it so ordinary ACK writes can proceed.
+                        if (!handlerInvoked) capture(this.agentState ?? {});
+                        if (captured.entries.length > 0) {
+                            await this.enqueueAgentStateRequestSettlement(captured);
+                            logger.infoFile('[API] session_permission_completion_deferred', {
+                                sessionId: this.sessionId, operation: 'update-state',
+                            });
+                        }
+                    })();
+                }
+                throw error;
+            }
+        }).catch(async (error) => {
+            if (retentionAdmission) {
+                try {
+                    await retentionAdmission;
+                } catch (retentionError) {
+                    logger.infoFile('[API] session_permission_completion_retention_failed', {
+                        sessionId: this.sessionId, operation: 'journal-agent-state-completion',
+                    });
+                    throw retentionError;
+                }
+            }
+            throw error;
+        });
+        if (options?.retainPermissionCompletionsOnFailure) {
+            // The caller still observes the normal write failure. Close drains the
+            // retention attempt, whose failure is reported above in the default log.
+            const tracked = update.catch(() => undefined);
+            this.pendingDurableSessionWrites.add(tracked);
+            void tracked.then(() => this.pendingDurableSessionWrites.delete(tracked));
+        }
+        return update;
+    }
+
+    /** Durable exact request completion; publication and unrelated state updates retain their owner. */
+    updateAgentStateRequestSettlement(
+        handler: (state: AgentState) => AgentState,
+    ): Promise<void> {
+        const admission = this.admitAgentStateRequestSettlement(handler);
+        const tracked = admission.catch(() => undefined);
+        this.pendingDurableSessionWrites.add(tracked);
+        void tracked.then(() => this.pendingDurableSessionWrites.delete(tracked));
+        return admission;
+    }
+
+    private async admitAgentStateRequestSettlement(handler: (state: AgentState) => AgentState): Promise<void> {
+        const { admission } = await this.agentStateLock.inLock(() => {
+            const state = this.agentState ?? {};
+            const settlement = buildAgentStateRequestSettlement(state, handler(state));
+            // Reserve admission in capture order without holding the state lock over disk I/O.
+            return { admission: this.enqueueAgentStateRequestSettlement(settlement) };
+        });
+        await admission;
+    }
+
+    private async enqueueAgentStateRequestSettlement(
+        settlement: ReturnType<typeof buildAgentStateRequestSettlement>,
+    ): Promise<void> {
+        if (settlement.entries.length === 0) return;
+        await this.requestSettlementAdmissionLock.inLock(async () => {
+            const content = await sealAgentStateRequestSettlement(this.requestSettlementEncryptionScope, settlement);
+            const result = await this.sessionMutationOutbox.enqueueAgentStateRequestSettlement({
+                v: 1, source: 'agent_state_request_settlement', sessionId: this.sessionId,
+                mutationId: randomUUID(),
+                content,
             });
+            if (!result.persisted) throw new Error('Request settlement was not durably admitted');
         });
     }
 
@@ -5706,9 +5913,9 @@ export class ApiSessionClient extends EventEmitter {
                 error: serializeAxiosErrorForLog(error),
             });
         });
-        this.pendingSessionTurnWrites.add(tracked);
+        this.pendingDurableSessionWrites.add(tracked);
         void tracked.finally(() => {
-            this.pendingSessionTurnWrites.delete(tracked);
+            this.pendingDurableSessionWrites.delete(tracked);
         });
     }
 
@@ -5741,7 +5948,7 @@ export class ApiSessionClient extends EventEmitter {
         await Promise.all([
             this.messageCommitQueueTail.catch(() => undefined),
             this.sessionMutationOutbox.flush('flush').catch(() => undefined),
-            ...[...this.pendingSessionTurnWrites].map((update) => update.catch(() => undefined)),
+            ...this.pendingDurableSessionWrites,
         ]);
     }
 
@@ -5841,6 +6048,7 @@ export class ApiSessionClient extends EventEmitter {
 
     async close() {
         logger.debug('[API] socket.close() called');
+        this.startExecutionRunDisposal();
         this.executionRunPermissionHandler?.reset();
         this.executionRunPermissionHandler = null;
         this.pendingInputReadinessAbortController?.abort();
@@ -5919,6 +6127,17 @@ export class ApiSessionClient extends EventEmitter {
         this.runtimeTerminationStarted = true;
         this.providerInputOutcomeProducerGeneration += 1;
         this.acceptedCanonicalPendingDeliveryOperationAbortController.abort();
+        this.startExecutionRunDisposal();
+    }
+
+    private startExecutionRunDisposal(): void {
+        // Child processes must not wait behind parent provider or transport shutdown.
+        // The retained registration joins this same idempotent disposal during close().
+        void this.executionRunLifecycleRegistration?.dispose().catch((error: unknown) => {
+            logger.infoFile('[API] Failed to dispose execution runs', {
+                error: serializeAxiosErrorForLog(error),
+            });
+        });
     }
 
     hasRuntimeTerminationStarted(): boolean {
@@ -6352,13 +6571,10 @@ export class ApiSessionClient extends EventEmitter {
                 },
             };
         }
-        const pendingStateUpdate = derivePendingQueueStateAfterMaterializeResult({
-            current: this.pendingQueueState,
-            didMaterialize: materializeResult.didMaterialize,
-            authoritativeState: materializeResult.pendingQueueState ?? null,
-        });
-        if (pendingStateUpdate.state.known) {
-            this.applyPendingQueueState(pendingStateUpdate.state);
+        // Released-server acknowledgements omit the projection. Its post-commit hint may
+        // already be applied, so only the server can advance these counters and version.
+        if (materializeResult.pendingQueueState) {
+            this.applyPendingQueueState(materializeResult.pendingQueueState);
         }
         if (this.closed || this.runtimeTerminationStarted) {
             return { didMaterialize: false, result: { type: 'retryable_transport' } };

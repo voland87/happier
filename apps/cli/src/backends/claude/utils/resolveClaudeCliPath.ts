@@ -1,3 +1,4 @@
+import { realpathSync } from 'node:fs';
 import { resolveProviderCliCommand } from '@happier-dev/cli-common/providers';
 import { ProviderCliNotFoundError } from '@/runtime/managedTools/requireProviderCliCommand';
 
@@ -22,5 +23,13 @@ export function resolveClaudeCliPath(): string {
 
 export function isClaudeCliJavaScriptFile(cliPath: string): boolean {
   const normalized = typeof cliPath === 'string' ? cliPath.trim() : '';
-  return normalized.endsWith('.js') || normalized.endsWith('.cjs') || normalized.endsWith('.mjs');
+  // Match the launcher's import path, including extensionless links and links retargeted by updates.
+  let launchPath: string;
+  try {
+    launchPath = realpathSync(normalized);
+  } catch {
+    // Classification cannot establish a JavaScript target; launching still reports the filesystem failure.
+    return false;
+  }
+  return launchPath.endsWith('.js') || launchPath.endsWith('.cjs') || launchPath.endsWith('.mjs');
 }

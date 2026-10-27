@@ -12,7 +12,7 @@ import {
 } from '@/hooks/session/useVisibleSessionListViewData';
 import { HiddenInactiveSessionsEmptyState } from '@/components/sessions/guidance/HiddenInactiveSessionsEmptyState';
 import { SessionsListContent } from '@/components/sessions/shell/SessionsList';
-import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
+import { ActivitySpinner, HERO_SPINNER_SIZE } from '@/components/ui/feedback/ActivitySpinner';
 import { readSessionIdFromPathname } from '@/components/sessions/shell/readSessionIdFromPathname';
 import {
     resolvePhoneRootSessionListSurfaceDataActive,
@@ -247,7 +247,7 @@ const SessionsListWrapperContent = React.memo((props: { pathname: string; surfac
                 {storageChrome}
                 <View style={styles.loadingContainerWrapper}>
                     <View style={styles.loadingContainer}>
-                        <ActivitySpinner size="small" color={theme.colors.text.secondary} />
+                        <ActivitySpinner size={HERO_SPINNER_SIZE} color={theme.colors.text.secondary} />
                     </View>
                 </View>
             </View>

@@ -1,9 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
+import { encodeBase64, encrypt } from '@/api/encryption';
+import * as processInstanceBoundary from '@happier-dev/cli-common/processInstance';
+import type { Metadata } from '@/api/types';
 import { access, mkdir, mkdtemp, readFile, rm, unlink, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { EventEmitter } from 'node:events';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
+import psList from 'ps-list';
 
 import { HAPPIER_DAEMON_SPAWN_SELF_MIGRATE_CGROUP_ENV_KEY } from './platform/linux/daemonSpawnedSessionCgroupSelfMigration';
 import { createHttpStatusError } from '@/api/client/httpStatusError';
@@ -169,6 +173,23 @@ async function createValidClaudeEndpointFixture(
 }
 
 const ORIGINAL_PLATFORM_DESCRIPTOR = Object.getOwnPropertyDescriptor(process, 'platform');
+
+async function stubRunnerProcessCensus(agent: 'claude' | 'codex') {
+  const childProcessBoundary = await import('node:child_process');
+  const actualChildProcessBoundary = await vi.importActual<typeof import('node:child_process')>('node:child_process');
+  // Synthetic runner PIDs need matching OS rows, not the shared host's census.
+  // Keep the real process classifier, fingerprint checks and snapshot cache.
+  vi.spyOn(childProcessBoundary, 'execFileSync').mockImplementation(((file, args, options) => {
+    if (file === 'ps' && Array.isArray(args) && args.includes('-p')
+      && (args.includes('12345') || args.includes('23456'))) {
+      const command = `/test/apps/cli/dist/index.mjs ${agent} --started-by daemon`;
+      if (args.includes('stat=,ucomm=,command=')) return `S node ${command}\n`;
+      if (args.includes('command=')) return `${command}\n`;
+    }
+    return actualChildProcessBoundary.execFileSync(file, args, options);
+  }) as typeof childProcessBoundary.execFileSync);
+}
+
 const { spawnChildProcess } = vi.hoisted(() => ({
   spawnChildProcess: vi.fn(() => ({
     pid: 12345,
@@ -290,6 +311,7 @@ const harness = vi.hoisted(() => {
     sessionId: string;
     event: string;
     terminalStatus?: string;
+    turnId?: string;
   }) => Promise<unknown>) | null = null;
   let resolveSpawnSessionByNonceRef: ((spawnNonce: string) => Promise<unknown> | unknown) | null = null;
   let sessionRunnerStatusHandlerRef: ((input: { sessionId: string }) => Promise<any>) | null = null;
@@ -429,6 +451,11 @@ vi.mock('node:child_process', async (importOriginal) => {
   };
 });
 
+vi.mock('ps-list', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('ps-list')>();
+  return { ...actual, default: vi.fn(actual.default) };
+});
+
 vi.mock('@/api/machine/ensureMachineRegistered', () => ({
   ensureMachineRegistered: vi.fn(async ({ machineId }: { machineId: string }) => ({
     machineId,
@@ -502,7 +529,7 @@ vi.mock('@/ui/doctor', () => ({
   getEnvironmentInfo: vi.fn(() => ({})),
 }));
 
-const spawnHappyCLI = vi.fn((argv: string[], _opts?: unknown) => {
+function spawnHappyCliBoundary(argv: string[], _opts?: unknown) {
   const child = {
     pid: 12345,
     stdout: null,
@@ -512,7 +539,8 @@ const spawnHappyCLI = vi.fn((argv: string[], _opts?: unknown) => {
   };
   spawnHappyCliCapture.children.push(child);
   return child;
-});
+}
+const spawnHappyCLI = vi.fn(spawnHappyCliBoundary);
 const resolveHappyCliSubprocessRuntimeDecision = vi.hoisted(() =>
   vi.fn<() => HappyCliSubprocessRuntimeDecision | null>(() => null),
 );
@@ -720,13 +748,15 @@ vi.mock('@/backends/catalog', async (importOriginal) => {
   };
 });
 
-vi.mock('@/persistence', () => ({
+vi.mock('@/persistence', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@/persistence')>(),
   writeDaemonState: vi.fn(),
   writeDaemonStateIfLockOwned: vi.fn(() => true),
   writeConnectedServiceBrokerState: vi.fn(),
   acquireDaemonLock: vi.fn(async () => ({ release: vi.fn(async () => {}) })),
   releaseDaemonLock: vi.fn(async () => {}),
   readCredentials: vi.fn(async () => null),
+  readSettings: vi.fn(async () => ({})),
 }));
 
 vi.mock('@/session/metadata/updateSessionMetadataWithRetry', () => ({
@@ -897,9 +927,10 @@ vi.mock('@/integrations/terminalHost/defaultRegistry', async importOriginal => (
   })),
 }));
 
-vi.mock('./sessions/onHappySessionWebhook', () => ({
-  createOnHappySessionWebhook: vi.fn(() => vi.fn()),
-}));
+vi.mock('./sessions/onHappySessionWebhook', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./sessions/onHappySessionWebhook')>();
+  return { ...actual, createOnHappySessionWebhook: vi.fn(actual.createOnHappySessionWebhook) };
+});
 
 vi.mock('./processRunState', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./processRunState')>();
@@ -1124,7 +1155,8 @@ describe('startDaemon spawn resume wiring (integration)', () => {
     vi.unstubAllGlobals();
     harness.resetControlRefs();
     harness.apiMachine.recoverDaemonTerminalSessionMutationJournals.mockClear();
-    spawnHappyCLI.mockClear();
+    spawnHappyCLI.mockReset();
+    spawnHappyCLI.mockImplementation(spawnHappyCliBoundary);
     herdrSpawnCapture.createPane.mockClear();
     herdrSpawnCapture.processInfo.mockClear();
     herdrSpawnCapture.findPane.mockClear();
@@ -1620,7 +1652,29 @@ describe('startDaemon spawn resume wiring (integration)', () => {
     }
   }, 120_000);
 
-  it('rejoins an accepted existing-session launch while its exact live child is still awaiting the webhook', async () => {
+  it.each(['existing', 'fresh', 'encrypted', 'stale_pid', 'legacy', 'other_machine', 'unknown_process', 'lookup_failed', 'webhook_during_lookup', 'exit_during_lookup', 'locked_runner', 'wrapper', 'windows_dispatcher'] as const)('handles an accepted %s launch before its session webhook', async (startup) => {
+    await stubRunnerProcessCensus('codex');
+    const isFresh = startup !== 'existing';
+    const actualPsList = await vi.importActual<typeof import('ps-list')>('ps-list');
+    const { clearProcessSnapshotCacheForTests } = await import('./processSnapshotCache');
+    // These runners have fixture PIDs; their OS inventory must describe the same
+    // processes as the run-state and fingerprint boundaries below.
+    vi.mocked(psList).mockResolvedValue([12345, 23456].map(pid => ({
+      pid, ppid: process.pid, name: 'node',
+      cmd: 'node /tmp/lib/dist/index.mjs codex --started-by daemon',
+    })));
+    clearProcessSnapshotCacheForTests();
+    const spawnBoundary = spawnHappyCliBoundary;
+    spawnHappyCLI.mockImplementationOnce(spawnBoundary).mockImplementationOnce((argv, options) => {
+      const child = spawnBoundary(argv, options);
+      child.pid = 12346;
+      return child;
+    });
+    const readFingerprint = processInstanceBoundary.readProcessInstanceFingerprintSync;
+    const fingerprintSpy = vi.spyOn(processInstanceBoundary, 'readProcessInstanceFingerprintSync')
+      .mockImplementation(pid => pid === 23456 ? 'fixture-current-generation'
+        : pid === 12345 ? (startup === 'wrapper' || startup === 'windows_dispatcher' ? 'fixture-wrapper-generation' : 'fixture-current-generation')
+          : readFingerprint(pid));
     const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
     const refreshEnvOriginal = process.env.HAPPIER_CONNECTED_SERVICES_REFRESH_ENABLED;
     process.env.HAPPIER_CONNECTED_SERVICES_REFRESH_ENABLED = 'false';
@@ -1652,16 +1706,30 @@ describe('startDaemon spawn resume wiring (integration)', () => {
       return completion;
     });
     const sessionId = 'sess_existing_startup_pending';
-    vi.mocked(fetchSessionByIdCompat).mockResolvedValue(createSessionRecordFixture({
+    const metadata: Metadata = {
+      flavor: 'codex', codexSessionId: 'vendor-existing-startup-pending', path: '/tmp',
+      machineId: startup === 'other_machine' ? 'machine-other' : 'machine-1',
+      hostPid: startup === 'wrapper' || startup === 'windows_dispatcher' ? 23456 : 12345, startedBy: 'daemon', happyHomeDir: '/tmp/happy-home',
+      host: 'fixture-host', homeDir: '/tmp', happyLibDir: '/tmp/lib', happyToolsDir: '/tmp/tools',
+      ...(startup === 'legacy' ? {} : { hostProcessInstanceFingerprint:
+        startup === 'stale_pid' ? 'fixture-previous-generation' : 'fixture-current-generation' }),
+    };
+    if (startup === 'windows_dispatcher') {
+      const { buildWindowsHostedTerminalAttachment } = await import('./platform/windows/windowsHostedSessionRuntime');
+      metadata.terminal = buildWindowsHostedTerminalAttachment({
+        actualMode: 'windows_terminal', requestedMode: 'windows_terminal', pid: 23456,
+        windowId: 'fresh-window', title: 'fresh-title',
+      });
+    }
+    const rawSession = createSessionRecordFixture({
       id: sessionId,
-      encryptionMode: 'plain',
-      metadata: JSON.stringify({
-        flavor: 'codex',
-        codexSessionId: 'vendor-existing-startup-pending',
-        path: '/tmp',
-      }),
+      encryptionMode: startup === 'encrypted' ? 'e2ee' : 'plain',
+      metadata: startup === 'encrypted'
+        ? encodeBase64(encrypt(new Uint8Array(32).fill(2), 'dataKey', metadata), 'base64')
+        : JSON.stringify(metadata),
       dataEncryptionKey: null,
-    }));
+    });
+    vi.mocked(fetchSessionByIdCompat).mockResolvedValue(rawSession);
     pendingMaterializationRpcMocks.resolveSessionTransportContext.mockResolvedValue({
       ok: true,
       sessionId,
@@ -1689,28 +1757,103 @@ describe('startDaemon spawn resume wiring (integration)', () => {
 
       await expect(spawnSession({
         ...baseOptions,
+        ...(isFresh ? { existingSessionId: undefined, spawnNonce: 'fresh-startup-nonce' } : {}),
         executionAuthorization: { provenance: 'user_request', requestId: 'pending-local-first' },
-      })).resolves.toEqual({
+      })).resolves.toEqual(isFresh ? {
+        type: 'success',
+        sessionIdStatus: 'pending',
+        spawnNonce: 'fresh-startup-nonce',
+        runnerAcceptance: 'newly_accepted',
+      } : {
         type: 'success',
         sessionId,
         runnerAcceptance: 'newly_accepted',
       });
       expect(webhookControl.resolve).not.toBeNull();
 
-      await expect(spawnSession({
+      const webhookModule = await import('./sessions/onHappySessionWebhook');
+      const reportFactory = vi.mocked(webhookModule.createOnHappySessionWebhook);
+      const reportParams = reportFactory.mock.calls.at(-1)?.[0];
+      const report = reportFactory.mock.results.at(-1)?.value;
+      if (!reportParams || typeof report !== 'function') throw new Error('Expected real report owner');
+      const trackedChild = reportParams.pidToTrackedSession.get(12345);
+      if (!trackedChild) throw new Error('Expected accepted child');
+      if (startup === 'wrapper') {
+        trackedChild.sessionRunnerPid = 23456;
+      }
+      if (startup === 'windows_dispatcher') {
+        const { buildWindowsHostedTerminalAttachment } = await import('./platform/windows/windowsHostedSessionRuntime');
+        trackedChild.hostedTerminal = buildWindowsHostedTerminalAttachment({
+          actualMode: 'windows_terminal', requestedMode: 'windows_terminal', pid: 12345,
+          windowId: 'fresh-window', title: 'fresh-title',
+        });
+        sessionRunnerActivityBoundaryMocks.readProcessRunState.mockImplementation(async pid => pid === 12345 ? 'dead' : 'servable');
+      }
+      if (startup === 'locked_runner') {
+        sessionRunnerActivityBoundaryMocks.readSessionRunnerLockStatus.mockResolvedValue({
+          ok: true, lock: { sessionId, pid: 54321, acquiredAtMs: 1 },
+        });
+        pendingMaterializationRpcMocks.callSessionRpc.mockImplementation(async params =>
+          params.method.endsWith('wakeCapability.v1.get')
+            ? { ok: true, capability: 'pending_queue_wake_v1', protocolVersion: 1, method: 'session.pendingQueue.wake.v1' }
+            : { ok: true, result: 'wake_published' });
+      }
+      if (startup === 'unknown_process') {
+        sessionRunnerActivityBoundaryMocks.readProcessRunState.mockRejectedValue(new Error('OS state unavailable'));
+      }
+      if (startup === 'lookup_failed') {
+        vi.mocked(fetchSessionByIdCompat).mockRejectedValueOnce(new Error('Server unavailable'));
+      }
+      if (startup === 'webhook_during_lookup') {
+        pendingMaterializationRpcMocks.callSessionRpc.mockImplementation(async params =>
+          params.method.endsWith('wakeCapability.v1.get')
+            ? { ok: true, capability: 'pending_queue_wake_v1', protocolVersion: 1, method: 'session.pendingQueue.wake.v1' }
+            : { ok: true, result: 'wake_published' });
+        vi.mocked(fetchSessionByIdCompat).mockImplementationOnce(async () => {
+          await report(sessionId, metadata);
+          return rawSession;
+        });
+      }
+      if (startup === 'exit_during_lookup') {
+        vi.mocked(fetchSessionByIdCompat).mockImplementationOnce(async () => {
+          reportParams.pidToTrackedSession.delete(12345);
+          reportParams.pidToAwaiter.delete(12345);
+          return rawSession;
+        });
+      }
+      const resumeResult = await spawnSession({
         ...baseOptions,
         executionAuthorization: { provenance: 'user_request', requestId: 'pending-local-retry' },
-      })).resolves.toEqual({
-        type: 'success',
-        sessionId,
-        runnerAcceptance: 'preexisting_or_adopted',
       });
-
-      expect(spawnHappyCLI).toHaveBeenCalledTimes(1);
-      expect(waitForSessionWebhookMock).toHaveBeenCalledTimes(1);
-      expect(pendingMaterializationRpcMocks.callSessionRpc).not.toHaveBeenCalled();
-      expect(explicitRecoveryCheckSpy).not.toHaveBeenCalled();
-      expect(materializeNextPendingQueueV2MessageViaHttp).not.toHaveBeenCalled();
+      const shouldFence = startup === 'legacy' || startup === 'unknown_process' || startup === 'lookup_failed';
+      const shouldSpawn = startup === 'stale_pid' || startup === 'other_machine' || startup === 'exit_during_lookup';
+      if (shouldFence) {
+        expect(resumeResult).toMatchObject({ type: 'error', errorCode: SPAWN_SESSION_ERROR_CODES.UNEXPECTED });
+      } else {
+        expect(resumeResult).toEqual({
+          type: 'success', sessionId,
+          runnerAcceptance: shouldSpawn ? 'newly_accepted' : 'preexisting_or_adopted',
+        });
+      }
+      expect(spawnHappyCLI).toHaveBeenCalledTimes(shouldSpawn ? 2 : 1);
+      expect(waitForSessionWebhookMock).toHaveBeenCalledTimes(shouldSpawn ? 2 : 1);
+      if (startup !== 'webhook_during_lookup' && startup !== 'locked_runner') {
+        expect(pendingMaterializationRpcMocks.callSessionRpc).not.toHaveBeenCalled();
+        expect(explicitRecoveryCheckSpy).not.toHaveBeenCalled();
+        expect(materializeNextPendingQueueV2MessageViaHttp).not.toHaveBeenCalled();
+      }
+      if (startup === 'stale_pid' || startup === 'legacy' || startup === 'lookup_failed' || startup === 'other_machine' || startup === 'locked_runner') {
+        expect(trackedChild.happySessionId).toBeUndefined();
+        // A later genuine webhook must still be able to bind the actual new Session.
+        if (startup === 'stale_pid') {
+          await report('sess_actual_fresh_child', { ...metadata, hostProcessInstanceFingerprint: 'fixture-current-generation' });
+          expect(trackedChild.happySessionId).toBe('sess_actual_fresh_child');
+        }
+      }
+      if (startup === 'fresh' || startup === 'encrypted' || startup === 'unknown_process' || startup === 'wrapper' || startup === 'windows_dispatcher') {
+        expect(trackedChild.happySessionId).toBe(sessionId);
+        expect(reportParams.pidToAwaiter.has(12345)).toBe(true);
+      }
 
       webhookControl.resolve?.({
         pid: 12345,
@@ -1737,6 +1880,11 @@ describe('startDaemon spawn resume wiring (integration)', () => {
       else process.env.HAPPIER_CONNECTED_SERVICES_REFRESH_ENABLED = refreshEnvOriginal;
       await restoreDaemonExitBoundary(exitSpy);
       featureDecisionSpy.mockRestore();
+      fingerprintSpy.mockRestore();
+      vi.mocked(psList).mockImplementation(actualPsList.default);
+      clearProcessSnapshotCacheForTests();
+      spawnHappyCLI.mockReset();
+      spawnHappyCLI.mockImplementation(spawnBoundary);
     }
   });
 
@@ -2353,20 +2501,7 @@ describe('startDaemon spawn resume wiring (integration)', () => {
     const isExitBeforeFirstReport = contract === 'exit_before_first_report';
     const isEarlyRegularExit = contract === 'early_regular_exit' || contract === 'early_regular_report_exit' || isWrapperPromotion || isExitBeforeFirstReport;
     const fixtureAgent = isEarlyRegularExit || isRestoredPlain || isWindows ? 'codex' : 'claude';
-    const childProcessBoundary = await import('node:child_process');
-    const actualChildProcessBoundary = await vi.importActual<typeof import('node:child_process')>('node:child_process');
-    // Synthetic runner PIDs must have matching OS census evidence. Returning an
-    // actual process row keeps classification and report-marker custody real,
-    // without falling through to the shared machine's unrelated process census.
-    vi.spyOn(childProcessBoundary, 'execFileSync').mockImplementation(((file, args, options) => {
-      if (file === 'ps' && Array.isArray(args) && args.includes('-p')
-        && (args.includes('12345') || args.includes('23456'))) {
-        const command = `/test/apps/cli/dist/index.mjs ${fixtureAgent} --started-by daemon`;
-        if (args.includes('stat=,ucomm=,command=')) return `S node ${command}\n`;
-        if (args.includes('command=')) return `${command}\n`;
-      }
-      return actualChildProcessBoundary.execFileSync(file, args, options);
-    }) as typeof childProcessBoundary.execFileSync);
+    await stubRunnerProcessCensus(fixtureAgent);
     const isNonceReplay = contract.endsWith('_nonce_replay');
     const recoveredReady = contract === 'ready_nonce_replay' || isRestoredPlain || contract === 'missing_id_nonce_replay' || contract === 'legacy_windows_nonce_replay'
       || contract === 'console_nonce_replay' || contract === 'tmux_nonce_replay' || contract === 'zellij_nonce_replay';
@@ -4111,6 +4246,292 @@ describe('startDaemon spawn resume wiring (integration)', () => {
         process.env.HAPPIER_CONNECTED_SERVICES_REFRESH_ENABLED = refreshEnvOriginal;
       }
       await restoreDaemonExitBoundary(exitSpy);
+    }
+  });
+
+  type StaleRunnerOnUpdateScenario = Readonly<{
+    run: Promise<void>;
+    isSignalled: (pid: number) => boolean;
+    waitUntil: (condition: () => boolean, attempts?: number) => Promise<void>;
+    exitObservers: Array<(pid: number, exit: { reason: string; code: number | null; signal: string | null }) => void>;
+  }>;
+
+  async function runStaleRunnerOnUpdateScenario(
+    body: (scenario: StaleRunnerOnUpdateScenario) => Promise<void>,
+    options: Readonly<{
+      isPidSafe?: () => Promise<boolean>;
+      env?: Record<string, string>;
+      onStarted?: (sessions: Map<number, import('./types').TrackedSession>) => void;
+    }> = {},
+  ): Promise<void> {
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+    // OS boundaries only: process signalling, the pid identity probe, and the exit poller.
+    const killSpy = vi.spyOn(process, 'kill').mockImplementation((() => true) as never);
+    const pidSafetyModule = await import('@/daemon/pidSafety');
+    const pidSafetySpy = vi.spyOn(pidSafetyModule, 'isPidSafeHappySessionProcess')
+      .mockImplementation(options.isPidSafe ?? (async () => true));
+    const exitObservers: StaleRunnerOnUpdateScenario['exitObservers'] = [];
+    const waitForExitModule = await import('./sessions/waitForExistingSessionExitIfStopRequested');
+    const waitForExitSpy = vi.spyOn(waitForExitModule, 'waitForExistingSessionExitIfStopRequested')
+      .mockImplementation(async (params: any) => {
+        exitObservers.push((pid, exit) => {
+          params.onExitObserved?.(pid, exit);
+          params.pidToTrackedSession.delete(pid);
+        });
+      });
+    const persistence = await import('@/persistence');
+    vi.mocked(persistence.readSettings).mockResolvedValue({
+      schemaVersion: 6,
+      onboardingCompleted: true,
+      restartSessionRunnersOnUpdate: true,
+    });
+    const { buildHappyCliSubprocessLaunchSpec } = await import('@/utils/spawnHappyCLI');
+    vi.mocked(buildHappyCliSubprocessLaunchSpec).mockImplementation((args) => ({
+      runtime: 'node',
+      filePath: process.execPath,
+      args: ['/home/alice/.happier/cli/versions/0.2.11/package-dist/index.mjs', ...args],
+    }));
+    const envKeys = ['HAPPIER_CONNECTED_SERVICES_REFRESH_ENABLED', ...Object.keys(options.env ?? {})];
+    const envBackup = new Map(envKeys.map((key) => [key, process.env[key]]));
+    process.env.HAPPIER_CONNECTED_SERVICES_REFRESH_ENABLED = 'false';
+    for (const [key, value] of Object.entries(options.env ?? {})) process.env[key] = value;
+    let run: Promise<void> | null = null;
+    let finished = false;
+
+    try {
+      const reattachModule = await import('./sessions/reattachFromMarkers');
+      vi.mocked(reattachModule.reattachTrackedSessionsFromMarkers).mockImplementation(async ({ pidToTrackedSession }) => {
+        pidToTrackedSession.set(6480, {
+          pid: 6480,
+          startedBy: 'daemon',
+          happySessionId: 'sess-stale-on-update',
+          reattachedFromDiskMarker: true,
+          processCommand:
+            'node /home/alice/.happier/cli/versions/0.2.10/package-dist/index.mjs claude --happy-starting-mode remote --started-by daemon',
+          vendorResumeId: 'claude-stale-thread',
+          spawnOptions: {
+            directory: '/tmp/workspace-stale-on-update',
+            backendTarget: { kind: 'builtInAgent', agentId: 'claude' },
+            resume: 'claude-stale-thread',
+          },
+        });
+        pidToTrackedSession.set(6481, {
+          pid: 6481,
+          startedBy: 'daemon',
+          happySessionId: 'sess-current-on-update',
+          reattachedFromDiskMarker: true,
+          processCommand:
+            'node /home/alice/.happier/cli/versions/0.2.11/package-dist/index.mjs claude --happy-starting-mode remote --started-by daemon',
+          vendorResumeId: 'claude-current-thread',
+          spawnOptions: {
+            directory: '/tmp/workspace-current-on-update',
+            backendTarget: { kind: 'builtInAgent', agentId: 'claude' },
+            resume: 'claude-current-thread',
+          },
+        });
+        options.onStarted?.(pidToTrackedSession);
+        return { orphanedDeadDaemonSessions: [], connectedServiceRestartIntents: [] };
+      });
+
+      const { startDaemon } = await import('./startDaemon');
+      run = startDaemon().finally(() => {
+        finished = true;
+      });
+
+      const isSignalled = (pid: number) => killSpy.mock.calls.some(
+        ([target, signal]) => (target === pid || target === -pid) && signal === 'SIGTERM',
+      );
+      const waitUntil = async (condition: () => boolean, attempts = 200) => {
+        for (let attempt = 0; attempt < attempts && !condition(); attempt += 1) {
+          await new Promise((resolve) => setTimeout(resolve, 5));
+        }
+      };
+      await body({ run, isSignalled, waitUntil, exitObservers });
+    } finally {
+      if (run && !finished) {
+        harness.requestShutdown('happier-cli');
+        await run;
+      }
+      const reattachModule = await import('./sessions/reattachFromMarkers');
+      vi.mocked(reattachModule.reattachTrackedSessionsFromMarkers).mockImplementation(async () => ({
+        orphanedDeadDaemonSessions: [],
+        connectedServiceRestartIntents: [],
+      }));
+      vi.mocked(persistence.readSettings).mockResolvedValue({ schemaVersion: 6, onboardingCompleted: true });
+      vi.mocked(buildHappyCliSubprocessLaunchSpec).mockReset();
+      for (const [key, value] of envBackup) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+      waitForExitSpy.mockRestore();
+      pidSafetySpy.mockRestore();
+      killSpy.mockRestore();
+      await restoreDaemonExitBoundary(exitSpy);
+    }
+  }
+
+  it('restarts stale reattached runners onto the current CLI after startup when restartSessionRunnersOnUpdate is on', async () => {
+    await runStaleRunnerOnUpdateScenario(async ({ run, isSignalled, waitUntil }) => {
+      await waitUntil(() => isSignalled(6480));
+
+      expect(isSignalled(6480)).toBe(true);
+      expect(isSignalled(6481)).toBe(false);
+
+      harness.requestShutdown('happier-cli');
+      await run;
+    });
+  });
+
+  it('does not signal a stale runner once shutdown begins during the final safety probe', async () => {
+    let probeStarted = false;
+    let probeFinished = false;
+    await runStaleRunnerOnUpdateScenario(async ({ run, isSignalled, waitUntil }) => {
+      await waitUntil(() => probeStarted);
+      harness.requestShutdown('happier-cli');
+      await run;
+      await waitUntil(() => probeFinished);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+
+      expect(probeFinished).toBe(true);
+      expect(isSignalled(6480)).toBe(false);
+    }, {
+      isPidSafe: async () => {
+        probeStarted = true;
+        // Hold the awaited identity probe open until shutdown has begun.
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        probeFinished = true;
+        return true;
+      },
+    });
+  });
+
+  it('keeps shutdown open until an already-signalled restart has respawned', async () => {
+    await runStaleRunnerOnUpdateScenario(async ({ run, isSignalled, waitUntil }) => {
+      await waitUntil(() => isSignalled(6480));
+      expect(isSignalled(6480)).toBe(true);
+
+      let shutdownFinished = false;
+      void run.then(() => {
+        shutdownFinished = true;
+      });
+      harness.requestShutdown('happier-cli');
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      expect(shutdownFinished).toBe(false);
+
+      // The respawn manager is the mocked process-supervision boundary; report the replacement.
+      const manager = sessionRespawnManagerCapture.instances.at(-1);
+      manager?.__params.onRespawnSuccess?.({ sessionId: 'sess-stale-on-update', previousPid: 6480, result: {} });
+      await run;
+      expect(shutdownFinished).toBe(true);
+    }, { env: { HAPPIER_DAEMON_SHUTDOWN_SPAWN_DRAIN_GRACE_MS: '5000' } });
+  });
+
+  it('records a turn start as in flight before its marker write finishes', async () => {
+    const sessionRegistryModule = await import('./sessionRegistry');
+    let releaseMarkerWrite: (() => void) | null = null;
+    const markerSpy = vi.spyOn(sessionRegistryModule, 'updateSessionMarkerActiveTurn')
+      .mockImplementation(async () => {
+        // Persistent marker storage is the boundary; hold the write open.
+        await new Promise<void>((resolve) => {
+          releaseMarkerWrite = resolve;
+        });
+        return true;
+      });
+    try {
+      await runStaleRunnerOnUpdateScenario(async ({ run, waitUntil }) => {
+        await waitUntil(() => harness.getTurnLifecycleHandler() !== null && harness.getSessionRunnerStatusHandler() !== null);
+        const turnLifecycleHandler = harness.getTurnLifecycleHandler()!;
+        const statusHandler = harness.getSessionRunnerStatusHandler()!;
+
+        const lifecycle = turnLifecycleHandler({
+          sessionId: 'sess-current-on-update',
+          event: 'prompt_or_steer',
+          turnId: 'turn-1',
+        });
+        await waitUntil(() => releaseMarkerWrite !== null);
+
+        const status = await statusHandler({ sessionId: 'sess-current-on-update' });
+        expect(status.plannedRestart.disabledReason).toBe('turn_in_progress');
+
+        releaseMarkerWrite!();
+        await lifecycle;
+        harness.requestShutdown('happier-cli');
+        await run;
+      }, {
+        // Keep the startup pass from signalling so the scenario isolates turn-lifecycle ordering.
+        isPidSafe: async () => false,
+      });
+    } finally {
+      markerSpy.mockRestore();
+    }
+  });
+
+  it('records a turn end before throttle recovery cleanup settles', async () => {
+    const sessionRegistryModule = await import('./sessionRegistry');
+    const { withJsonOwnerFileLock } = await import('@/utils/fs/jsonOwnerFileLock');
+    const markerSpy = vi.spyOn(sessionRegistryModule, 'updateSessionMarkerActiveTurn').mockResolvedValue(true);
+    const throttleStorePath = '/tmp/happy-home/servers/active/connected-services/temporary-throttle-recovery.json';
+    let releaseStoreLock: (() => void) | null = null;
+    let storeLock: Promise<void> | null = null;
+    try {
+      await runStaleRunnerOnUpdateScenario(async ({ run, waitUntil }) => {
+        await waitUntil(() => harness.getTurnLifecycleHandler() !== null && harness.getSessionRunnerStatusHandler() !== null);
+        const turnLifecycleHandler = harness.getTurnLifecycleHandler()!;
+        const statusHandler = harness.getSessionRunnerStatusHandler()!;
+        await turnLifecycleHandler({ sessionId: 'sess-current-on-update', event: 'prompt_or_steer', turnId: 'turn-1' });
+
+        // An armed capacity recovery makes a completed turn clear it from the durable store.
+        await mkdir(dirname(throttleStorePath), { recursive: true });
+        await writeFile(throttleStorePath, JSON.stringify({
+          v: 1,
+          intentsBySessionId: {
+            'sess-current-on-update': {
+              v: 1, status: 'waiting', issueFingerprint: 'temporary-throttle:test', armedAtMs: 0,
+              nextRetryAtMs: Date.now() + 3_600_000, retryAfterMs: null, resetAtMs: null,
+              attemptCount: 0, capacityFailureCount: 1, maxAttempts: 0, lastError: null, continuation: null,
+            },
+          },
+        }));
+        // Hold the store's real file lock so that cleanup stays pending.
+        let storeLockHeld = false;
+        storeLock = withJsonOwnerFileLock({
+          lockPath: `${throttleStorePath}.lock`,
+          timeoutMs: 10_000,
+          staleAfterMs: 30_000,
+          errorCode: 'test_lock_timeout',
+        }, async () => {
+          storeLockHeld = true;
+          await new Promise<void>((resolve) => { releaseStoreLock = resolve; });
+        });
+        await waitUntil(() => storeLockHeld);
+
+        const lifecycle = turnLifecycleHandler({
+          sessionId: 'sess-current-on-update',
+          event: 'assistant_message_end',
+          terminalStatus: 'completed',
+          turnId: 'turn-1',
+        });
+        let disabledReason: unknown = 'turn_in_progress';
+        for (let attempt = 0; attempt < 100 && disabledReason === 'turn_in_progress'; attempt += 1) {
+          disabledReason = (await statusHandler({ sessionId: 'sess-current-on-update' })).plannedRestart.disabledReason;
+          if (disabledReason === 'turn_in_progress') await new Promise((resolve) => setTimeout(resolve, 5));
+        }
+        expect(disabledReason).not.toBe('turn_in_progress');
+
+        releaseStoreLock!();
+        await storeLock;
+        await lifecycle;
+        harness.requestShutdown('happier-cli');
+        await run;
+      }, {
+        // Keep the startup pass from signalling so the scenario isolates turn-lifecycle ordering.
+        isPidSafe: async () => false,
+      });
+    } finally {
+      (releaseStoreLock as (() => void) | null)?.();
+      await storeLock;
+      await rm(throttleStorePath, { force: true });
+      markerSpy.mockRestore();
     }
   });
 

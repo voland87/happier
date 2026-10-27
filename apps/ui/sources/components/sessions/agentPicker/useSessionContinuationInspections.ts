@@ -109,8 +109,9 @@ export function useSessionContinuationInspections(
         // Claim before awaiting so a re-render mid-flight cannot ask twice.
         for (const selection of pending) scope.asked.add(selectionKey(selection));
 
-        // The daemon reads and decrypts the source Session once, then evaluates
-        // every target against that one canonical source. Publishing the ordered
+        // The operation batches each supported target family against the canonical
+        // source Session, keeping configured requests away from legacy readers.
+        // Publishing the ordered
         // result once also prevents one state update and picker recomputation per
         // Agent row. The compatibility adapter inside this operation falls back
         // to the published single-target RPC only for an older daemon.

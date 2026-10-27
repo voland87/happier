@@ -72,19 +72,12 @@ function writeTinyRuntimeAssets(root: string, { includeDevCommandWrapper = true 
   const toolsDir = join(root, 'tools', 'unpacked');
   mkdirSync(scriptsDir, { recursive: true });
   mkdirSync(toolsDir, { recursive: true });
-  for (const scriptName of [
-    'terminal_launch_spec_runner.cjs',
-    'process_tree.cjs',
-    'claude_local_launcher.cjs',
-    'claude_remote_launcher.cjs',
-    'claude_launcher_runtime.cjs',
-    'childProcessOptions.cjs',
-    ...(includeDevCommandWrapper ? ['env-wrapper.cjs'] : []),
-    'ripgrep_launcher.cjs',
-    'node_pty_relay.cjs',
-  ]) {
-    writeFileSync(join(scriptsDir, scriptName), `module.exports = ${JSON.stringify(scriptName)};\n`, 'utf8');
+  for (const relativePath of realSpawnHappyCli.PINNED_RUNNER_REQUIRED_ASSET_RELATIVE_PATHS) {
+    const assetPath = join(root, ...relativePath);
+    mkdirSync(dirname(assetPath), { recursive: true });
+    writeFileSync(assetPath, `module.exports = ${JSON.stringify(relativePath)};\n`, 'utf8');
   }
+  if (includeDevCommandWrapper) writeFileSync(join(scriptsDir, 'env-wrapper.cjs'), 'module.exports = "env-wrapper.cjs";\n', 'utf8');
   writeFileSync(join(toolsDir, 'rg'), '#!/bin/sh\nexit 0\n', 'utf8');
 }
 
@@ -243,11 +236,8 @@ describe('spawnHappyCLI fallback invocation', () => {
       expect(pinnedEntrypoint).toBeDefined();
       const snapshotRoot = dirname(pinnedEntrypoint!);
       for (const relativeAssetPath of [
-        ['scripts', 'terminal_launch_spec_runner.cjs'],
-        ['scripts', 'process_tree.cjs'],
-        ['scripts', 'claude_local_launcher.cjs'],
+        ...realSpawnHappyCli.PINNED_RUNNER_REQUIRED_ASSET_RELATIVE_PATHS,
         ['scripts', 'env-wrapper.cjs'],
-        ['scripts', 'ripgrep_launcher.cjs'],
         ['tools', 'unpacked', 'rg'],
       ]) {
         expect(existsSync(join(snapshotRoot, ...relativeAssetPath))).toBe(true);
@@ -258,6 +248,10 @@ describe('spawnHappyCLI fallback invocation', () => {
       const reused = mod.buildHappyCliSubprocessInvocation(['claude', '--started-by', 'daemon']);
       expect(reused.argv).toEqual(inv.argv);
       expect(existsSync(join(snapshotRoot, 'scripts', 'process_tree.cjs'))).toBe(true);
+      rmSync(join(snapshotRoot, 'scripts', 'native_process_exit.cjs'));
+      const withExitProof = mod.buildHappyCliSubprocessInvocation(['claude', '--started-by', 'daemon']);
+      expect(withExitProof.argv).toEqual(inv.argv);
+      expect(existsSync(join(snapshotRoot, 'scripts', 'native_process_exit.cjs'))).toBe(true);
     });
   });
 

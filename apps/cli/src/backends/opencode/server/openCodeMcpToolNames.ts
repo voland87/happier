@@ -1,5 +1,7 @@
 import { createHash } from 'node:crypto';
 
+import { HAPPIER_BUILT_IN_TOOL_NAMES } from '@/agent/tools/happierTools/catalog';
+
 import type { McpServerConfig } from '@/agent';
 import type { PermissionMode } from '@/api/types';
 import {
@@ -11,7 +13,17 @@ import {
 
 const OPEN_CODE_HAPPIER_SESSION_MCP_PREFIX = 'happier-session-';
 const OPEN_CODE_MCP_NAMESPACE_MAX_LENGTH = 64;
-const OPEN_CODE_MCP_NAMESPACE_DIGEST_LENGTH = 16;
+const OPEN_CODE_MODEL_TOOL_NAME_MAX_LENGTH = 64;
+// Reserve the complete built-in catalog, including manual tools and tools enabled by session policy.
+// OpenCode exposes each tool to the model as `${clientName}_${toolName}`.
+const OPEN_CODE_HAPPIER_MCP_TOOL_NAME_RESERVE = Math.max(
+  ...HAPPIER_BUILT_IN_TOOL_NAMES.map((name) => name.length),
+);
+const OPEN_CODE_MCP_CLIENT_NAME_MAX_LENGTH = Math.min(
+  OPEN_CODE_MCP_NAMESPACE_MAX_LENGTH,
+  OPEN_CODE_MODEL_TOOL_NAME_MAX_LENGTH - 1 - OPEN_CODE_HAPPIER_MCP_TOOL_NAME_RESERVE,
+);
+const OPEN_CODE_MCP_NAMESPACE_DIGEST_LENGTH = 7;
 
 function sanitizeOpenCodeMcpClientName(name: string): string {
   return name.replace(/[^a-zA-Z0-9_-]/g, '_');
@@ -21,15 +33,18 @@ function projectOpenCodeMcpClientName(sessionId: string, originalName: string): 
   const candidate = sanitizeOpenCodeMcpClientName(
     `${OPEN_CODE_HAPPIER_SESSION_MCP_PREFIX}${sessionId}--${originalName}`,
   );
-  if (candidate.length <= OPEN_CODE_MCP_NAMESPACE_MAX_LENGTH) return candidate;
+  if (candidate.length <= OPEN_CODE_MCP_CLIENT_NAME_MAX_LENGTH) return candidate;
 
-  const digest = createHash('sha256')
+  const hash = createHash('sha256')
     .update(sessionId)
     .update('\0')
     .update(originalName)
-    .digest('hex')
-    .slice(0, OPEN_CODE_MCP_NAMESPACE_DIGEST_LENGTH);
-  const prefixLength = OPEN_CODE_MCP_NAMESPACE_MAX_LENGTH - digest.length - 1;
+    .digest('hex');
+  const digest = (parseInt(hash.slice(0, 10), 16) % 36 ** OPEN_CODE_MCP_NAMESPACE_DIGEST_LENGTH)
+    .toString(36)
+    .padStart(OPEN_CODE_MCP_NAMESPACE_DIGEST_LENGTH, '0');
+  // Must keep all of `happier-session`: the permission rules deny other sessions with `happier-session-*`.
+  const prefixLength = OPEN_CODE_MCP_CLIENT_NAME_MAX_LENGTH - digest.length - 1;
   return `${candidate.slice(0, prefixLength)}-${digest}`;
 }
 

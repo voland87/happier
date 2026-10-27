@@ -829,6 +829,7 @@ export function useNewSessionScreenModel(params?: Readonly<{ draftId?: string }>
         agentOptionState,
         settings,
         targetServerId,
+        targetMachineId: selectedMachineId,
         router,
         setAgentOptionStateForCurrentAgent,
     });

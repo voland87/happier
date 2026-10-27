@@ -369,6 +369,7 @@ vi.mock('@/components/ui/lists/flashListCompat/SessionListVirtualizedList', asyn
     SessionListVirtualizedList: ((await import('@/dev/testkit/mocks/flashList')) as typeof import('@/dev/testkit/mocks/flashList')).createCapturingFlashListMock({
         componentName: 'FlashListCompat',
         renderItems: true,
+        memoizeItems: true,
     }).module.FlashList,
 }));
 
@@ -495,7 +496,7 @@ installSessionShellCommonModuleMocks({
         return createModalModuleMock().module;
     },
     storage: async (importOriginal) => {
-        const { createStorageModuleMock, createStorageStoreMock } = await import('@/dev/testkit/mocks/storage');
+        const { createStorageModuleMock, createReactiveStorageStoreMock } = await import('@/dev/testkit/mocks/storage');
         return createStorageModuleMock({
             importOriginal,
             overrides: {
@@ -535,7 +536,7 @@ installSessionShellCommonModuleMocks({
                 },
                 useSessionFolderAssignmentsBySessionKey: () => sessionFolderAssignmentsBySessionKey,
                 useLocalSettingMutable: useLocalSettingMutableMock,
-                storage: createStorageStoreMock(storageState),
+                storage: createReactiveStorageStoreMock(storageState),
             },
         });
     },
@@ -806,6 +807,9 @@ function findRecordedGestureDetectors(
     );
 }
 
+// Load the real owner after installing boundaries, outside the first behavior timeout.
+await import('./SessionsList');
+
 describe('SessionsList (native virtualization)', () => {
     beforeEach(async () => {
         const { clearSessionListHeaderFilterRetentionForTests } = await import('./search/useSessionListHeaderFilterRetention');
@@ -929,7 +933,7 @@ describe('SessionsList (native virtualization)', () => {
         expect(readTargets().get('server_a:sess_a').tags).toEqual(['updated-while-closed']);
     });
 
-    it('expands the header search input and collapses it on blur when empty', async () => {
+    it('keeps explicitly opened search mounted on blur until it is dismissed', async () => {
         mockVisibleSessionListViewData = [
             {
                 type: 'header',
@@ -978,6 +982,10 @@ describe('SessionsList (native virtualization)', () => {
             await new Promise((resolve) => setTimeout(resolve, 60));
         });
 
+        expect(screen.findByTestId('session-list-search-input')).toBe(input);
+        await act(async () => {
+            screen.findByTestId('session-list-search-clear')?.props.onPress?.({ stopPropagation: vi.fn() });
+        });
         expect(screen.findAllByTestId('session-list-search-input')).toHaveLength(0);
     });
 
@@ -1095,6 +1103,21 @@ describe('SessionsList (native virtualization)', () => {
         expect(screen.findAllByTestId('session-list-session:sess_a')).toHaveLength(0);
         expect(screen.findAllByTestId('session-list-header:active')).toHaveLength(1);
         expect(screen.findAllByTestId('session-list-session:sess_b')).toHaveLength(1);
+
+        // A live session update can remove the section that originally owned search.
+        mockVisibleSessionListViewData = mockVisibleSessionListViewData.map((item) => item.groupKey === 'active'
+            ? item.type === 'header'
+                ? { ...item, title: 'Inactive', headerKind: 'inactive', groupKey: 'inactive' }
+                : { ...item, groupKey: 'inactive', groupKind: 'date' }
+            : item);
+        const { SessionsList } = await import('./SessionsList');
+        await screen.update(<SessionsList />);
+        expect(screen.findByTestId('session-list-search-input')?.props.value).toBe('other-repo');
+        await act(async () => {
+            screen.findByTestId('session-list-search-clear')?.props.onPress?.({ stopPropagation: vi.fn() });
+        });
+        expect(screen.findAllByTestId('session-list-search-input')).toHaveLength(0);
+        expect(screen.findAllByTestId('session-list-search-trigger').length).toBeGreaterThan(0);
     });
 
     it('keeps focused search open when clearing the last character after no results', async () => {
@@ -1421,19 +1444,20 @@ describe('SessionsList (native virtualization)', () => {
         expect(list.props.getItemType?.(visibleSessionListViewData[2], 2)).toBe('session:default:tail');
     });
 
-    it('disables web FlatList virtualization for first-page-sized lists', async () => {
+    it('uses the shared virtualized surface for first-page-sized web lists', async () => {
         platformOs = 'web';
 
         const screen = await renderSessionsList();
         const list = expectPresent(
-            screen.root.findAll((node) => String(node.type) === 'FlatList')[0],
-            'expected web FlatList',
+            screen.root.findAll((node) => String(node.type) === 'FlashListCompat')[0],
+            'expected shared virtualized surface',
         );
 
-        expect(list.props.disableVirtualization).toBe(true);
+        expect(screen.root.findAll((node) => String(node.type) === 'FlatList')).toHaveLength(0);
+        expect(list.props.getItemType).toBeTypeOf('function');
     });
 
-    it('disables web FlatList virtualization for medium sidebar lists', async () => {
+    it('uses the shared virtualized surface for medium web lists', async () => {
         platformOs = 'web';
         const header = expectPresent(
             mockVisibleSessionListViewData?.find((item) => item.type === 'header'),
@@ -1457,11 +1481,12 @@ describe('SessionsList (native virtualization)', () => {
 
         const screen = await renderSessionsList();
         const list = expectPresent(
-            screen.root.findAll((node) => String(node.type) === 'FlatList')[0],
-            'expected web FlatList',
+            screen.root.findAll((node) => String(node.type) === 'FlashListCompat')[0],
+            'expected shared virtualized surface',
         );
 
-        expect(list.props.disableVirtualization).toBe(true);
+        expect(screen.root.findAll((node) => String(node.type) === 'FlatList')).toHaveLength(0);
+        expect(list.props.getItemType).toBeTypeOf('function');
     });
 
     it('uses FlashListCompat for large web lists instead of relying on React Native Web FlatList virtualization', async () => {
@@ -1829,6 +1854,33 @@ describe('SessionsList (native virtualization)', () => {
         expect(updatedData).toBe(initialData);
         expect(updatedRow.props.rowModel).toBe(initialRow.props.rowModel);
         expect(updatedRow.props.rowAttentionAnimationEnabled).toBe(initialRow.props.rowAttentionAnimationEnabled);
+    });
+
+
+    it('activates an already mounted large-web row when viewability changes and receives completion', async () => {
+        platformOs = 'web';
+        const header = expectPresent(mockVisibleSessionListViewData?.find((item) => item.type === 'header'), 'expected header');
+        mockVisibleSessionListViewData = [header, ...Array.from({ length: 145 }, (_, index) => ({
+            type: 'session', session: { ...sessionA, id: `sess_visible_${index}` },
+            groupKey, groupKind: 'date', serverId: 'server_a', serverName: 'Server A',
+        }))];
+        const screen = await renderSessionsList();
+        const list = expectPresent(screen.root.findAll((node) => String(node.type) === 'FlashListCompat')[0], 'expected virtualized web list');
+        const target = expectPresent(list.props.data.find((item: SessionListViewItem) => item.type === 'session' && item.session.id === 'sess_visible_80'), 'expected target');
+        expect(findSessionItem(screen, 'sess_visible_80')?.props.rowModel.session.thinking).toBe(false);
+        await act(async () => list.props.onViewableItemsChanged({ changed: [], viewableItems: [{ item: target, index: 81, isViewable: true, key: 'session:server_a:sess_visible_80' }] }));
+        const { storage } = await import('@/sync/domains/state/storage');
+        const previousState = storage.getState();
+        try {
+            const working = { ...sessionA, id: 'sess_visible_80', active: true, activeAt: Date.now(), thinking: true, thinkingAt: Date.now(), presence: 'online' as const, latestTurnStatus: 'in_progress' as const, latestTurnStatusObservedAt: Date.now() };
+            await act(async () => storage.setState((state) => ({ sessionListRenderables: { ...state.sessionListRenderables, sess_visible_80: working } })));
+            expect(findSessionItem(screen, 'sess_visible_80')?.props.rowModel.session.thinking).toBe(true);
+            await act(async () => storage.setState((state) => ({ sessionListRenderables: { ...state.sessionListRenderables, sess_visible_80: { ...working, thinking: false, latestTurnStatus: 'completed', latestTurnStatusObservedAt: Date.now() } } })));
+            expect(findSessionItem(screen, 'sess_visible_80')?.props.rowModel.session.thinking).toBe(false);
+            expect(findSessionItem(screen, 'sess_visible_80')?.props.rowModel.status.state).not.toBe('thinking');
+        } finally {
+            await act(async () => storage.setState(previousState, true));
+        }
     });
 
     it('keeps row action props stable when FlashList re-renders the same item', async () => {
@@ -3029,7 +3081,8 @@ describe('SessionsList (native virtualization)', () => {
         expect(opened.props.nativeContextMenuOpen).toBe(true);
     });
 
-    it('closes an open iOS native context menu when native list scrolling starts', async () => {
+    it.each(['ios', 'android'] as const)('closes an open %s native context menu when native list scrolling starts', async (platform) => {
+        platformOs = platform;
         const screen = await renderSessionsList();
         const list = expectPresent(
             screen.root.findAll((node) => String(node.type) === 'FlashListCompat')[0],
@@ -3050,9 +3103,21 @@ describe('SessionsList (native virtualization)', () => {
 
         const closed = expectPresent(findSessionItem(screen, 'sess_a'), 'expected sess_a session row after scroll start');
         expect(closed.props.nativeContextMenuOpen).toBe(false);
+
+        await act(async () => {
+            first.props.onNativeContextMenuOpenChange(true);
+        });
+        expect(findSessionItem(screen, 'sess_a')?.props.nativeContextMenuOpen).toBe(false);
+
+        await act(async () => {
+            list.props.onScrollEndDrag?.();
+            first.props.onNativeContextMenuOpenChange(true);
+        });
+        expect(findSessionItem(screen, 'sess_a')?.props.nativeContextMenuOpen).toBe(true);
     });
 
-    it('ignores stale iOS native context menu close requests from another row', async () => {
+    it.each(['ios', 'android'] as const)('ignores stale %s native context menu close requests from another row', async (platform) => {
+        platformOs = platform;
         const screen = await renderSessionsList();
         const first = expectPresent(findSessionItem(screen, 'sess_a'), 'expected sess_a session row');
 
@@ -3072,7 +3137,7 @@ describe('SessionsList (native virtualization)', () => {
         expect(stillOpen.props.nativeContextMenuOpen).toBe(true);
     });
 
-    it('does not wrap Android rows in drag or context-menu long-press gestures', async () => {
+    it('shares Android context-menu state without enabling inline drag gestures', async () => {
         platformOs = 'android';
 
         const screen = await renderSessionsList();
@@ -3080,8 +3145,8 @@ describe('SessionsList (native virtualization)', () => {
         const first = expectPresent(findSessionItem(screen, 'sess_a'), 'expected sess_a session row');
         expect(first.props.reorderHandleGesture).toBeUndefined();
         expect(first.props.nativeInlineDragEnabled).toBeUndefined();
-        expect(first.props.nativeContextMenuOpen).toBeUndefined();
-        expect(first.props.onNativeContextMenuOpenChange).toBeUndefined();
+        expect(first.props.nativeContextMenuOpen).toBe(false);
+        expect(first.props.onNativeContextMenuOpenChange).toEqual(expect.any(Function));
         expect(findRecordedGestureDetectors(screen)).toHaveLength(0);
     });
 

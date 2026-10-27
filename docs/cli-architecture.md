@@ -74,19 +74,64 @@ the action reports the saved context in its error details.
 - **Persistence/config:** `src/persistence.ts` + `src/configuration.ts` manage local state in `~/.happy`.
 - **Agents:** `src/claude`, `src/codex`, `src/gemini` provide provider-specific runners.
 
+## Direct-session JSONL read progress (development)
+
+The shared readers in `api/directSessions/filePaging` own byte paging for native
+JSONL sources. If their existing read allowance cannot complete the next record
+and no source has been consumed, they throw `JsonlRecordTooLargeError` with code
+`JSONL_RECORD_TOO_LARGE`. Transcript paging, follow and full import fail explicitly
+rather than repeating an unchanged cursor, skipping the record or claiming complete
+history. A larger caller allowance can read the record intact. Incomplete JSON at
+EOF remains pending for its writer to finish.
+
+Display-title scans are advisory: their shared title-page adapter logs allowance
+exhaustion through the default logger and retains the bounded fallback. An oversized
+record therefore does not hide the session from discovery. These changes are in
+development source; they do not establish preview or stable availability.
+
 ## Streamed transcript recovery (development)
 
 `api/session/streamedTranscriptWriter` owns segment text, identity, and durable
 settlement. Closing a segment freezes its completion or interruption intent and
 separates it from subsequent output. A rejected terminal write retains the full
 snapshot for the next flush with the same local id; unresolved delivery is recorded
-in the default file log. This retention is process-local, and does not promise
-automatic reconnect replay or recovery after process exit.
+in the default file log. While closed snapshots remain, the writer subscribes to
+the session's existing connection-state events and retries them when its transport
+comes online, including a reconnect that races an in-flight failed write. Retries
+reuse the same local id and terminal state through the session commit queue, without
+waiting for pending-input readiness or a new prompt. The subscription ends when
+the snapshots settle or the writer is discarded. This retention is process-local;
+it does not provide recovery after process exit or replacement of the session client.
 
 `createKeyedStreamedTranscriptBridge` keeps writers with active, in-flight, or failed
 segments and releases only drained writers. Codex tool boundaries wait for admission
 into the existing session commit queue, while acknowledgement settles in the writer;
 turn-end flushes await settlement and return the durable delivery summaries.
+
+In development source, ACP output observations enter the existing session mutation
+journal with explicit external provenance. Assistant and thinking snapshots,
+provider-observed input, media-only rows, and lifecycle mutations share that
+owner's durable custody and replay order. Calls without observation provenance
+keep their existing remote-acknowledgement contract.
+
+Pi's existing Happier bridge observes extension-origin text through Pi's `input`
+hook and forwards it using the public RPC notification channel. The Pi adapter
+consumes that observation before diagnostic tracing and sends it through the
+shared ACP transcript path. It records a submitted input, which later extension
+handlers may transform or handle; it does not claim the model received that text.
+Host input keeps its existing recording path, and raw user-message echoes do not
+create another transcript row. The bridge is required for Happier-managed Pi
+launches. Provider-started runs use the same ACP turn state and settlement path as
+host-started runs.
+
+The backend's conclusive response completion seals the captured host turn before
+a provider-started successor can begin; transient idle signals do not seal it.
+The existing flush result carries that captured turn's assistant text into ready
+notifications, including an explicitly empty answer, so later output cannot
+replace the host's notification. Replay suppression belongs to the backend's
+existing replay-capture owner. The shared runtime preserves fresh input and
+output emitted during native resume and imports captured history only when
+requested.
 
 ## CLI entry flow
 
@@ -118,6 +163,29 @@ flowchart TD
 - Parses subcommands (`doctor`, `auth`, `connect`, `codex`, `gemini`, and default run flows).
 - Ensures auth and machine setup when needed (`authAndSetupMachineIfNeeded`).
 - Starts the daemon or runs an agent directly based on subcommand/context.
+
+## Automated session targets and permissions (development)
+
+Action machine discovery reads the authenticated account inventory on the selected
+relay, independently of the caller's local daemon profiles. Revoked and replaced
+rows are excluded; offline machines remain visible with `daemonRunning: false`.
+An unreadable inventory reports an error instead of an empty fleet.
+
+An explicit `machineId` in session creation dispatches and resolves its launch nonce
+through exact-machine RPC. An unavailable target fails without local execution or
+replacement-chain redirection. An older daemon's legacy spawn method is retried only
+on the same selected machine after a method-capability refusal. Untargeted local
+creation and trusted in-daemon transports retain their existing control paths.
+
+The RPC acknowledgement boundary distinguishes typed pre-execution refusals from
+uncertain submissions. A refusal clears uncertain launch recovery; transport errors
+after dispatch preserve the launch nonce for recovery on the selected machine.
+
+`--auto` is an alias for `--permission-mode auto` and uses the existing permission
+intent parser. For OpenCode, this allows reads and edits while other tools can still
+require approval. Happier's session permission policy takes precedence over the
+native agent's defaults; `--yolo` requests full access. Permission flags retain their
+command-line ordering, with the last flag taking effect.
 
 ## Desktop-driven setup
 
@@ -354,7 +422,11 @@ probe failures as inconclusive, preserving live ownership. For a PID hidden by a
 the existing authenticated control probe establishes publication presence. Its transport failures
 remain unverified. After observing a hidden owner through authenticated ping or an accepted
 authenticated stop, confirmed stop requires the matching lifecycle lock to release after control ceases, because control closes before final cleanup; without an
-observed lock confirmation remains incomplete. Ordinary dead publications remain absent. Status
+observed lock confirmation remains incomplete. Ordinary dead publications remain absent, and stop
+reclaims their unchanged state and matching lifecycle lock through persistence's exact-owner file
+primitive. Cleanup requires proven process absence and the captured lock bytes; a replacement
+state or lock cancels reclamation. Live, inaccessible, unverified, and hidden owners are not
+reclaimed by the stop observer. Status
 projections and service-update readers share the same presence owner; full daemon health inspection
 also validates process identity. An unverified publication remains explicit in status output and
 blocks service-update planning until authenticated presence can be observed. Initial startup-only
@@ -367,8 +439,9 @@ locks. It attempts siblings after a failed target and returns a confirmed stoppe
 `not_running`. It re-enumerates the same inventory after shutdown to detect a live successor
 publication or startup-only lock before `auth logout --all` can delete the home.
 After an observed hidden owner stops, namespace uncertainty remains scoped to its exact
-publication and lock path; unrelated stale release-ring siblings retain ordinary absence. State and lock
-cleanup remain owned by the daemon lifecycle holder; these observers do not delete publications.
+publication and lock path; unrelated stale release-ring siblings retain ordinary absence and may
+be reclaimed with the same proven-dead ownership checks. Normal shutdown cleanup remains owned
+by the daemon lifecycle holder; persistence owns narrowly scoped departed-publication reclamation.
 Stop commands and authentication report the returned outcome, and logout-all preserves the
 home on incomplete stop. Restart remains best effort for its stop phase, logs incomplete stop
 through the default file logger, and requires its existing distinct running identity proof.
@@ -984,9 +1057,72 @@ Local state lives under `~/.happier` (or `HAPPIER_HOME_DIR`):
 - `daemon.state.json`: daemon PID + control port + version.
 - `logs/`: CLI/daemon logs.
 
+In current development source, protected local files and MCP runtime
+configuration use the shared Windows ACL boundary in
+`packages/cli-common/src/fs/windowsProtectedAcl.ts`. It grants only the current
+user and SYSTEM access and verifies the resulting ACL. Its PowerShell children
+use the selected Windows PowerShell installation's own modules, with a
+child-only `PSModulePath`; the launching shell's environment stays unchanged.
+Both ACL scripts terminate on errors, and malformed inspection output retains
+bounded stderr diagnostics without including stdout.
+
 Configuration lives in `src/configuration.ts`:
 - `HAPPIER_SERVER_URL` and `HAPPIER_WEBAPP_URL` override defaults.
 - `HAPPIER_VARIANT`, `HAPPIER_EXPERIMENTAL`, `HAPPIER_DISABLE_CAFFEINATE` control behavior.
+
+### Connected Agent storage (0.2 development)
+
+The connected-services materialization owner resolves durable account or pool
+homes through the existing home resolver and updates their managed files in
+place. Claude and Codex use account/pool homes; Antigravity uses the selected
+member's account home and retains restart-based switching. Shared state uses the
+existing state-sharing descriptor; isolated state stays local to that binding.
+Antigravity's isolated-state policy still refuses continuation across different
+accounts, including a pool rotation; the storage change does not relax it.
+Configuration inheritance remains a separate policy. Discovery probes and other
+temporary materializers retain disposable roots.
+
+Direct linking recovers a connected-service runtime snapshot only from a marker
+for the same Agent and native conversation. A matching working directory does
+not authorize borrowing another Session's binding or materialization identity,
+including when refreshing an existing link. Exact-conversation recovery remains
+valid across working-directory changes. Historical identities are retained:
+their stored shape does not identify a donor, so linking does not blindly remint
+them or move private state.
+
+When isolated history is imported into shared state and the same file already
+exists with different bytes, the existing importer preserves the destination
+and saves the incoming version under a `.happier-import-*` name. This preserves
+both versions but does not merge divergent conversations or make the incoming
+version authoritative at the original path. In particular, switching Antigravity
+to shared state is not conflict resolution for an already-diverged conversation.
+
+Resume preparation imports declared state from the previous root through the
+existing preservation owner. Legacy per-session roots may contribute their
+declared private state; moving an isolated Codex conversation between durable
+account homes imports only that resumed conversation, not the other account's
+history or memories. Adoption alone does not authorize deletion. Legacy
+Run cleanup requires explicit ephemeral retention; resumable and unidentified
+hashed roots are kept. The cleanup scheduler checks actual runtime registrations
+before deleting live Run homes, including pending cleanup after release. Session
+reference lookup remains current-server scoped; retaining an unidentified root
+does not establish that its original Run can resume. Both ordinary and archived
+Session references protect retained history; an unreadable or incomplete listing
+defers deletion rather than supplying partial deletion authority.
+
+Managed Codex app-server startup records the account whose access token was
+actually applied. Connected-account reset-credit reads use the daemon's current
+selection, not the launch home's credential; native sessions use their native
+home's auth store without invoking the connected-account refresh bridge.
+The daemon prepares managed credential projections;
+live runtime application verifies that preparation without becoming another file
+writer. Refresh distribution checks pool generation and credential revision
+inside the existing materialization lock.
+
+Execution-run isolation no longer assigns private XDG cache, data or state
+directories. User-configured locations and ordinary tool caches are preserved,
+while inherited connected-service authentication is still scrubbed. Account
+selection, pool cutover, refresh and recovery remain with their existing owners.
 
 ## API client architecture
 
@@ -1218,6 +1354,13 @@ the consumer's construction callback; an explicit null disables it for that wait
 Metadata notifications reconcile controls without granting Pending eligibility or
 starting another message-materialization pass.
 
+In the development CLI, the standard provider runner owns the pending Stop
+operation and signal replacement. Its prompt loop joins that operation before
+waiting for another input, so an interrupted turn can unwind while provider
+cancellation finishes without repeatedly reading an aborted signal. Gemini's
+runner applies the same rule through its own Stop lifecycle. Neither path uses
+a retry interval to infer cancellation completion.
+
 OpenCode's existing options publisher also refreshes model and mode inventories on
 same-directory catalog update events and connection catch-up. A successful empty
 inventory withdraws its choices; a failed discovery retains the last published
@@ -1234,6 +1377,14 @@ requests retain their explicitly selected namespace. Generated agent names label
 the panes rather than creating separate Herdr servers.
 Claude unified reuses the existing composer parser and prompt-submission verifier;
 successful terminal writes are not provider acceptance acknowledgements.
+In development source, normal and shell prompts share one active-input selection and
+wrapped-text reader. Shell input is verification-only: it cannot make the terminal
+ready for an ordinary message, and only a request starting with `!` can authorize
+its submission. Blocking dialogs exclude shell verification.
+Native bash-input records retain exact shell-request identity for Pending settlement.
+A linked native local-command caveat and bash output complete the existing local-command
+lifecycle; output without that caveat retains the provider's inference lifecycle.
+Shell input and output remain visible in the transcript.
 In development source, Claude prompt staging and consumption wait under the existing
 session cancellation signal, rather than the terminal transport's write deadline.
 An overloaded TUI can display a successful paste late. The shared terminal verifier
@@ -1378,6 +1529,17 @@ attachable. There is no parallel Herdr session synchronization service.
 
 ## Daemon architecture
 
+Startup reattachment and resume of an already-running session reconcile both
+the daemon's session access key and the session's machine routing metadata.
+The recovered-session machine-control owner uses the existing versioned
+metadata update owner, and changes routing only while the recorded host PID
+still matches the locally adopted runner. Matching workspace-location bindings
+follow the daemon identity; provider session ids, paths and unrelated metadata
+remain intact. The runner keeps its existing authenticated publisher connection.
+This recovery does not retire or replace that publisher's old Machine identity;
+replacement must wait until its surviving publishers have finished or migrated.
+A handoff that has published another runner's PID is left untouched.
+
 With no tracked runners remaining, daemon shutdown cleans each idle OpenCode
 server in its existing managed pool, not just the ambient launch profile. The
 same locked termination owner verifies daemon, relay-directory and process
@@ -1439,6 +1601,28 @@ read that same lock, so a runner waiting to publish its first webhook prevents
 another activation from allocating a terminal host. Startup failure and normal
 runner exit release the scope's locks; process-exit cleanup uses the same owner.
 
+Before the child receives the created Session id, its server row can already trigger
+Pending activation. Development source closes that remaining pre-lock window in
+`resolveAcceptedExistingSessionStartup`: it reads the existing attach metadata only
+when fresh daemon children await a webhook, and uses the webhook owner's shared
+PID, wrapper and Windows-tab correlation. `createSessionMetadata` publishes the
+optional `hostProcessInstanceFingerprint` beside `hostPid`; the daemon verifies
+that runner generation, machine and home before learning the tracked Session id.
+It then rejoins accepted startup rather than launching another child. Learning
+identity does not complete the webhook waiter, promote markers or claim readiness.
+Process uncertainty and Stop still use the normal presence/resume fencing owner.
+A correlated pending child with legacy or unreadable generation evidence is
+explicitly fenced until startup completes; a positively different generation is
+not associated. This adds no new lock, timer or cross-process registry.
+Verified runner identity also owns presence when a Windows Terminal dispatcher
+has already exited. Until that identity arrives, pending Windows startup has
+unknown runner presence; launcher disappearance cannot retire it. Heartbeat and
+visible-console polling delegate inferred process absence to `createOnChildExited`;
+the poller no longer independently fails the startup waiter. Explicit runner exit,
+cancellation and the existing startup timeout retain their finalization ownership.
+Wrapper promotion with a recorded generation uses that same presence classifier,
+so a reused runner PID cannot be promoted into session custody.
+
 In current development, `createOnChildExited` releases session-marker evidence only
 through the tracked exit lifecycle. An exit notification for an untracked PID does
 not authorize marker deletion. Failed terminal-exit staging retains tracking and
@@ -1454,6 +1638,34 @@ An explicit lifecycle identity survives endpoint changes. Existing local markers
 can supply ownership evidence when process inventory is incomplete, but cannot
 override recorded foreign-home or foreign-scope facts. The child-environment
 builder publishes the resolved home even when the daemon inherited no home override.
+
+### Usage-limit reset continuation (development)
+
+`RuntimeAuthRecoveryScheduler` owns a daemon-backed wait for the exact failed
+turn. When a directly selected profile reaches its reported reset time, recovery
+admits a continuation through the existing dispatcher and Pending queue instead
+of reclassifying the old failure or merely restarting an idle runner. Native
+quota probes use the same continuation owner when they confirm readiness.
+Admission and provider acceptance are not recovery proof; the existing outcome
+proof must observe successful execution under the selected credential.
+
+Active Session RPC checks and CLI/MCP checks route
+daemon-owned attempts to that same scheduler. Provider-local checks remain for
+attempts without daemon ownership; account-switch and reset-credit controls keep
+their existing owners. A failed daemon check does not fall back to a competing
+provider-local scheduler. Explicit user input is admitted through Pending rather
+than waking an automatic continuation during pre-admission revalidation; the
+existing dispatcher suppresses obsolete continuation when newer input is queued.
+Cancellation, newer user input, and disabled automatic
+resume take precedence, and the original interrupted input is never replayed.
+
+Protocol's `buildUsageLimitIssueFingerprint` owns usage-limit issue identity for
+the CLI and UI. Runtime-auth reporting captures that identity from the actual
+failed issue and projects it separately from `runtimeAuthRecoveryAttemptId`.
+Presentation uses recovery timing, cancellation, and action identity only when
+its fingerprint matches the current issue. Older opaque attempt fingerprints
+remain readable, but cannot establish that association; the UI shows the current
+issue's supported recovery actions without attaching historical wait state.
 
 ### Model-capacity recovery (development)
 
@@ -1475,6 +1687,15 @@ In current development source, reconnect readiness uses a fresh authenticated
 feature observation and inherits that request owner's attempt deadline. A separate
 health endpoint is not an admission prerequisite. Authentication rejection fails
 closed; server failures remain retryable under the existing connection supervisor.
+The deadline covers response-body consumption as well as HTTP headers, so a partial
+feature response cannot park reconnect probing indefinitely.
+Diagnostic artifact collection likewise retains its existing request deadline until
+the server response body has been consumed.
+
+The Claude session-hook forwarder reports failed HTTP delivery, transport error codes,
+and unreadable secret-file error codes on stderr. It keeps secrets, paths, hook
+payloads, and server response bodies out of those diagnostics. A listening hook port
+alone does not prove that a hook was authenticated or processed successfully.
 
 ### Control server (local IPC)
 
@@ -1545,6 +1766,10 @@ Sessions can be started by:
 
 Daemon session spawning uses `registerCommonHandlers` to expose a controlled RPC surface (shell commands, file operations, search/diff helpers).
 
+In development builds, Claude's metadata producer supplies its explicit non-secret native account-directory override to `createSessionMetadata`, which publishes it in `nativeAgentEnvironmentV1`. `resolveSessionRuntimeSnapshot` restores it before spawn environment validation, with explicit incoming overrides taking precedence. `sessionNativeEnvironment` owns the allowlist also consumed by durable respawn descriptors; arbitrary shell variables and credentials are not copied into metadata. The shared factory does not infer native directories from another Agent's ambient environment. Older session metadata without this optional field retains its existing behavior.
+
+Before resuming a provider conversation under another Happier session id, daemon spawn admission checks matching tracked provider targets and resume ids through the existing process-presence classifier. A live or unverified sibling runner blocks the new launch; a positively absent runner does not. This prevents an old entry from starting another runner after a terminal restart creates a replacement entry.
+
 ### Machine state
 
 ```mermaid
@@ -1610,6 +1835,105 @@ RPC is used to send commands over the Socket.IO connection:
 - The daemon registers a spawn-session handler so the server/mobile client can ask it to start a local session.
 
 This mechanism allows the server and mobile clients to drive local actions without exposing a broad REST surface.
+
+In the current development CLI, UI permission responses settle through
+`PermissionRequestCoordinator.completeRpcResponse`, including detached late responses
+and requests present only in Agent state. Provider waiters, cached late decisions,
+and response side effects advance only after the existing Agent-state write
+acknowledges request completion. A failed write reaches the RPC caller while the
+request remains retryable and independent pending requests remain intact. Requests
+present only in Agent state keep their existing behavior without caching a provider
+decision. Pre-effect provider decisions use this same acknowledged writer. A failed
+response is not queued for later permission execution. Already observed native
+PostToolUse completions and lifecycle cancellation retirements instead durably admit
+the exact completion. Automatic decisions without an outstanding request publish
+history without blocking provider progress.
+
+Metadata and Agent-state retries use the current managed socket on every attempt.
+Reconnection can therefore finish the same operation within its existing retry
+budget.
+
+Foreground reset also retires saved requests without a local coordinator record through
+the same exact-occurrence settlement store. Execution-run request IDs retain the existing
+run/controller namespace: foreground handlers exclude those persisted requests, while the
+Session's execution-run handler excludes foreground requests. Claude's persisted-request
+adoption follows the same separation. Opaque response claims remain owned by their claimant.
+
+An observed Claude PostToolUse completion and lifecycle cancellation use the Session's
+existing durable mutation journal. Runtime-captured settlements retain their order through
+credential reads, sealing and journal admission, so a later Stop cannot overtake an
+already observed tool completion. Observed-completion and cancellation capture releases
+the Agent-state lock before disk admission, leaving ordinary acknowledged writes usable.
+Failed automatic-history writes also reserve retention under that lock and await its
+admission after releasing it; close still drains the complete retention attempt.
+PostToolUse is the explicit evidence that a native tool already ran; the journal never replays an unapplied UI or provider approval.
+Cancellation rejects local waiters even if admission fails, retaining the detached
+occurrence for a retirement retry and reporting the failure. Local bridge disposal
+waits for cancellation admission rather than a server round trip. Single-request
+lifecycle cancellation invalidates in-flight UI decisions while retirement is
+pending. Shared provider Stop orchestration reports cancellation admission failures
+on the default file log and continues aborting the provider and its controller;
+the coordinator keeps the detached occurrence available for a later retirement
+attempt. Asynchronous reset cleanup retires only the routing entries it captured,
+and does not clear a subsequent turn's requests or cached decisions. Local hook
+expiry uses the same admission boundary before returning its
+default response. A disposed local bridge stops admitting hooks, including a
+missing-id hook whose transcript read was already in flight; captured cancellation
+retirements retain their existing retry behavior. Automatic history
+first uses the normal
+acknowledged Agent-state write; if that fails, the same journal retains its exact
+completion delta. Existing `{ t: 'encrypted', c }` entries retain the canonical
+account machine encryption context, including plaintext sessions with genuine keys.
+For token-only credentials, new entries instead use
+`{ t: 'installation_encrypted_v1', c }`: the existing private installation identity
+supplies a local encryption key without creating Account key material or another
+secret file. The key is `deriveKey` over the validated identity's base64url-decoded
+64-byte private key, with usage `Happier Session Mutation` and path
+`['request-settlement-v1', serverId, accountId, sessionId]`. Server and identity-file
+scope are captured with the client; Account identity is the trimmed JWT subject.
+The ciphertext uses the existing AES-256-GCM data-key bundle and standard base64.
+Same-Account token refreshes retain access; credentials for another Account fail
+closed. Recovery reads the original installation identity and never creates a new
+one when it is missing. Missing or replacement identity material leaves ciphertext
+queued and reports failure; restore the original identity to recover those entries.
+The journal retries through the
+existing current-version Agent-state updater. It preserves unrelated requests,
+replacement occurrences, response claims, and already committed automatic outcomes.
+Once a request is absent, replay preserves its committed terminal outcome even
+when a later cancellation was captured from a stale snapshot.
+An authenticated, decrypted settlement that fails schema validation is quarantined
+in the existing dead-letter file, preserving its encrypted bytes and allowing later
+mutations to proceed. Missing credentials or an undecryptable payload remain
+retryable so restoring the correct credentials can recover the entry. Both failures
+are reported in the normal file log without request contents.
+Envelope markers are parsed explicitly. An older reader that does not recognize
+the marker uses its existing journal quarantine path rather than another key.
+Released CLI v0.2.15 does not recognize this private mutation kind; its existing
+unknown-kind quarantine preserves the complete encrypted row. Returning to the
+current runtime re-admits either recognized envelope through the existing recovery
+owner. This adds no server wire field or background recovery process.
+Claude abort/reset/disposal also retires source-owned persisted requests that have
+no local provider waiter; local bridge and unified dialog requests retain their
+separate ownership scopes. Coordinator-owned requests settle through their existing
+waiter lifecycle, while state-only requests use the same durable request store.
+Automatic history can replay only while its request remains absent, including on
+the first write after a version conflict.
+
+This is runtime-owned recovery: reconstructing an ApiSessionClient for the same
+session resumes admitted settlements after a process restart. Closing drains local
+admission attempts before closing the journal; a failed attempt still rejects to
+its caller without interrupting client cleanup. A permanently offline runtime can
+leave an admitted entry pending until that session resumes. This change does not
+add unattended daemon takeover. Failed automatic writes report
+`session_permission_completion_deferred` after durable admission, and admission
+failure reports `session_permission_completion_retention_failed` in the normal
+file log. Neither record contains request contents.
+
+Terminal Agent-state update failures report `session_agent_state_update_failed` in the
+normal file log, including when a best-effort caller absorbs the error. This
+record contains operation context only; it excludes request contents and server
+error payloads. It does not distinguish transport from local preparation failures
+and does not imply a replay guarantee.
 
 ## Implementation references
 - CLI entry: `apps/cli/src/index.ts`

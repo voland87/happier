@@ -721,6 +721,9 @@ export interface AcpBackendOptions {
     cleanup?: () => void | Promise<void>;
   }>>;
 
+  /** Provider-owned exclusion for native spawn and initialization, never session activity. */
+  withProcessStartup?: <TResult>(initialize: () => Promise<TResult>, signal: AbortSignal) => Promise<TResult>;
+
   /** Inherited process environment variables to remove before provider env overrides are applied */
   unsetEnv?: readonly string[];
 
@@ -738,6 +741,9 @@ export interface AcpBackendOptions {
 
   /** Optional authentication selected only after a successful ACP initialize response. */
   authentication?: AcpAuthentication;
+
+  /** Provider-owned fixed category extracted before the shared peer strips error data. */
+  isAuthenticationSetupFailure?: import('./connection/types').AcpClientConnectionOptions['isAuthenticationSetupFailure'];
 
   /** Optional ACP initialize _meta payload for provider-specific extension negotiation. */
   initializeMeta?: Record<string, unknown>;
@@ -1162,6 +1168,18 @@ export class AcpBackend implements AgentBackend {
     negotiatedSessionLoadSupport: boolean;
     negotiatedSessionCapabilities: NegotiatedAcpSessionCapabilities;
   }> {
+    this.resetExtensionAbortControllerForTurn();
+    const initialize = async () => await this.createUnlockedConnectionAndInitialize(params);
+    return this.options.withProcessStartup
+      ? await this.options.withProcessStartup(initialize, this.extensionAbortController.signal)
+      : await initialize();
+  }
+
+  private async createUnlockedConnectionAndInitialize(params: { operationId: string }): Promise<{
+    initTimeout: number;
+    negotiatedSessionLoadSupport: boolean;
+    negotiatedSessionCapabilities: NegotiatedAcpSessionCapabilities;
+  }> {
     logger.debug(`[AcpBackend] Starting process + initializing connection (op=${params.operationId})`);
 
     if (this.process || this.connection) {
@@ -1170,7 +1188,6 @@ export class AcpBackend implements AgentBackend {
 
     this.negotiatedSessionLoadSupport = null;
 
-    this.resetExtensionAbortControllerForTurn();
     this.recentStderrSummaries.length = 0;
     this.lastProcessExitDetail = null;
 
@@ -1430,6 +1447,23 @@ export class AcpBackend implements AgentBackend {
       },
       requestPermission: async (params: RequestPermissionRequest): Promise<RequestPermissionResponse> => {
         const extendedParams = params as ExtendedRequestPermissionRequest;
+        const requestSessionId = typeof params.sessionId === 'string' ? params.sessionId : (this.acpSessionId ?? '');
+        const permissionTurnGeneration = this.turnGeneration;
+        const tracksForeground = this.transport.getPermissionRequestScope?.() !== 'session';
+        const hasSessionPolicy = !tracksForeground && this.options.permissionHandler !== undefined;
+        const admitted = requestSessionId === this.acpSessionId && !this.disposed
+          && (hasSessionPolicy || (this.waitingForResponse && !this.isCurrentTurnGenerationClosed()));
+        const isCurrentPermissionRequest = () => admitted && requestSessionId === this.acpSessionId
+          && !this.disposed && (hasSessionPolicy || (permissionTurnGeneration === this.turnGeneration
+            && this.waitingForResponse && !this.isCurrentTurnGenerationClosed()));
+        const withdrawPermissionRequest = (): RequestPermissionResponse => {
+          logger.warn('[AcpBackend] Withdrew permission request without current ownership', {
+            reason: requestSessionId !== this.acpSessionId ? 'session_mismatch'
+              : tracksForeground ? 'inactive_turn' : 'missing_permission_handler',
+          });
+          return { outcome: { outcome: 'cancelled' } };
+        };
+        if (!isCurrentPermissionRequest()) return withdrawPermissionRequest();
         const toolCall = extendedParams.toolCall;
         const options = extendedParams.options || [];
         // ACP spec: toolCall.toolCallId is the correlation ID. Fall back to legacy fields when needed.
@@ -1445,14 +1479,14 @@ export class AcpBackend implements AgentBackend {
         const resolvedToolNameHint = resolvePermissionToolName({
           toolNameHint,
           toolCallId,
-          toolCallIdToNameMap: { get: (id) => this.toolCalls.get(id)?.toolName },
+          toolCallIdToNameMap: { get: (id) => tracksForeground ? this.toolCalls.get(id)?.toolName : undefined },
         });
         const input = extractPermissionInputWithFallback(
           extendedParams as PermissionRequestLike,
           toolCallId,
           {
             get: (id) => {
-              const rawInput = this.toolCalls.get(id)?.snapshot.rawInput;
+              const rawInput = tracksForeground ? this.toolCalls.get(id)?.snapshot.rawInput : undefined;
               return rawInput && typeof rawInput === 'object' && !Array.isArray(rawInput)
                 ? rawInput as Record<string, unknown>
                 : undefined;
@@ -1464,11 +1498,11 @@ export class AcpBackend implements AgentBackend {
         let toolName = resolvePermissionToolName({
           toolNameHint,
           toolCallId,
-          toolCallIdToNameMap: { get: (id) => this.toolCalls.get(id)?.toolName },
+          toolCallIdToNameMap: { get: (id) => tracksForeground ? this.toolCalls.get(id)?.toolName : undefined },
         });
 
         // If the agent re-prompts with the same toolCallId, reuse the previous selection when possible.
-        const cachedOptionId = this.lastSelectedPermissionOptionIdByToolCallId.get(toolCallId);
+        const cachedOptionId = tracksForeground ? this.lastSelectedPermissionOptionIdByToolCallId.get(toolCallId) : undefined;
         if (cachedOptionId && options.some((opt) => opt.optionId === cachedOptionId)) {
           logger.debug(`[AcpBackend] Duplicate permission prompt for ${toolCallId}, reusing cached optionId=${cachedOptionId}`);
           return { outcome: { outcome: 'selected', optionId: cachedOptionId } };
@@ -1476,8 +1510,8 @@ export class AcpBackend implements AgentBackend {
 
         // If toolName is "other" or "Unknown tool", try to determine real tool name
         const context: ToolNameContext = {
-          recentPromptHadChangeTitle: this.recentPromptHadChangeTitle,
-          toolCallCountSincePrompt: this.toolCallCountSincePrompt,
+          recentPromptHadChangeTitle: tracksForeground && this.recentPromptHadChangeTitle,
+          toolCallCountSincePrompt: tracksForeground ? this.toolCallCountSincePrompt : 0,
         };
         toolName = this.transport.determineToolName?.(toolName, toolCallId, input, context) ?? toolName;
 
@@ -1489,22 +1523,24 @@ export class AcpBackend implements AgentBackend {
         // Some providers emit a permission prompt before (or instead of) an initial tool_call update.
         // When the subsequent tool_call_update omits kind/title, we still want stable tool names and
         // the correct renderer in the UI.
-        const existingToolCall = this.toolCalls.get(toolCallId);
-        const seededToolName = existingToolCall
-          && !shouldReplaceCachedPermissionToolName(existingToolCall.toolName, toolName)
-          ? existingToolCall.toolName
-          : toolName;
-        this.toolCalls.observe({
-          toolCallId,
-          kind: seededToolName,
-          status: 'pending',
-          ...(typeof toolCall?.title === 'string' ? { title: toolCall.title } : {}),
-          ...(Object.keys(input).length > 0 ? { rawInput: input } : {}),
-        });
-        markToolCallWaitingForPermission(toolCallId, this.createHandlerContext());
+        if (tracksForeground) {
+          const existingToolCall = this.toolCalls.get(toolCallId);
+          const seededToolName = existingToolCall
+            && !shouldReplaceCachedPermissionToolName(existingToolCall.toolName, toolName)
+            ? existingToolCall.toolName
+            : toolName;
+          this.toolCalls.observe({
+            toolCallId,
+            kind: seededToolName,
+            status: 'pending',
+            ...(typeof toolCall?.title === 'string' ? { title: toolCall.title } : {}),
+            ...(Object.keys(input).length > 0 ? { rawInput: input } : {}),
+          });
+          markToolCallWaitingForPermission(toolCallId, this.createHandlerContext());
 
-        // Increment tool call counter for context tracking
-        this.toolCallCountSincePrompt++;
+          // Increment tool call counter for context tracking
+          this.toolCallCountSincePrompt++;
+        }
 
         const inputKeys = input && typeof input === 'object' && !Array.isArray(input)
           ? Object.keys(input as Record<string, unknown>)
@@ -1558,6 +1594,7 @@ export class AcpBackend implements AgentBackend {
               input
             );
 
+            if (!isCurrentPermissionRequest()) return withdrawPermissionRequest();
             const isApproved = result.decision === 'approved'
               || result.decision === 'approved_for_session'
               || result.decision === 'approved_execpolicy_amendment';
@@ -1582,13 +1619,14 @@ export class AcpBackend implements AgentBackend {
               }
               return pickPermissionOutcome(options, resolvedDecision);
             })();
-            if (outcome.outcome === 'selected') {
+            if (tracksForeground && outcome.outcome === 'selected') {
               this.lastSelectedPermissionOptionIdByToolCallId.set(toolCallId, outcome.optionId);
-            } else {
+            } else if (tracksForeground) {
               this.lastSelectedPermissionOptionIdByToolCallId.delete(toolCallId);
             }
 
             await this.respondToPermission(permissionId, isApproved);
+            if (!isCurrentPermissionRequest()) return withdrawPermissionRequest();
 
             if (result.decision === 'denied' || result.decision === 'abort') {
               // When the user declines a permission prompt, abort the in-flight prompt turn so the
@@ -1596,38 +1634,39 @@ export class AcpBackend implements AgentBackend {
               //
               // Important: still return the actual permission outcome (e.g. "deny") so ACP agents
               // can distinguish an explicit rejection from a transport cancellation.
-              const requestSessionId =
-                typeof (extendedParams as any).sessionId === 'string'
-                  ? String((extendedParams as any).sessionId)
-                  : (this.acpSessionId ?? '');
-              void this.cancel(requestSessionId);
-              this.clearTrackedToolCall(toolCallId, `permission decision=${result.decision}`);
+              if (tracksForeground) {
+                void this.cancel(requestSessionId);
+                this.clearTrackedToolCall(toolCallId, `permission decision=${result.decision}`);
+              }
               return { outcome };
             }
 
-            if (isApproved) {
+            if (tracksForeground && isApproved) {
               markToolCallRunningAfterPermission(toolCallId, this.createHandlerContext());
-            } else {
+            } else if (tracksForeground) {
               this.clearTrackedToolCall(toolCallId, `permission decision=${result.decision}`);
             }
             return { outcome };
           } catch (error) {
-            // Log to file only, not console
-            logger.debug('[AcpBackend] Error in permission handler:', error);
-            this.clearTrackedToolCall(toolCallId, 'permission handler error');
+            if (!isCurrentPermissionRequest()) return withdrawPermissionRequest();
+            logger.warn('[AcpBackend] Permission handler failed', {
+              errorType: error instanceof Error ? 'Error' : typeof error,
+            });
+            if (tracksForeground) this.clearTrackedToolCall(toolCallId, 'permission handler error');
             // Fallback to deny on error
             return { outcome: { outcome: 'cancelled' } };
           }
         }
 
         // Auto-approve once if no permission handler.
+        if (!isCurrentPermissionRequest()) return withdrawPermissionRequest();
         const outcome = pickPermissionOutcome(options, 'approved');
-        if (outcome.outcome === 'selected') {
+        if (tracksForeground && outcome.outcome === 'selected') {
           this.lastSelectedPermissionOptionIdByToolCallId.set(toolCallId, outcome.optionId);
-        } else {
+        } else if (tracksForeground) {
           this.lastSelectedPermissionOptionIdByToolCallId.delete(toolCallId);
         }
-        markToolCallRunningAfterPermission(toolCallId, this.createHandlerContext());
+        if (tracksForeground) markToolCallRunningAfterPermission(toolCallId, this.createHandlerContext());
         return { outcome };
       },
     };
@@ -1644,6 +1683,7 @@ export class AcpBackend implements AgentBackend {
     this.connection = createAcpClientConnection({
       name: 'happier-cli',
       transport: stream,
+      isAuthenticationSetupFailure: this.options.isAuthenticationSetupFailure,
       handlers: clientHandlers,
       extensions: this.options.extensionHandlers,
       createExtensionContext: (method, sdkSignal) => (
@@ -2910,7 +2950,7 @@ export class AcpBackend implements AgentBackend {
     this.waitingForResponse = false;
 
     if (outcome.kind !== 'timed_out') {
-      this.emit({ type: 'status', status: 'idle' });
+      this.emit({ type: 'status', status: 'idle', turnFinished: true });
     }
 
     if (this.idleResolver) {
@@ -3780,7 +3820,7 @@ export class AcpBackend implements AgentBackend {
       this.postIdleWithoutAssistantMessageTimeout = null;
     }
     this.clearResponseCompletionTimeout();
-    this.emit({ type: 'status', status: 'idle' });
+    this.emit({ type: 'status', status: 'idle', turnFinished: this.waitingForResponse ? true : undefined });
     this.clearActiveToolCallStateForTerminalTurn('idle finalization');
     this.closeCurrentTurnGeneration();
     // Avoid races where the idle signal arrives before `waitForResponseComplete()` starts waiting.
@@ -3975,14 +4015,14 @@ export class AcpBackend implements AgentBackend {
     this.emit({ type: 'permission-response', id: requestId, approved });
   }
 
-  async dispose(): Promise<void> {
+  async dispose(options?: Readonly<{ preserveProviderSession: boolean }>): Promise<void> {
     if (this.disposePromise) return await this.disposePromise;
     this.disposed = true;
-    this.disposePromise = Promise.resolve().then(() => this.disposeResources());
+    this.disposePromise = Promise.resolve().then(() => this.disposeResources(options?.preserveProviderSession === true));
     return await this.disposePromise;
   }
 
-  private async disposeResources(): Promise<void> {
+  private async disposeResources(preserveProviderSession: boolean): Promise<void> {
     logger.debug('[AcpBackend] Disposing backend');
 
     if (this.waitingForResponse || this.responseCompletionTimeout) {
@@ -4001,7 +4041,7 @@ export class AcpBackend implements AgentBackend {
     }
 
     // Try graceful shutdown first
-    if (this.connection && this.acpSessionId) {
+    if (!preserveProviderSession && this.connection && this.acpSessionId) {
       try {
         // Send cancel to stop any ongoing work
         await Promise.race([

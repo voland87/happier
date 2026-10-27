@@ -1,4 +1,5 @@
 import { describe, expect, it, vi, afterEach } from 'vitest';
+import { accountSettingsParse, AGY_ACP_SERVER_VERSION, INSTALLABLE_KEYS } from '@happier-dev/protocol';
 import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, join, sep } from 'node:path';
@@ -103,8 +104,49 @@ describe('agy-acp-server installable (EU-3)', () => {
     const status = await getAgyAcpDepStatus();
     expect(status.installed).toBe(true);
     expect(status.binPath).toBe(binPath);
-    expect(status.installedVersion).toBe('1.1.1');
+    expect(status.installedVersion).toBe(AGY_ACP_SERVER_VERSION);
     expectNoTransientInstallEntries(await readdir(status.installDir));
+  });
+
+  it('refuses an intact older installation during readiness and reinstalls it through launch ensure', async () => {
+    testConfig.home = await mkdtemp(join(tmpdir(), 'happier-agy-version-'));
+    tempDirs.add(testConfig.home);
+    const { ensureRuntimeInstallablesForLaunch } = await import('@/installables/runtime/ensureRuntimeInstallablesForLaunch');
+    const { agyAcpRuntimeInstallable } = await import('@/backends/agy/acp/runtimeInstallable');
+    let downloads = 0;
+    const installDeps = {
+      // Only the network boundary is replaced; extraction, promotion and verification stay real.
+      downloadArchive: async ({ destinationPath }: { destinationPath: string }) => {
+        downloads += 1;
+        await writeFile(destinationPath, flatArchive);
+      },
+    };
+    expect((await installAgyAcp(installDeps)).ok).toBe(true);
+    const statePath = join(testConfig.home, 'tools', 'agy-acp-server', 'install-state.json');
+    const installedState = JSON.parse(await readFile(statePath, 'utf8'));
+    await writeFile(statePath, JSON.stringify({ ...installedState, installedVersion: '1.1.1' }));
+
+    const adapter = {
+      ...agyAcpRuntimeInstallable,
+      installOrUpgrade: () => installAgyAcp(installDeps),
+    };
+    const params = {
+      installableKeys: [INSTALLABLE_KEYS.AGY_ACP_SERVER],
+      settings: accountSettingsParse({}),
+      machineId: 'machine-agy-version',
+    };
+    const deps = { getRuntimeInstallableAdapter: async () => adapter };
+    expect(await ensureRuntimeInstallablesForLaunch({ ...params, readinessOnly: true }, deps))
+      .toMatchObject({ ok: false, installableKey: INSTALLABLE_KEYS.AGY_ACP_SERVER });
+    expect(downloads).toBe(1);
+    expect(await readFile(resolveExistingAgyAcpManagedBinPath()!, 'utf8')).toBe('server-fixture');
+
+    expect(await ensureRuntimeInstallablesForLaunch(params, deps))
+      .toEqual({ ok: true, installedKeys: [INSTALLABLE_KEYS.AGY_ACP_SERVER] });
+    expect(downloads).toBe(2);
+    expect(JSON.parse(await readFile(statePath, 'utf8')).installedVersion).toBe(AGY_ACP_SERVER_VERSION);
+    expect(await ensureRuntimeInstallablesForLaunch(params, deps)).toEqual({ ok: true, installedKeys: [] });
+    expect(downloads).toBe(2);
   });
 
   it('rejects a managed executable whose contents changed after verified installation', async () => {
@@ -249,7 +291,7 @@ describe('agy-acp-server installable (EU-3)', () => {
     tempDirs.add(home);
     testConfig.home = home;
     // Unsupported platform selection itself throws in the release owner.
-    expect(() => resolveAgyAcpReleaseAsset({ platform: 'darwin', arch: 'x64' })).toThrow(/unsupported/i);
+    expect(() => resolveAgyAcpReleaseAsset({ platform: 'freebsd', arch: 'x64' })).toThrow(/unsupported/i);
     expect(resolveExistingAgyAcpManagedBinPath()).toBeNull();
   });
 });

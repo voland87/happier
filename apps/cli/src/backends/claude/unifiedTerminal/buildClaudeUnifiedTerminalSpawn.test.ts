@@ -1,5 +1,6 @@
-import { readFile, rm, stat } from 'node:fs/promises';
-import { dirname } from 'node:path';
+import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
+import { tmpdir } from 'node:os';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
@@ -81,10 +82,32 @@ async function readLaunchSpecFromSpawn(spawn: ClaudeUnifiedTerminalSpawn): Promi
 }
 
 describe('buildClaudeUnifiedTerminalSpawn', () => {
-  afterEach(() => {
+  const tempDirs: string[] = [];
+  it.each([false, true])('applies configured Happier attribution at the native terminal launch boundary (%s)', async (enabled) => {
+    await withPatchedEnv({ CLAUDE_CODE_ENTRYPOINT: 'sdk-ts', CLAUDECODE: '1' }, async () => {
+      const spawn = await buildClaudeUnifiedTerminalSpawn({
+        path: '/workspace/project',
+        first: { message: 'hello', mode: { permissionMode: 'default', claudeCodeIncludeInNativeHistory: enabled } },
+        deps: {
+          resolveClaudeCliPath: () => '/usr/local/bin/claude',
+          isClaudeCliJavaScriptFile: () => false,
+          ensureClaudeJsRuntimeExecutable: async () => '/managed/node',
+          claudeLocalLauncherPath: '/happier/scripts/claude_local_launcher.cjs',
+          terminalLaunchSpecRunnerPath: '/happier/scripts/terminal_launch_spec_runner.cjs',
+        },
+      });
+      const launch = await readLaunchSpecFromSpawn(spawn);
+      expect(spawn.spawnEnv.CLAUDE_CODE_ENTRYPOINT).toBe(enabled ? 'happier' : undefined);
+      expect(launch.env?.CLAUDE_CODE_ENTRYPOINT).toBeUndefined();
+      expect(launch.env?.CLAUDECODE).toBeUndefined();
+    });
+  });
+
+  afterEach(async () => {
     if (originalPlatformDescriptor) {
       Object.defineProperty(process, 'platform', originalPlatformDescriptor);
     }
+    await Promise.all(tempDirs.splice(0).map(dir => rm(dir, { recursive: true, force: true })));
   });
 
   it.each([
@@ -96,6 +119,10 @@ describe('buildClaudeUnifiedTerminalSpawn', () => {
   ])('prepares empty resumed native launch with persisted effort and precedence ($model/$current/$cliEffort/$supportsEffort)', async (input) => {
     // Real readiness producer, model policy and native spawn serialization; only executable
     // discovery/process invocation are replaced. No queued message can seed this empty Resume.
+    const providerDir = await mkdtemp(join(tmpdir(), 'happier-unified-native-launch-'));
+    tempDirs.push(providerDir);
+    const cliPath = join(providerDir, 'claude');
+    await writeFile(cliPath, '', { mode: 0o755 });
     const initialMode: EnhancedMode = { permissionMode: 'read-only', model: input.model, reasoningEffort: input.current };
     const prepared = await prepareClaudeUnifiedTerminalInitialMode({
       initialMode,
@@ -117,7 +144,7 @@ describe('buildClaudeUnifiedTerminalSpawn', () => {
       first: { message: '', mode: initialMode },
       claudeArgs: ['--resume', 'existing-native-session', ...(input.cliEffort ? ['--effort', input.cliEffort] : [])],
       deps: {
-        resolveClaudeCliPath: () => '/usr/local/bin/claude',
+        resolveClaudeCliPath: () => cliPath,
         ensureClaudeJsRuntimeExecutable: async () => '/managed/node',
         claudeLocalLauncherPath: '/happier/scripts/claude_local_launcher.cjs',
         terminalLaunchSpecRunnerPath: '/happier/scripts/terminal_launch_spec_runner.cjs',

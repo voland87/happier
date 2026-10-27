@@ -145,11 +145,23 @@ describe('agents/registryCore', () => {
         });
     });
 
+    it('provides CodeBuddy Code as a resumable ACP agent with persisted transcripts', () => {
+        expect(getAgentCore('codebuddy')).toMatchObject({
+            id: 'codebuddy',
+            cli: { detectKey: 'codebuddy', machineLoginKey: 'codebuddy', spawnAgent: 'codebuddy' },
+            sessionModes: { kind: 'acpAgentModes' },
+            model: { dynamicProbe: 'auto', acpModelConfigOptionId: 'model', acpModelSetMethod: 'config_option' },
+            resume: { vendorResumeIdField: 'codebuddySessionId', supportsVendorResume: true },
+            sessionStorage: { direct: false, persisted: true },
+            tools: { delivery: 'native_mcp', support: 'experimental' },
+        });
+    });
+
     it('provides Agy as a managed, resumable ACP agent while keeping the interactive CLI distinct', () => {
         expect(getAgentCore('agy')).toMatchObject({
             id: 'agy',
             cli: { detectKey: 'agy', machineLoginKey: 'antigravity-cli', spawnAgent: 'agy' },
-            sessionModes: { kind: 'none' },
+            sessionModes: { kind: 'acpAgentModes' },
             model: { dynamicProbe: 'auto', acpModelConfigOptionId: 'model' },
             resume: { vendorResumeIdField: 'agySessionId', supportsVendorResume: true },
             sessionStorage: { direct: false, persisted: true },
@@ -218,8 +230,8 @@ describe('agents/registryCore', () => {
             connectRoute: null,
         });
         expect(getAgentCore('agy').uiConnectedService).toEqual({
-            serviceId: null,
-            label: 'Antigravity',
+            serviceId: 'antigravity',
+            label: 'Google Antigravity',
             connectRoute: null,
         });
     });

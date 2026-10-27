@@ -1,4 +1,5 @@
 import type { SpawnSessionOptions } from '@/rpc/handlers/registerSessionHandlers';
+import { readSessionNativeEnvironment } from '@/agent/runtime/sessionNativeEnvironment';
 import { resolveCanonicalCodexBackendMode } from '@/rpc/handlers/codexBackendMode';
 import type { TerminalMode, TerminalSpawnOptions } from '@/terminal/runtime/terminalConfig';
 import { HAPPIER_SESSION_CONNECTED_SERVICE_MATERIALIZATION_IDENTITY_ENV_KEY } from '@/agent/runtime/sessionConnectedServiceMaterializationIdentityEnv';
@@ -17,9 +18,6 @@ import * as z from 'zod';
 
 const TERMINAL_MODES = ['plain', 'tmux', 'zellij', 'herdr', 'windows_terminal', 'windows_console'] as const satisfies readonly TerminalMode[];
 const SAFE_RESPAWN_ENVIRONMENT_VARIABLE_KEYS = [
-  'CLAUDE_CONFIG_DIR',
-  'CODEX_HOME',
-  'CODEX_SQLITE_HOME',
   HAPPIER_SESSION_CONNECTED_SERVICE_MATERIALIZATION_IDENTITY_ENV_KEY,
 ] as const;
 const NON_RESPAWN_ENVIRONMENT_VARIABLE_KEYS = new Set<string>([
@@ -119,14 +117,17 @@ function pickSafeRespawnEnvironmentVariables(value: unknown): Record<string, str
   }
 
   const record = value as Record<string, unknown>;
-  const persisted = Object.fromEntries(
-    SAFE_RESPAWN_ENVIRONMENT_VARIABLE_KEYS.flatMap((key) => {
-      const raw = record[key];
-      if (typeof raw !== 'string') return [];
-      const trimmed = raw.trim();
-      return trimmed ? [[key, trimmed]] : [];
-    }),
-  );
+  const persisted = {
+    ...readSessionNativeEnvironment(value),
+    ...Object.fromEntries(
+      SAFE_RESPAWN_ENVIRONMENT_VARIABLE_KEYS.flatMap((key) => {
+        const raw = record[key];
+        if (typeof raw !== 'string') return [];
+        const trimmed = raw.trim();
+        return trimmed ? [[key, trimmed]] : [];
+      }),
+    ),
+  };
 
   return Object.keys(persisted).length > 0 ? persisted : undefined;
 }

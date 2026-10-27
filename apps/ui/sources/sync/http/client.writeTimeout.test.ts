@@ -60,7 +60,7 @@ describe('serverFetch write timeout', () => {
             if (url.endsWith('/health') || url.endsWith('/v1/auth/ping')) {
                 return new Response('ok', { status: 200, headers: new Headers() });
             }
-            if (url.endsWith('/v2/sessions/s1/pending')) {
+            if (new URL(url).pathname === '/v2/sessions/s1/pending') {
                 // Simulate a server that accepts the connection but never responds until aborted.
                 await new Promise<void>((_resolve, reject) => {
                     if (init?.signal) {

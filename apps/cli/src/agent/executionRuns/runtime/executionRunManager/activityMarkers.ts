@@ -30,7 +30,7 @@ export function enqueueExecutionRunMarkerWrite(args: Readonly<{
 export async function writeExecutionRunActivityMarker(args: Readonly<{
   runId: string;
   nowMs: number;
-  opts?: Readonly<{ force?: boolean }>;
+  opts?: Readonly<{ force?: boolean; resumed?: boolean }>;
   runs: Map<string, ExecutionRunState>;
   controllers: Map<string, ExecutionRunController>;
   enqueueMarkerWrite: (runId: string, write: () => Promise<void>) => Promise<void>;
@@ -90,5 +90,10 @@ export async function writeExecutionRunActivityMarker(args: Readonly<{
         : null;
     })(),
   } as const;
-  await args.enqueueMarkerWrite(args.runId, () => writeExecutionRunMarker(markerPayload)).catch(() => {});
+  await args.enqueueMarkerWrite(args.runId, async () => {
+    // Resume admission is valid only for the exact still-running occurrence when its
+    // serialized write executes. Delayed ordinary writes never resurrect a terminal run.
+    if (args.runs.get(args.runId) !== run || args.controllers.get(args.runId) !== ctrl || run.status !== 'running') return;
+    await writeExecutionRunMarker(markerPayload, { allowTerminalToRunning: args.opts?.resumed === true });
+  }).catch(() => {});
 }

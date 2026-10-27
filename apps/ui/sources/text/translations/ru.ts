@@ -296,6 +296,7 @@ const acpCatalogTranslationExtension = {
     acpCatalogAuthParser: 'Парсер статуса',
     acpCatalogCapabilities: 'Возможности',
     acpCatalogTransportProfile: 'Профиль транспорта',
+    acpCatalogSupportsLoadSession: 'Поддержка возобновления сеансов',
     acpCatalogSupportsModes: 'Поддержка режимов',
     acpCatalogSupportsModels: 'Поддержка моделей',
     acpCatalogSupportsConfigOptions: 'Поддержка параметров конфигурации',
@@ -483,6 +484,15 @@ const promptLibraryUxRefinementTranslationExtension = {
 
 const sessionHandoffTranslationExtensions = {
   ru: {
+    transferSessionData: {
+      title: "Перенести данные сессии",
+      subtitle: "Копирует историю разговора этой сессии на другой компьютер. Отключите, если она уже там.",
+      checking: "Проверка поддержки на обоих компьютерах…",
+      agentRequiresTransfer: "Для этого Агента требуется перенос данных сессии между компьютерами.",
+      updateRequired: "Обновите Happier на обоих компьютерах, чтобы отключить эту опцию.",
+      sessionMissing: "На целевом компьютере нет истории этой сессии. Включите «Перенести данные сессии» и повторите попытку.",
+      workspaceRequiresTransfer: "Включите «Перенести данные сессии», чтобы копировать или синхронизировать файлы рабочего пространства.",
+    },
     activeWarning: {
       title: 'Этот сеанс все еще запущен на этом устройстве',
       message: 'Перед передачей на выбранное устройство Happier остановит этот сеанс на текущем устройстве.',
@@ -2435,6 +2445,19 @@ export const ru: TranslationStructure = {
   },
 
   connectedServices: {
+    importAccounts: {
+        unknownResult: "Результат импорта неизвестен. Обновите список аккаунтов и проверьте этот профиль перед повторной попыткой.",
+        title: "Импортировать существующий вход",
+        failed: "Не удалось импортировать вход. Проверьте вход на выбранном компьютере и повторите попытку.",
+        actionDescription: "Скопировать вход с одного из ваших компьютеров",
+        description: "Скопируйте вход в зашифрованный профиль. Общие токены обновления могут меняться, и локальное приложение может запросить повторный вход.",
+        unsupported: "Импорт недоступен. Выберите другой компьютер или обновите его CLI.",
+        credentialsUnavailable: "Нет пригодного входа. Войдите в локальное приложение и повторите попытку.",
+        profileConflict: "Профиль принадлежит другому аккаунту или изменился при импорте. Выберите новое имя.",
+        reauthorizationRequired: "Снова войдите в локальное приложение и повторите попытку.",
+        imported: "Вход импортирован",
+        refreshFailed: "Вход импортирован, но список аккаунтов не обновился. Откройте подключённые сервисы снова.",
+    },
       subscription: {
           title: "Подписка",
           currentPeriod: "Текущий период",
@@ -2464,6 +2487,7 @@ export const ru: TranslationStructure = {
       openai: "Ключ API OpenAI",
       anthropic: "Ключ API Anthropic",
       gemini: "Gemini от Google",
+      antigravity: 'Google Antigravity',
       github: "GitHub",
     },
     title: "Подключённые сервисы",
@@ -2485,6 +2509,7 @@ export const ru: TranslationStructure = {
                 profileMissing: 'Выбранный подключенный аккаунт больше недоступен. Обновите список аккаунтов и выберите другой.',
                 groupMissing: 'Выбранный пул аккаунтов больше недоступен. Обновите список аккаунтов и выберите другой пул.',
                 metadataUpdateFailed: 'Сессии не удалось сохранить новый выбор аутентификации. Попробуйте снова после завершения синхронизации сессии.',
+                restartDisallowedByExecutionPolicy: 'Это изменение аутентификации требует перезапуска, который запрещён во время работы сессии. Остановите сессию перед изменением её аутентификации.',
                 restartFailed: 'Не удалось перезапустить сессию с новым выбором аутентификации. Остановите сессию и попробуйте снова.',
                 hotApplyFailed: 'Запущенная сессия отклонила новый выбор аутентификации. Перезапустите сессию и попробуйте снова.',
                 agentMismatch: 'Этот выбор аутентификации не соответствует бэкенду сессии.',
@@ -2570,6 +2595,7 @@ export const ru: TranslationStructure = {
       },
     },
     quota: {
+      refreshing: "Обновление использования…",
       loading: "Загрузка…",
       error: ({ message }: { message: string }) => `Ошибка: ${message}`,
       lastUpdated: ({ time }: { time: string }) => `Обновлено: ${time}`,
@@ -2616,6 +2642,21 @@ export const ru: TranslationStructure = {
       resets: {
         use: "Применить",
         available: "Сброс доступен",
+        remainingCount: ({ count }: { count: number }) => `Сохранённые сбросы: ${count}`,
+        appliesTo: ({ limits }: { limits: string }) => `Применяется к: ${limits}`,
+        fiveHourLimit: "Лимит на 5 часов",
+        weeklyLimit: "Недельный лимит",
+        unavailableReasons: {
+          paused: "Приостановлено",
+          cooldown: "Ожидание окончания паузы",
+          ineligible: "Не соответствует условиям",
+          not_selected: "Не выбрано",
+          provider_unavailable: "Провайдер недоступен",
+          not_started: "Ещё не началось",
+          expired: "Срок истёк",
+          consumed: "Уже использовано",
+          unknown: "Сейчас недоступно",
+        },
         rowLabel: ({ date, countdown }: { date: string; countdown: string }) => `Истекает ${date} · ${countdown}`,
         now: "сейчас",
         inDays: ({ days }: { days: number }) => `через ${days}д`,
@@ -2637,6 +2678,12 @@ export const ru: TranslationStructure = {
       pasteRedirectUrlPromptBody:
         "После завершения OAuth скопируйте итоговый URL редиректа из адресной строки браузера и вставьте его сюда.",
       providerOverrides: {
+        antigravity: {
+          connectWebDescription: "Следующий шаг: войдите через Google. Antigravity покажет код авторизации для копирования.",
+          pasteRedirectUrlPromptBody: "1) Войдите через Google. 2) Скопируйте код авторизации с antigravity.google. 3) Вставьте его ниже, оставив это окно входа открытым.",
+          pasteRedirectUrlPlaceholder: "Вставьте код авторизации Antigravity",
+          pasteRedirectUrlTitle: "Вставить код авторизации",
+        },
         claudeSubscription: {
           connectWebDescription:
             "Следующий шаг: войдите на открывшейся странице. Claude может показать строку кода вместо автоматического редиректа.",
@@ -2819,6 +2866,7 @@ export const ru: TranslationStructure = {
       addOauthProfileDeviceTitle: "Добавить через аутентификацию устройства",
       addOauthProfileDeviceSubtitle: "Рекомендуется для web/удалённых сред",
       addOauthProfilePasteTitle: "Добавить через вставку редиректа",
+      signInWithGoogle: 'Войти через Google',
       addOauthProfilePasteSubtitle: "Ручной поток копирования/вставки URL редиректа",
       addOauthProfileBrowserTitle: "Добавить через встроенный браузер",
       addOauthProfileBrowserSubtitle: "Используйте встроенный браузер, если поддерживается",
@@ -2863,6 +2911,7 @@ export const ru: TranslationStructure = {
       errors: {
         credentialReferencedByGroup: "Эта учетная запись все еще используется пулом аккаунтов. Удалите ее из пула и повторите попытку.",
         credentialNotFound: "Эта подключенная учетная запись уже удалена.",
+        serviceUnsupportedServer: 'Этот ретранслятор не поддерживает данный подключённый сервис. Обновите ретранслятор, чтобы подключить его.',
         credentialRequestFailed: "Запрос подключенной учетной записи не удался. Обновите подключенные сервисы и повторите попытку.",
         groupRequestFailed: "Запрос пула аккаунтов не удался. Обновите подключенные сервисы и повторите попытку.",
         generationConflict: "Этот пул аккаунтов изменился до завершения действия. Обновите подключенные сервисы и повторите попытку.",
@@ -4056,6 +4105,10 @@ export const ru: TranslationStructure = {
                             }
                         }
                     },
+                    claudeCodeIncludeInNativeHistory: {
+                        title: "Показывать сессии в Claude Code",
+                        subtitle: "Использовать идентификацию Happier для новых сессий Claude, включая Agent SDK. При отключении сохраняются настройки среды по умолчанию."
+                    },
                     claudeCodeExperimentalAgentTeamsEnabled: {
                         title: "Принудительно включить Agent Teams",
                         subtitle: "Включает экспериментальный Agent Teams в Claude Code (рой агентов) во всех сессиях Claude, запущенных из Happier."
@@ -4244,6 +4297,7 @@ export const ru: TranslationStructure = {
             agy: { title: 'Antigravity' },
             fx: { title: "FX" },
             droid: { title: "Factory Droid" },
+            codebuddy: { title: "CodeBuddy" },
             grok: {
                 title: "Grok Build"
             },
@@ -4357,6 +4411,9 @@ export const ru: TranslationStructure = {
       full: "На всю ширину",
       fullDescription: "Использовать доступную ширину окна",
     },
+    feedback: "Отклик",
+    haptics: "Тактильный отклик",
+    hapticsDescription: "Использовать тактильный отклик для действий и изменения порядка на этом устройстве.",
     backdropBlur: "Размытие фона",
     backdropBlurDescription:
       "Использовать размытие фона за модальными окнами и меню. Отключите, чтобы повысить производительность браузера.",
@@ -4385,6 +4442,13 @@ export const ru: TranslationStructure = {
       "Показывать номера строк в представлениях инструментов",
     showLineNumbersInToolViewsDescription:
       "Отображать номера строк в различиях представлений инструментов",
+    chatCodeBlocks: {
+        title: 'Блоки кода в чате',
+        showWrapControls: 'Показывать переключатели переноса строк',
+        showWrapControlsDescription: 'Показывать переключатель переноса строк в каждом блоке кода в чате',
+        wrapByDefault: 'Переносить строки кода по умолчанию',
+        wrapByDefaultDescription: 'Переносить длинные строки в блоках кода в чате, если для блока не выбран другой режим',
+    },
     wrapLinesInDiffs: "Перенос строк в представлениях кода",
     wrapLinesInDiffsDescription:
       "Переносить длинные строки в предпросмотрах кода и редакторах вместо горизонтальной прокрутки",
@@ -4667,6 +4731,8 @@ export const ru: TranslationStructure = {
   },
 
     errors: {
+    machineRpcDecryptionFailed: "Не удалось расшифровать данные этого компьютера. Войдите с соответствующим ключом аккаунта и попробуйте снова.",
+    machineRpcContextUnavailable: "Подключение к этому компьютеру недоступно. Обновите список компьютеров и попробуйте снова.",
     networkError: "Произошла ошибка сети",
     serverError: "Произошла ошибка сервера",
     unknownError: "Произошла неизвестная ошибка",
@@ -5519,7 +5585,9 @@ export const ru: TranslationStructure = {
     fxSessionId: "ID сессии FX",
     fxSessionIdCopied: "ID сессии FX скопирован в буфер обмена",
     droidSessionId: "ID сессии Factory Droid",
+    codebuddySessionId: "ID сессии CodeBuddy",
     droidSessionIdCopied: "ID сессии Factory Droid скопирован в буфер обмена",
+    codebuddySessionIdCopied: "ID сессии CodeBuddy скопирован в буфер обмена",
     customAcpSessionId: "ID пользовательской ACP-сессии",
     grokSessionId: "ID сессии Grok",
     grokSessionIdCopied: "ID сессии Grok скопирован в буфер обмена",
@@ -5708,6 +5776,7 @@ export const ru: TranslationStructure = {
     working: "работаю...",
     workingRetained: "работает, ожидание обновлений…",
     keptInAttention: "оставлено в разделе внимания",
+    archiving: "архивация…",
     backgroundActive: ({ count }: { count: number }) => `${count} выполняется в фоне`,
     activityUnknown: "статус активности недоступен",
     readyForReview: "готово к проверке",
@@ -6051,6 +6120,11 @@ export const ru: TranslationStructure = {
         composerBanners: {
             showBannerAction: 'Показать баннер',
             hideBannerAction: 'Скрыть баннер',
+	    },
+	    runnerRestartBackgroundWork: {
+	        title: 'Выполняется фоновая работа',
+	        body: ({ count }: { count: number }) => `Фоновых задач в работе: ${count}. Перезапуск остановит их.`,
+	        confirmAction: 'Остановить и перезапустить',
 	    },
 	    staleRunner: {
 	      title: "Сессия всё ещё работает на старой CLI",
@@ -6453,7 +6527,7 @@ export const ru: TranslationStructure = {
         discarded: {
           title: "Отброшенные сообщения",
           subtitle:
-            "Эти сообщения не были отправлены агенту (например, при переключении с удалённого на локальный режим).",
+            "Эти сообщения больше не находятся в очереди. Результат доставки может быть неизвестен; проверьте историю разговора перед повторной отправкой.",
           label: "Отброшено",
           removeConfirm: {
             title: "Удалить отброшенное сообщение?",
@@ -6659,6 +6733,28 @@ export const ru: TranslationStructure = {
           targetSession: "Целевая сессия",
           noTarget: "Сессия не выбрана",
           clearTarget: "Очистить цель",
+          errors: {
+              sendFailed: "Не удалось отправить сообщение в сессию.",
+              sttFailed: "Не удалось распознать сказанное. Попробуйте ещё раз.",
+              sttTimeout: "Время распознавания речи истекло. Проверьте подключение и попробуйте ещё раз.",
+              sttAuthFailed: "Сервис распознавания речи отклонил API-ключ. Проверьте ключ и его ограничения в разделе Настройки → Голос.",
+              sttRateLimited: "Превышен лимит запросов распознавания речи. Подождите немного и попробуйте ещё раз.",
+              missingSttBaseUrl: "Укажите URL сервера распознавания речи в разделе Настройки → Голос.",
+              missingSttApiKey: "Добавьте API-ключ распознавания речи в разделе Настройки → Голос.",
+              recordingStartFailed: "Не удалось включить микрофон. Убедитесь, что его не использует другое приложение.",
+              recordingStopFailed: "Не удалось завершить запись. Попробуйте ещё раз.",
+              deviceSttUnavailable: "Распознавание речи недоступно на этом устройстве. Выберите другого провайдера распознавания речи в разделе Настройки → Голос.",
+              speechPermissionDenied: "Доступ к микрофону или распознаванию речи запрещён. Разрешите его в настройках устройства.",
+              deviceSttStartFailed: "Не удалось запустить распознавание речи. Попробуйте ещё раз.",
+              localNeuralSttUnavailable: "Распознавание речи на устройстве недоступно в этой сборке. Выберите другого провайдера распознавания речи в разделе Настройки → Голос.",
+              localNeuralPackNotInstalled: "Скачайте речевую модель в разделе Настройки → Голос.",
+              localNeuralSttStartFailed: "Не удалось запустить распознавание речи на устройстве. Попробуйте ещё раз.",
+              localNeuralAudioCaptureFailed: "Микрофон неожиданно отключился. Попробуйте ещё раз.",
+              ttsFailed: "Не удалось воспроизвести голосовой ответ. Проверьте синтез речи в разделе Настройки → Голос.",
+              voiceAgentRequiresFeature: ({ feature }: { feature: string }) => `Для режима агента включите «${feature}» в разделе Настройки → Функции.`,
+              voiceAgentUnavailable: "Голосовой агент недоступен на этом сервере.",
+              generic: "В работе голоса возникла проблема.",
+          },
           a11y: {
             teleport: "Телепортировать голосового агента",
             toggleActivity: "Переключить голосовую активность",
@@ -6788,6 +6884,8 @@ export const ru: TranslationStructure = {
     permissionMode: {
       title: "РЕЖИМ РАЗРЕШЕНИЙ",
       effectiveLabel: ({ label }: { label: string }) => `Эффективно: ${label}`,
+      nativeModeOverrides: ({ mode }: { mode: string }) => `Режим агента ${mode} имеет приоритет над этой настройкой разрешений. Сбросьте выбор режима, чтобы использовать настройку разрешений.`,
+            usePermissionSetting: 'Использовать настройку разрешений',
       default: "По умолчанию",
       readOnly: "Только чтение",
       acceptEdits: "Принимать правки",
@@ -6818,6 +6916,7 @@ export const ru: TranslationStructure = {
       agy: 'Antigravity',
       fx: "FX",
       droid: "Factory Droid",
+      codebuddy: "CodeBuddy",
       customAcp: "Пользовательский АКП",
       pi: "Pi",
       copilot: "Copilot",
@@ -7926,7 +8025,7 @@ export const ru: TranslationStructure = {
         invalidActionSubtitle: "Это действие больше недоступно в этой сборке.",
         configureActionAccessibilityLabel: "Настроить действие",
         approvalHelpTitle: "Режимы одобрения",
-        approvalHelpBody: "«Сначала спрашивать» создаёт запрос на одобрение перед запуском этого действия из этой поверхности. Для AI-сессий этот запрос попадает в существующую поверхность одобрений и не ждёт в модальном окне. «Разрешено» позволяет запускать действие из этой поверхности без запроса на одобрение.",
+        approvalHelpBody: "«Сначала спрашивать» требует одобрения перед запуском действия из этой поверхности. Элементы приложения могут показывать диалог подтверждения. Для AI-сессий запрос попадает в существующую поверхность одобрений и не ждёт в модальном окне. «Разрешено» позволяет запускать действие без запроса на одобрение.",
         toolExposure: {
             title: "Экспонирование инструмента",
             footer: "Определяет, показываются ли подходящие действия как прямые инструменты или доступны только через поиск действий.",
@@ -8099,6 +8198,14 @@ settingsSession: {
 	        workingStatusAnimatedTextTitle: 'Анимированный рабочий текст',
 	        workingStatusAnimatedTextEnabledSubtitle: 'Менять рабочие глаголы, пока сессия выполняется',
 	        workingStatusAnimatedTextDisabledSubtitle: 'Показывать постоянную метку работаю..., пока сессия выполняется',
+	        backgroundWorkAttentionModeTitle: "Непрочитанные ответы во время фоновой работы",
+	        backgroundWorkAttentionModeSubtitle: "Выберите, где показывать непрочитанные ответы, пока продолжается фоновая работа. Запросы к вам по-прежнему требуют внимания.",
+	        backgroundWorkAttentionKeepWorkingTitle: "Сохранять статус работы",
+	        backgroundWorkAttentionKeepWorkingSubtitle: "Сохранять статус работы и показывать синюю точку в центре для непрочитанных ответов",
+	        backgroundWorkAttentionKeepWorkingUnreadTitle: "Показывать статус непрочитанного в «В работе»",
+	        backgroundWorkAttentionKeepWorkingUnreadSubtitle: "Оставлять сессии в «В работе» и показывать статус непрочитанного, пока вы не прочитаете ответ",
+	        backgroundWorkAttentionShowUnreadTitle: "Перемещать непрочитанные сессии в «Требует внимания»",
+	        backgroundWorkAttentionShowUnreadSubtitle: "Перемещать сессии с непрочитанными ответами в «Требует внимания», пока продолжается фоновая работа",
 	        attentionPromotionModeTitle: 'Сессии, требующие внимания',
 	        attentionPromotionModeSubtitle: 'Выберите, где показывать сессии, ожидающие вас или готовые к проверке',
 	        attentionPromotionModeOffTitle: 'Оставлять на обычном месте',
@@ -9258,6 +9365,26 @@ settingsSession: {
           },
         },
       },
+      modelPackDownload: {
+        progress: ({ loaded, total }: { loaded: string; total: string }) => `${loaded} из ${total}`,
+        progressWithFiles: ({ loaded, total, filesDone, filesTotal }: { loaded: string; total: string; filesDone: number; filesTotal: number }) =>
+          `${loaded} из ${total} · ${filesDone} из ${filesTotal} ${plural({ count: filesTotal, one: 'файла', few: 'файлов', many: 'файлов' })}`,
+        progressAccessibilityLabel: "Ход загрузки",
+        verifyingDetail: "Проверка",
+        verifyingProgress: ({ verified, total, filesDone, filesTotal }: { verified: string; total: string; filesDone: number; filesTotal: number }) =>
+          `Проверено ${verified} из ${total} · ${filesDone} из ${filesTotal} ${plural({ count: filesTotal, one: 'файла', few: 'файлов', many: 'файлов' })}`,
+        verifyingAccessibilityLabel: "Ход проверки",
+        failedDetail: "Ошибка",
+        failedSubtitle: "Не удалось подготовить модель. Нажмите, чтобы повторить.",
+        failedResumableSubtitle: ({ size }: { size: string }) => `Загрузка не завершилась. ${size} сохранено — нажмите, чтобы продолжить.`,
+        incompleteDetail: "Не завершено",
+        incompleteSubtitle: ({ size }: { size: string }) => `Загружено ${size}. Нажмите, чтобы продолжить.`,
+        discardSubtitle: "Удалите незавершённую загрузку, чтобы освободить место.",
+        discardConfirmTitle: "Удалить незавершённую загрузку?",
+        discardConfirmBody: ({ size }: { size: string }) => `Будут удалены уже загруженные ${size}. Модель можно будет загрузить снова позже.`,
+        insufficientStorage: ({ required, available }: { required: string; available: string }) =>
+            `Недостаточно свободного места. Для загрузки нужно ${required}, а свободно только ${available}.`,
+      },
       localNeuralStt: {
         modelPack: {
           title: "Пакет модели",
@@ -9280,12 +9407,6 @@ settingsSession: {
           installedWithBuild: ({ build }: { build: string }) =>
             `Установлено • ${build}`,
           notInstalled: "Не установлено",
-        },
-        language: {
-          title: "Язык",
-          subtitle: "Необязательный языковой тег BCP-47.",
-          promptTitle: "Язык",
-          promptBody: "Введите языковой тег BCP-47 (например: en, en-US).",
         },
         alerts: {
           downloadFailedTitle: "Ошибка загрузки",
@@ -9320,6 +9441,8 @@ settingsSession: {
           enableTitle: "Включить hands-free",
           silenceTitle: "Таймаут тишины (мс)",
           minSpeechTitle: "Минимальная речь (мс)",
+          pushToTalkTitle: "Нажмите, чтобы говорить",
+          pushToTalkSubtitle: "Этот провайдер распознаёт готовую запись — нажмите микрофон ещё раз, чтобы отправить. Для режима без рук выберите распознавание речи устройства или локальное нейронное.",
         },
         customBackendIdSubtitle: "Введите пользовательский id бэкенда.",
         searchBackendsPlaceholder: "Поиск бэкендов",
@@ -9575,8 +9698,7 @@ settingsSession: {
       sttProvider: "Провайдер STT",
       neuralStt: {
         title: "STT на устройстве",
-        webNotAvailableSubtitle:
-          "Недоступно в вебе. Используйте STT устройства, OpenAI-совместимый или Gemini STT.",
+        webFallbackSubtitle: "Работает только в мобильном приложении. В браузере используется распознавание речи браузера.",
       },
       ttsBaseUrl: "Базовый URL TTS",
       ttsBaseUrlTitle: "Текст в речь",
@@ -9834,6 +9956,7 @@ settingsSession: {
       checking: "Проверка…",
       failedGeneric: "Обновление не завершилось. Попробуйте ещё раз.",
       remoteUnsupported: "Эта машина не может обновить командную строку удалённо. Обновите её на самой машине.",
+      archiveExpandedByteLimit: "Загруженная среда превышает ограничение размера распаковки. Обновите Happier перед повторной попыткой.",
       updateNotVerified: "Обновление выполнилось, но версия не изменилась.",
       rolledBackLocal: "Обновление не запустилось, поэтому на этом компьютере восстановлена предыдущая версия.",
       smokeFailed: "Новая версия не заработала на этом компьютере, поэтому ничего не изменилось.",
@@ -10309,6 +10432,7 @@ settingsSession: {
     blockedTitle: 'Настройка остановлена',
     blockedStatusFallback: 'Настройку не удалось завершить. Ваша учётная запись и сессии не затронуты.',
     blockedServiceConflictStatus: 'Сначала нужно разобраться с другой фоновой службой на этом компьютере. Она осталась как была — откройте «Подробности», чтобы увидеть, с какой.',
+    blockedServiceManagerUnavailableStatus: 'Happier не может настроить фоновую службу на этом компьютере. Откройте «Подробности» для получения помощи или продолжайте работать на других машинах.',
     blockedConsentDeclinedStatus: 'Настройка остановлена. Фоновая служба, которая уже была здесь, осталась ровно такой же.',
     blockedAccountKeptStatus: 'Настройка остановлена. Этот компьютер остаётся подключён к аккаунту, в который он вошёл.',
     blockedAccountChangedStatus: 'Во время настройки этот компьютер вошёл в другой аккаунт, поэтому настройка остановилась до сопряжения. Попробуйте ещё раз.',
@@ -10611,6 +10735,7 @@ settingsSession: {
     providerStateSharingDegraded: "Совместное использование состояния провайдера применено частично",
     connectedServiceRuntimeAuthRecoveryRecovered: "Аутентификация провайдера восстановлена",
     connectedServiceRuntimeAuthRecoveryCancelled: "Восстановление аутентификации провайдера отменено",
+        connectedServiceRuntimeAuthRecoveryStopped: "Восстановление провайдера остановлено; автоматических повторов не будет",
     runtimeConfigOutcomeAppliesBeforeNextMessage: "Применится перед вашим следующим сообщением",
     runtimeConfigOutcomeQueuedUntilReady: "В очереди до готовности",
     runtimeConfigOutcomeAlreadySet: "Уже установлено",
@@ -11023,8 +11148,8 @@ settingsSession: {
       anthropic: "Anthropic (по умолчанию)",
       deepseek: "DeepSeek (Рассуждение)",
       zai: "Z.AI (GLM-4.6)",
-      minimax: "MiniMax (M3)",
-      minimaxCn: "MiniMax (M3, CN)",
+      minimax: "MiniMax (M3.1 Flash)",
+      minimaxCn: "MiniMax (M3.1 Flash, CN)",
       codex: "Codex (по умолчанию)",
       openai: "OpenAI (GPT-5)",
       azureOpenai: "Azure OpenAI",
@@ -11196,6 +11321,7 @@ settingsSession: {
       agySubtitleExperimental: "Antigravity CLI (экспериментально)",
       fxSubtitleExperimental: "FX CLI (экспериментально)",
       droidSubtitleExperimental: "Factory Droid CLI (экспериментально)",
+      codebuddySubtitleExperimental: "CodeBuddy Code CLI (экспериментально)",
       customAcpSubtitleExperimental: "Пользовательский ACP CLI (экспериментально)",
       grokSubtitleExperimental: "Grok Build CLI (экспериментально)",
       piSubtitleExperimental: "Pi CLI (экспериментально)",

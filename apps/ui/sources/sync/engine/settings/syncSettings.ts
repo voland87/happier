@@ -670,11 +670,10 @@ export async function syncSettings(params: SyncSettingsParams): Promise<void> {
     // rewrite them so other clients can decrypt them reliably.
     if (decryptedSettings && fetched.api === 'v2') {
         const ciphertext = fetched.content?.t === 'encrypted' ? String(fetched.content.c ?? '') : '';
-        const machineKey = encryption.getContentPrivateKey();
         const opened = accountMode === 'e2ee' && fetched.content?.t === 'encrypted' && ciphertext
             ? openAccountScopedBlobCiphertext({
                   kind: 'account_settings',
-                  material: { type: 'dataKey', machineKey },
+                  material: { type: 'dataKey', machineKey: encryption.getContentPrivateKey() },
                   ciphertext,
               })
             : null;

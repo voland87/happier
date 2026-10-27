@@ -26,6 +26,12 @@ function handleInitialize(msg) {
 }
 
 function handleModelList(msg) {
+  if (process.env.HAPPIER_TEST_CONTROL_PROCESS_CAPTURE_FILE) {
+    writeFileSync(process.env.HAPPIER_TEST_CONTROL_PROCESS_CAPTURE_FILE, JSON.stringify({
+      cwd: process.cwd(),
+      rpcTimeoutMs: Number(process.env.HAPPIER_CODEX_APP_SERVER_RPC_TIMEOUT_MS),
+    }));
+  }
   if (process.env.HAPPIER_FAKE_CODEX_APP_SERVER_ENV_CAPTURE_FILE) {
     writeFileSync(process.env.HAPPIER_FAKE_CODEX_APP_SERVER_ENV_CAPTURE_FILE, JSON.stringify({
       CODEX_HOME: process.env.CODEX_HOME ?? null,

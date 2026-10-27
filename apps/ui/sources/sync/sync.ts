@@ -217,7 +217,7 @@ import {
     isTerminalTaskLifecycleEventType,
     type TaskLifecycleEvent,
 } from '@/sync/engine/sessions/taskLifecycle';
-import { initializeTracking, tracking } from '@/track';
+import { initializeTracking, tracking, trackLogout } from '@/track';
 import { applyCrashReportsOptOut } from '@/utils/system/sentry';
 import { parseToken } from '@/utils/auth/parseToken';
 import { fireAndForget } from '@/utils/system/fireAndForget';
@@ -298,6 +298,7 @@ import { submitSessionUserMessage } from './domains/session/input/submitSessionU
 import type {
     SessionMessageCallerSurface,
     SessionSubmitPort,
+    SubmitSessionUserMessageResult,
 } from './domains/session/input/types';
 import type { SavedSecret } from './domains/settings/savedSecretTypes';
 import type { PermissionMode } from './domains/permissions/permissionTypes';
@@ -968,7 +969,7 @@ class Sync {
 
         encryption!: Encryption;
         serverID!: string;
-        anonID!: string;
+        anonID: string | null = null;
         private credentials!: AuthCredentials;
         private pauseController = new PauseController();
         private syncTuning: SyncTuning = loadSyncTuning();
@@ -1633,6 +1634,8 @@ class Sync {
       }
 
       private configureEncryptionRuntime(encryption: Encryption, accountId: string): void {
+          if (encryption.anonID) initializeTracking(encryption.anonID);
+          else trackLogout();
           const serverId = String(getActiveServerSnapshot().serverId ?? '').trim() || null;
           encryption.configureAesBatchConcurrencyLimit(this.syncTuning.encryptionAesBatchConcurrencyLimit);
           // Routing is NOT set here. It arrives with the instance: Encryption resolves it
@@ -1666,8 +1669,9 @@ class Sync {
                   ? createApiSessionDraftsTransport({ credentials })
                   : undefined,
               cipher: createSessionDraftCipher({
-                  accountMode,
-                  accountCryptoMaterial: resolveAccountScopedCryptoMaterialFromCredentials(credentials),
+                  ...(accountMode === 'plain'
+                      ? { accountMode, accountCryptoMaterial: null }
+                      : { accountMode, accountCryptoMaterial: resolveAccountScopedCryptoMaterialFromCredentials(credentials) }),
                   getSessionContext: (sessionId) => {
                       const session = storage.getState().sessions[sessionId] ?? null;
                       if (!session) return null;
@@ -2891,13 +2895,6 @@ class Sync {
                     );
             }
         } catch (e) {
-            if (
-                e
-                && typeof e === 'object'
-                && (e as { code?: unknown }).code === 'action-conflict'
-            ) {
-                await this.fetchPendingMessages(sessionId).catch(() => {});
-            }
             if (isTerminalAuthError(e)) {
                 recordTerminalAuthSyncError(e);
             }
@@ -3174,17 +3171,29 @@ class Sync {
         const wireMode = resolvePendingInputServerWireMode(await getServerFeaturesSnapshot({
             serverId: ownerContext.outboxScope.serverId,
         }));
-        await updatePendingRequestedActionV2({
-            sessionId,
-            localId,
-            requestedAction,
-            ...(options?.resumeWhenAvailable !== undefined
-                ? { resumeWhenAvailable: options.resumeWhenAvailable }
-                : {}),
-            request: ownerContext.request,
-            outboxScope: ownerContext.outboxScope,
-            wireMode,
-        });
+        try {
+            await updatePendingRequestedActionV2({
+                sessionId,
+                localId,
+                requestedAction,
+                ...(options?.resumeWhenAvailable !== undefined
+                    ? { resumeWhenAvailable: options.resumeWhenAvailable }
+                    : {}),
+                request: ownerContext.request,
+                outboxScope: ownerContext.outboxScope,
+                wireMode,
+            });
+        } catch (error) {
+            const code = error && typeof error === 'object' && 'code' in error ? error.code : undefined;
+            if (code === 'action-conflict' || code === 'not-found') {
+                try {
+                    await this.fetchPendingMessages(sessionId);
+                } catch (refreshError) {
+                    log.log('Failed to reconcile pending messages after a stale requested action: ' + String(refreshError));
+                }
+            }
+            throw error;
+        }
         if (options?.resumeWhenAvailable !== undefined) {
             await this.refreshSessionForSubmit(sessionId, {
                 serverId: ownerContext.outboxScope.serverId,
@@ -3236,7 +3245,7 @@ class Sync {
             callerSurface?: SessionMessageCallerSurface | null;
             forceImmediate?: boolean;
         }>,
-    ): Promise<void> {
+    ): Promise<SubmitSessionUserMessageResult> {
         let state = storage.getState();
         let session = state.sessions[sessionId] ?? null;
         if (!session) {
@@ -3287,6 +3296,7 @@ class Sync {
                 'Failed to submit message',
             );
         }
+        return result;
     }
 
     private async updateSessionMetadataWithRetry(
@@ -5077,6 +5087,7 @@ class Sync {
         await fetchAndApplyMachines({
             credentials: this.credentials,
             encryption: this.encryption,
+            getAccountEncryptionMode: async () => (await fetchAccountEncryptionMode(this.credentials, { retry: 'none' })).mode,
             machineDataKeys: this.machineDataKeys,
             throwOnError: false,
             getExistingMachine: (machineId) => storage.getState().machines[machineId] ?? null,
@@ -7870,6 +7881,7 @@ class Sync {
           await handleSocketUpdate({
               update,
               encryption: this.encryption,
+              getAccountEncryptionMode: async () => (await fetchAccountEncryptionMode(this.credentials, { retry: 'none' })).mode,
               settingsScope: this.pendingSettingsScope,
               getPendingSettings: () => this.pendingSettings,
               sourceServerId,
@@ -7966,11 +7978,20 @@ class Sync {
             getSession: (sessionId) => storage.getState().sessions[sessionId],
             applyMessages: (sessionId, messages) => this.applyMessages(sessionId, messages, { notifyVoice: false, notifyActivity: true }),
             updateDirectSessionTranscript: (ephemeralUpdate) => this.handleDirectSessionTranscriptEphemeralUpdate(ephemeralUpdate),
-            applyActionOperationRevision: (ephemeralUpdate) => {
+            applyActionOperationRevision: async (ephemeralUpdate) => {
                 if (!this.encryption || !shouldContinue()) return;
+                const machineEncryption = this.encryption.getMachineEncryption(ephemeralUpdate.machineId);
+                if (!machineEncryption) {
+                    this.machinesSync.invalidate();
+                    return;
+                }
+                if (machineEncryption.mode === 'plain' && (await fetchAccountEncryptionMode(this.credentials, { retry: 'none' })).mode !== 'plain') return;
+                if (!shouldContinue()) return;
                 const snapshot = openActionOperationRevisionEphemeral({
                     update: ephemeralUpdate,
-                    machineKey: this.encryption.getContentPrivateKey(),
+                    machineKey: machineEncryption.mode === 'plain' ? null : this.encryption.getContentPrivateKey(),
+                    machineMode: machineEncryption.mode,
+                    accountId: this.serverID,
                 });
                 if (!snapshot || !shouldContinue()) return;
                 actionOperationStore.merge(snapshot);
@@ -8411,9 +8432,6 @@ async function syncInit(credentials: AuthCredentials, restore: boolean) {
 
     // Initialize sync engine
     const encryption = await createEncryptionFromAuthCredentials(credentials);
-
-    // Initialize tracking
-    initializeTracking(encryption.anonID);
 
     // Initialize socket connection
     apiSocket.initialize({ endpoint: getActiveServerSnapshot().serverUrl, token: credentials.token }, encryption);

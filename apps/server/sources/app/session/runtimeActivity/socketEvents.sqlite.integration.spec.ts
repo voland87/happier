@@ -1,8 +1,10 @@
 import { randomUUID } from 'node:crypto';
+import { Expo } from 'expo-server-sdk';
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createSessionPublisherPresence } from '@/app/presence/sessionPublisherPresence';
+import { computeAccountActivityBadgeCounts } from '@/app/activity/accountActivityBadge';
 import { expireSessionPublisherCandidates } from '@/app/presence/sessionPublisherPresenceTimeout';
 import { resolvePresenceTimeoutConfig, runPresenceTimeoutTick } from '@/app/presence/timeout';
 import { applySessionTurnMutation } from '@/app/session/sessionWriteService';
@@ -11,6 +13,7 @@ import { inTx } from '@/storage/inTx';
 import { createLightSqliteHarness, type LightSqliteHarness } from '@/testkit/lightSqliteHarness';
 
 import { registerSessionRuntimeActivitySnapshotSocketEvent } from './socketEvents';
+import { publishSessionPublisherLifecycleUpdate } from './publishPublisherLifecycleUpdate';
 
 type Handler = (value: unknown, acknowledge?: (value: unknown) => void) => void | Promise<void>;
 
@@ -53,8 +56,89 @@ describe('Runtime Activity snapshot socket event on SQLite', () => {
         return { ownerId: owner.id, participantId: participant.id, machineId, sessionId: session.id };
     }
 
+    it.each(['registration', 'exact close without a turn', 'legacy end with an open turn', 'timeout'] as const)(
+        'refreshes the badge after %s without clearing live requests',
+        async (closeKind) => {
+            const seeded = await seed();
+            await db.session.update({
+                where: { id: seeded.sessionId },
+                data: { pendingPermissionRequestCount: 1, pendingUserActionRequestCount: 1 },
+            });
+            const token = `ExponentPushToken[${randomUUID()}]`;
+            await db.accountPushToken.create({ data: { accountId: seeded.ownerId, token } });
+            if (closeKind === 'legacy end with an open turn') {
+                await expect(applySessionTurnMutation({
+                    actorUserId: seeded.ownerId,
+                    mutation: {
+                        v: 1,
+                        sessionId: seeded.sessionId,
+                        mutationId: `begin-${randomUUID()}`,
+                        action: 'begin',
+                        turnId: `turn-${randomUUID()}`,
+                        observedAt: Date.now(),
+                    },
+                })).resolves.toMatchObject({ ok: true, didApply: true });
+            }
+            // Expo delivery is the only mocked boundary; persistence and lifecycle fanout stay real.
+            const send = vi.spyOn(Expo.prototype, 'sendPushNotificationsAsync').mockImplementation(async (messages) =>
+                messages.map(() => ({ status: 'ok' as const, id: randomUUID() })),
+            );
+            try {
+                const handlers = new Map<string, Handler>();
+                const socket = { on: (event: string, handler: Handler) => { handlers.set(event, handler); } };
+                registerSessionRuntimeActivitySnapshotSocketEvent({
+                    socket,
+                    presence: createSessionPublisherPresence(closeKind === 'timeout'
+                        ? { now: () => new Date(Date.now() - 60_000) }
+                        : {}),
+                    binding: { accountId: seeded.ownerId, machineId: seeded.machineId, sessionId: seeded.sessionId },
+                    publish: async ({ participantCursor, ...projection }) => await publishSessionPublisherLifecycleUpdate({
+                        ...projection,
+                        participantCursors: [participantCursor],
+                    }),
+                });
+                await handlers.get('session-runtime-activity-snapshot')?.({
+                    sessionId: seeded.sessionId,
+                    mutationId: `runtime-activity-snapshot:${seeded.sessionId}`,
+                    snapshot: { state: 'active', activeCount: 1 },
+                }, vi.fn());
+                expect((await computeAccountActivityBadgeCounts([seeded.ownerId])).get(seeded.ownerId)).toBe(1);
+                await vi.waitFor(() => expect(send.mock.calls.flatMap(([messages]) => messages)).toContainEqual(
+                    expect.objectContaining({ to: token, badge: 1, data: { type: 'badge_refresh' } }),
+                ), { timeout: 3_000 });
+                send.mockClear();
+                if (closeKind === 'exact close without a turn') {
+                    await handlers.get('session-runtime-activity-close')?.({ sessionId: seeded.sessionId }, vi.fn());
+                } else if (closeKind === 'legacy end with an open turn') {
+                    await handlers.get('session-end')?.({ sid: seeded.sessionId, time: Date.now() });
+                } else if (closeKind === 'timeout') {
+                    await runPresenceTimeoutTick({ sessionTimeoutMs: 1_000, machineTimeoutMs: 600_000, tickMs: 1_000 });
+                }
+                await expect(db.session.findUniqueOrThrow({
+                    where: { id: seeded.sessionId },
+                    select: { active: true, pendingPermissionRequestCount: true, pendingUserActionRequestCount: true },
+                })).resolves.toEqual({
+                    active: closeKind === 'registration',
+                    pendingPermissionRequestCount: 1,
+                    pendingUserActionRequestCount: 1,
+                });
+                if (closeKind !== 'registration') {
+                    await vi.waitFor(() => expect(send.mock.calls.flatMap(([messages]) => messages)).toContainEqual(
+                        expect.objectContaining({ to: token, badge: 0, data: { type: 'badge_refresh' } }),
+                    ), { timeout: 3_000 });
+                }
+            } finally {
+                send.mockRestore();
+            }
+        },
+    );
+
     it('writes through the exact registered socket and emits every participant cursor once', async () => {
         const seeded = await seed();
+        await db.session.update({
+            where: { id: seeded.sessionId },
+            data: { pendingUserActionRequestCount: 1 },
+        });
         const handlers = new Map<string, Handler>();
         const socket = {
             on: vi.fn((event: string, handler: Handler) => { handlers.set(event, handler); }),
@@ -111,6 +195,7 @@ describe('Runtime Activity snapshot socket event on SQLite', () => {
         expect(publishedValues).toEqual(expect.arrayContaining([
             expect.objectContaining({
                 active: false,
+                badgeAttentionChanged: true,
                 activeAt: expect.any(Number),
                 projection: expect.objectContaining({ state: 'unknown', activeCount: 0, revision: 2 }),
             }),
@@ -147,6 +232,10 @@ describe('Runtime Activity snapshot socket event on SQLite', () => {
             },
         })).resolves.toMatchObject({ ok: true, didApply: true });
 
+        await db.session.update({
+            where: { id: seeded.sessionId },
+            data: { pendingPermissionRequestCount: 1, pendingUserActionRequestCount: 1, pendingRequestObservedAt: new Date() },
+        });
         const handlers = new Map<string, Handler>();
         const socket = {
             on: vi.fn((event: string, handler: Handler) => { handlers.set(event, handler); }),
@@ -184,17 +273,24 @@ describe('Runtime Activity snapshot socket event on SQLite', () => {
                 latestTurnId: true,
                 latestTurnStatus: true,
                 thinking: true,
+                pendingPermissionRequestCount: true,
+                pendingUserActionRequestCount: true,
+                pendingRequestObservedAt: true,
             },
         })).resolves.toEqual({
             latestTurnId: turnId,
             latestTurnStatus: 'cancelled',
             thinking: false,
+            pendingPermissionRequestCount: 1,
+            pendingUserActionRequestCount: 1,
+            pendingRequestObservedAt: expect.any(Date),
         });
         expect(publishedValues).toEqual(expect.arrayContaining([
             expect.objectContaining({
                 latestTurnId: turnId,
                 latestTurnStatus: 'cancelled',
                 latestTurnStatusObservedAt: expect.any(Number),
+                badgeAttentionChanged: true,
             }),
         ]));
     });

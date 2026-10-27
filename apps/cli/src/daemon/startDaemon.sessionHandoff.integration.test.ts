@@ -390,7 +390,7 @@ vi.mock('./connectedServices/quotas/resolveConnectedServicesQuotasDaemonEnabled'
 }));
 
 vi.mock('./connectedServices/quotas/startConnectedServiceQuotasLoop', () => ({
-    startConnectedServiceQuotasLoop: vi.fn(() => ({ stop: vi.fn(), pause: vi.fn(), resume: vi.fn() })),
+    startConnectedServiceQuotasLoop: vi.fn(() => ({ stop: vi.fn(), pause: vi.fn(), resume: vi.fn(), wake: vi.fn() })),
 }));
 
 vi.mock('@/terminal/attachment/terminalAttachmentInfo', () => ({

@@ -182,3 +182,24 @@ test('tool support preserves experimental native MCP declarations', () => {
   assert.equal(toolsCell({ delivery: 'native_mcp', support: 'experimental' }), 'Experimental (`native_mcp`)');
   assert.equal(toolsCell({ delivery: 'unsupported', support: 'unsupported' }), '—');
 });
+
+test('negotiated session modes leave Plan availability to advertised choices', {
+  skip: !existsSync(AGENTS_DIST) && 'packages/agents is not built',
+}, async () => {
+  const agents = await import(`file://${AGENTS_DIST}`);
+  const rendered = await renderAgentReferenceMarkdown();
+  const names = collectDisplayNames({ agentIds: agents.AGENT_IDS });
+  const runningTurn = rendered.split('## Running a turn\n')[1].split('## Media and tools')[0];
+  const rows = new Map(runningTurn.split('\n')
+    .filter((line) => line.startsWith('| **'))
+    .map((line) => {
+      const cells = line.split('|').slice(1, -1).map((cell) => cell.trim());
+      return [cells[0], cells];
+    }));
+  for (const id of agents.AGENT_IDS) {
+    if (agents.getAgentSessionModeDescriptor(id).source !== 'acp') continue;
+    assert.equal(rows.get(`**${names[id]}**`)[3], 'Runtime-dependent', `${id} cannot establish an advertised Plan choice from its mode descriptor`);
+  }
+  assert.equal(rows.get(`**${names.claude}**`)[3], 'Yes');
+  assert.equal(rows.get(`**${names.codex}**`)[2], 'Policy presets, from the agent');
+});

@@ -243,6 +243,7 @@ export async function prepareExecutionRunConnectedServices(params: Readonly<{
   credentials: Credentials | null;
   cwd: string;
   sessionId: string;
+  previousMaterializedRoot?: string;
   /** Boundary injection points; default to the canonical control client + session defaulting owner. */
   materializeViaDaemon?: MaterializeViaDaemon;
   releaseViaDaemon?: ReleaseViaDaemon;
@@ -308,6 +309,7 @@ export async function prepareExecutionRunConnectedServices(params: Readonly<{
       connectedServicesBindingsRaw: selection.bindings,
       sessionDirectory: params.cwd,
       sessionId: params.sessionId,
+      ...(params.previousMaterializedRoot ? { previousMaterializedRoot: params.previousMaterializedRoot } : {}),
     });
   } catch (error) {
     logger.warn('[EXECUTION RUN] connected services: materialization FAILED; failing run start closed', {

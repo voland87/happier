@@ -537,6 +537,36 @@ describe('sync.sendMessage optimistic thinking', () => {
         ]);
     });
 
+    it.each([
+        { status: 404, code: 'not-found' },
+        { status: 409, code: 'action-conflict' },
+    ])('reconciles stale pending rows for every requested-action caller on $code', async ({ status, code }) => {
+        const sessionId = 's_pending_stale_action';
+        const localId = 'stale-pending-local';
+        storage.getState().applySessions([{
+            ...createSession({ sessionId }),
+            encryptionMode: 'plain',
+        }]);
+        storage.getState().upsertPendingMessage(sessionId, {
+            id: localId, localId, createdAt: 1, updatedAt: 1,
+            source: 'server_pending', deliveryStatus: 'accepted', pendingDeliveryStatus: 'server_queued',
+            text: 'already materialized',
+            rawRecord: { role: 'user', content: { type: 'text', text: 'already materialized' } },
+        });
+        const { sync } = await import('./sync');
+        sync.encryption = await Encryption.create(new Uint8Array(32).fill(7));
+        vi.spyOn(apiSocket, 'request').mockImplementation(async (_path, init) => {
+            if (init?.method === 'PATCH') return Response.json({ error: code }, { status });
+            return Response.json({ pending: [] });
+        });
+
+        await expect(sync.updatePendingRequestedAction(
+            sessionId, localId, { v: 1, kind: 'enqueue' }, { resumeWhenAvailable: true },
+        )).rejects.toMatchObject({ code });
+
+        expect(storage.getState().sessionPending[sessionId]?.messages).toEqual([]);
+    });
+
     it('hydrates a missing active session before sending the user message', async () => {
         const sessionId = 's_missing_then_hydrated';
 

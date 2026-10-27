@@ -332,10 +332,8 @@ function supported(value) {
  *
  * This replaced a bare "Plan mode: yes/no" column, which was actively
  * misleading. `supportsPlanMode` is derived from `semantics === 'agent-modes'`
- * and describes whether Happier offers Claude's *dedicated* plan-mode control —
- * not whether the agent has a plan mode at all. Codex's modes arrive over ACP
- * and really can include `plan`; rendering that as a dash told readers the
- * opposite of the truth.
+ * and cannot establish whether a negotiated ACP catalog contains `plan`.
+ * Both agent modes and policy presets can expose it through the Mode control.
  */
 function sessionModesCell(descriptor) {
   if (!descriptor || descriptor.source === 'none') return NO;
@@ -425,11 +423,12 @@ export async function renderAgentReferenceMarkdown({
     ['Agent', 'Steer a running turn', 'Session modes', 'Dedicated plan control', 'Accept edits'],
     ids.map((id) => {
       const advanced = agents.getAgentAdvancedModeCapabilities(id);
+      const descriptor = agents.getAgentSessionModeDescriptor(id);
       return [
         `**${name(id)}**`,
         supported(core(id).runtimeInput?.inFlightSteerSupported),
-        sessionModesCell(agents.getAgentSessionModeDescriptor(id)),
-        supported(advanced.supportsPlanMode),
+        sessionModesCell(descriptor),
+        descriptor.source === 'acp' ? 'Runtime-dependent' : supported(advanced.supportsPlanMode),
         supported(advanced.supportsAcceptEdits),
       ];
     }),
@@ -537,9 +536,10 @@ which is slower and loses less than it sounds — see [Steering](/sessions/steer
 **Session modes are not permission modes.** Where the list comes *from the
 agent*, Happier shows whichever modes that build advertises for the session, so
 the choices can differ between versions and the Mode control is hidden when the
-runtime offers none. A dash under "Dedicated plan control" means Happier has no
-plan-specific affordance for that agent — **not** that the agent lacks a plan
-mode. Codex, for instance, reaches \`plan\` through the Mode control.
+runtime offers none. "Runtime-dependent" under "Dedicated plan control" means
+Plan is available only when the session advertises a \`plan\` mode or policy
+preset. Codex, for instance, reaches \`plan\` through the Mode control. A dash
+means Happier declares no plan-specific affordance for that agent.
 
 ## Media and tools
 

@@ -31,8 +31,14 @@ mod startup;
 #[cfg(desktop)]
 mod shutdown;
 
+#[cfg(target_os = "linux")]
+mod linux_webkit_env;
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    #[cfg(target_os = "linux")]
+    linux_webkit_env::apply_before_gtk_init();
+
     let mut builder = tauri::Builder::default();
 
     // First, as the plugin requires: a second launch hands its arguments to this process and exits

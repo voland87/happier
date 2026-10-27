@@ -216,7 +216,7 @@ Before changing production behavior:
 
 ## Testing: contract value, not test volume
 
-- Run tests, typechecks, lint/static analysis, and read-only repository searches through `./apps/stack/bin/hstack-exec -- <command> [args...]` from this checkout's root. Routing through an executable sibling `../0.3` executor is optional; absent/unusable siblings or `HAPPIER_ROUTED_EXECUTOR=0` (also `off`, `false`, or `disabled`) execute the command locally with the same arguments, streams, and exit status.
+- Run tests, typechecks, lint/static analysis, and read-only repository searches through `./apps/stack/bin/hstack-exec -- <command> [args...]` from this checkout's root. Standalone checkouts without an executable sibling `../0.3` executor retain local execution with the same arguments, streams, and exit status. In this shared environment, agents must never set `HAPPIER_ROUTED_EXECUTOR=0` (or `off`, `false`, or `disabled`) to work around a routing error; report the error instead.
 
 ### Behavior-change rule
 

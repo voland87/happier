@@ -2,6 +2,9 @@ import type { Prisma } from "@prisma/client";
 import {
     PrimaryTurnStatusV1Schema,
     SessionRuntimeIssueV1Schema,
+    projectSessionRuntimeIssueForReader,
+    type ConnectedServiceId,
+    type SessionRuntimeIssueV1,
     type V2SessionRecord,
 } from "@happier-dev/protocol";
 import { normalizeStoredSessionRuntimeActivityProjection } from "@/app/session/runtimeActivity/projection";
@@ -10,6 +13,17 @@ import {
     createSessionRollbackEligibleTurnsSelect,
     readSessionTurnRollbackEligibleStarts,
 } from "@/app/session/turns/sessionRollbackEligibilityProjection";
+
+/** Outward session rows share one reader-compatibility projection across every list surface. */
+export function projectSessionRowsForReader<T extends { lastRuntimeIssue?: SessionRuntimeIssueV1 | null }>(
+    rows: readonly T[],
+    supportedIds: readonly ConnectedServiceId[],
+): T[] {
+    return rows.map((row) => ({
+        ...row,
+        lastRuntimeIssue: projectSessionRuntimeIssueForReader(row.lastRuntimeIssue, supportedIds),
+    }));
+}
 
 export function parseStoredSessionRuntimeIssue(value: string | null | undefined): V2SessionRecord["lastRuntimeIssue"] {
     if (!value) return null;

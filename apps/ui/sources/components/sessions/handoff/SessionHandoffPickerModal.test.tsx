@@ -8,6 +8,11 @@ import type { CustomModalChromeConfig } from '@/modal';
 const refreshMachinesThrottledMock = vi.fn(async () => {});
 const openMachinePathBrowserModalMock = vi.fn<(params: unknown) => Promise<string>>(async () => '/home/leeroy.guest/.happier-stack/workspace/0.2');
 const pathBrowserModuleLoadedMock = vi.fn();
+const handoffCapabilityRpc = vi.hoisted(() => vi.fn());
+vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', async (importOriginal) => {
+    const { createServerScopedMachineRpcModuleMock } = await import('@/dev/testkit/mocks/serverScopedRpc');
+    return createServerScopedMachineRpcModuleMock({ importOriginal, overrides: { machineRpcWithServerScope: handoffCapabilityRpc } });
+});
 let credentialsReady = true;
 
 
@@ -120,6 +125,8 @@ vi.mock('@/components/ui/pathBrowser/openMachinePathBrowserModal', () => {
 
 describe('SessionHandoffPickerModal', () => {
     beforeEach(() => {
+        handoffCapabilityRpc.mockReset();
+        handoffCapabilityRpc.mockResolvedValue({ protocolVersion: 2, atomicTargetResume: true, targetCleanup: true, existingState: true });
         refreshMachinesThrottledMock.mockClear();
         openMachinePathBrowserModalMock.mockClear();
         credentialsReady = true;
@@ -171,6 +178,54 @@ describe('SessionHandoffPickerModal', () => {
     });
 
 
+    it('defaults to transferring session data and submits existing-state after turning it off', async () => {
+        const onResolve = vi.fn();
+        let chrome: CustomModalChromeConfig | null = null;
+        const { SessionHandoffPickerModal } = await import('./SessionHandoffPickerModal');
+        const screen = await renderScreen(<SessionHandoffPickerModal onClose={vi.fn()} setChrome={(next) => { chrome = next; }} onResolve={onResolve} sessionId="sess_1" serverId="server_a" />);
+        await act(async () => { invokeTestInstanceHandler(screen.tree.findByType('MachineSelector' as never), 'onSelect', allMachinesState[0]); });
+        const control = () => screen.tree.findByProps({ testID: 'session-handoff-transfer-session-data' });
+        await vi.waitFor(() => expect(control().props.disabled).toBe(false));
+        expect(control().props.value).toBe(true);
+        const start = () => findElementByTestId(requireCardChrome(chrome).footer, 'session-handoff-start') as React.ReactElement<{ disabled: boolean; onPress: () => void }>;
+        await act(async () => { start().props.onPress(); });
+        expect(onResolve).toHaveBeenLastCalledWith(expect.objectContaining({ stateTransfer: 'transfer' }));
+        await act(async () => { invokeTestInstanceHandler(control(), 'onValueChange', false); });
+        expect(start().props.disabled).toBe(false);
+        await act(async () => { start().props.onPress(); });
+        expect(onResolve).toHaveBeenLastCalledWith(expect.objectContaining({ stateTransfer: 'existing' }));
+        expect(onResolve.mock.lastCall?.[0].workspaceTransfer).toBeUndefined();
+    });
+
+    it.each(['machine_source', 'machine_target'])('keeps transfer on and disabled when %s lacks support', async (unsupportedMachine) => {
+        handoffCapabilityRpc.mockImplementation(async ({ machineId }: { machineId: string }) => ({ protocolVersion: 2, atomicTargetResume: true, targetCleanup: true, ...(machineId === unsupportedMachine ? {} : { existingState: true }) }));
+        const { SessionHandoffPickerModal } = await import('./SessionHandoffPickerModal');
+        const screen = await renderScreen(<SessionHandoffPickerModal onClose={vi.fn()} setChrome={vi.fn()} onResolve={vi.fn()} sessionId="sess_1" serverId="server_a" />);
+        await act(async () => { invokeTestInstanceHandler(screen.tree.findByType('MachineSelector' as never), 'onSelect', allMachinesState[0]); });
+        const control = screen.tree.findByProps({ testID: 'session-handoff-transfer-session-data' });
+        expect(control.props.value).toBe(true);
+        expect(control.props.disabled).toBe(true);
+        expect(control.props.accessibilityHint).toBe('sessionHandoff.transferSessionData.updateRequired');
+    });
+
+    it('keeps transfer enabled for an Agent without an existing-state resolver on capable peers', async () => {
+        sessionsByIdState.sess_1.metadata.flavor = 'opencode';
+        const { SessionHandoffPickerModal } = await import('./SessionHandoffPickerModal');
+        const screen = await renderScreen(<SessionHandoffPickerModal onClose={vi.fn()} setChrome={vi.fn()} onResolve={vi.fn()} sessionId="sess_1" serverId="server_a" />);
+        await act(async () => { invokeTestInstanceHandler(screen.tree.findByType('MachineSelector' as never), 'onSelect', allMachinesState[0]); });
+        await vi.waitFor(() => expect(screen.tree.findByProps({ testID: 'session-handoff-transfer-session-data' }).props.disabled).toBe(true));
+        expect(screen.tree.findByProps({ testID: 'session-handoff-transfer-session-data' }).props.value).toBe(true);
+    });
+
+    it('shows the missing native history inline and hides the toggle for same-machine moves', async () => {
+        const { SessionHandoffPickerModal } = await import('./SessionHandoffPickerModal');
+        const screen = await renderScreen(<SessionHandoffPickerModal onClose={vi.fn()} setChrome={vi.fn()} onResolve={vi.fn()} sessionId="sess_1" serverId="server_a" inlineErrorCode="existing_session_state_unavailable" />);
+        await act(async () => { invokeTestInstanceHandler(screen.tree.findByType('MachineSelector' as never), 'onSelect', allMachinesState[0]); });
+        expect(screen.tree.findByProps({ testID: 'session-handoff-session-data-error' }).props.children).toBe('sessionHandoff.transferSessionData.sessionMissing');
+        await act(async () => { invokeTestInstanceHandler(screen.tree.findByType('MachineSelector' as never), 'onSelect', { ...allMachinesState[0], id: 'machine_source' }); });
+        expect(screen.tree.findAll((node) => node.props.testID === 'session-handoff-transfer-session-data')).toHaveLength(0);
+    });
+
     it.each([
         { sourcePath: '~/projects/happier', homeDir: '/Users/tester', equivalentPath: '/Users/tester//projects/happier/', destinationPath: '/Users/tester/projects/happier/child' },
         { sourcePath: '~\\projects/happier', homeDir: 'C:\\Users\\tester\\', equivalentPath: 'c:/users/TESTER/projects\\happier/', destinationPath: 'C:\\Users\\tester2\\projects\\happier' },
@@ -207,7 +262,7 @@ describe('SessionHandoffPickerModal', () => {
         expect(start().props.disabled).toBe(false);
         expect(screen.tree.findByType('Switch' as any).props.value).toBe(false);
         await act(async () => { start().props.onPress(); });
-        expect(onResolve).toHaveBeenCalledWith({ targetMachineId: 'machine_source', targetPath: destinationPath, targetSessionStorageMode: 'persisted' });
+        expect(onResolve).toHaveBeenCalledWith({ targetMachineId: 'machine_source', targetPath: destinationPath, targetSessionStorageMode: 'persisted', stateTransfer: 'transfer' });
         onResolve.mockClear();
         await act(async () => { invokeTestInstanceHandler(screen.tree.findByType('Switch' as any), 'onValueChange', true); });
         await act(async () => { screen.changeTextByTestId('path-selection-list:header:input', destinationPath + '/other'); });
@@ -266,6 +321,7 @@ describe('SessionHandoffPickerModal', () => {
 
         expect(onResolve).toHaveBeenCalledWith({
             targetMachineId: 'machine_target',
+            stateTransfer: 'transfer',
             targetSessionStorageMode: 'persisted',
             workspaceTransfer: {
                 enabled: true,
@@ -441,6 +497,7 @@ describe('SessionHandoffPickerModal', () => {
 
         expect(onResolve).toHaveBeenCalledWith({
             targetMachineId: 'machine_target',
+            stateTransfer: 'transfer',
             targetSessionStorageMode: 'persisted',
             workspaceTransfer: {
                 enabled: true,
@@ -496,7 +553,7 @@ describe('SessionHandoffPickerModal', () => {
                     serverId="server_a"
                 />)).tree;
 
-        const switchNode = tree.findByType('Switch' as any);
+        const switchNode = tree.findByProps({ testID: 'session-handoff-workspace-transfer-switch' });
         expect(switchNode.props.value).toBe(false);
         expect(switchNode.props.disabled).toBe(true);
 
@@ -517,6 +574,7 @@ describe('SessionHandoffPickerModal', () => {
 
         expect(onResolve).toHaveBeenCalledWith({
             targetMachineId: 'machine_target',
+            stateTransfer: 'transfer',
             targetSessionStorageMode: 'persisted',
         });
         expect(onClose).not.toHaveBeenCalled();
@@ -567,7 +625,7 @@ describe('SessionHandoffPickerModal', () => {
                     serverId="server_a"
                 />)).tree;
 
-        const switchNode = tree.findByType('Switch' as any);
+        const switchNode = tree.findByProps({ testID: 'session-handoff-workspace-transfer-switch' });
         expect(switchNode.props.value).toBe(false);
         expect(switchNode.props.disabled).toBe(true);
     });
@@ -616,7 +674,7 @@ describe('SessionHandoffPickerModal', () => {
                     serverId="server_a"
                 />)).tree;
 
-        const switchNode = tree.findByType('Switch' as any);
+        const switchNode = tree.findByProps({ testID: 'session-handoff-workspace-transfer-switch' });
         expect(switchNode.props.value).toBe(false);
         expect(switchNode.props.disabled).toBe(true);
 
@@ -712,7 +770,7 @@ describe('SessionHandoffPickerModal', () => {
                     serverId="server_a"
                 />)).tree;
 
-        const switchNode = tree.findByType('Switch' as any);
+        const switchNode = tree.findByProps({ testID: 'session-handoff-workspace-transfer-switch' });
         expect(switchNode.props.value).toBe(false);
         expect(switchNode.props.disabled).toBe(true);
     });
@@ -755,7 +813,7 @@ describe('SessionHandoffPickerModal', () => {
                     serverId="server_a"
                 />)).tree;
 
-        const switchNode = tree.findByType('Switch' as any);
+        const switchNode = tree.findByProps({ testID: 'session-handoff-workspace-transfer-switch' });
         expect(switchNode.props.value).toBe(true);
         expect(switchNode.props.disabled).toBe(false);
     });
@@ -784,7 +842,7 @@ describe('SessionHandoffPickerModal', () => {
             invokeTestInstanceHandler(machineSelector, 'onSelect', { id: 'machine_target', metadata: { displayName: 'Target machine' } });
         });
 
-        const switchNode = tree.findByType('Switch' as any);
+        const switchNode = tree.findByProps({ testID: 'session-handoff-workspace-transfer-switch' });
         await act(async () => {
             invokeTestInstanceHandler(switchNode, 'onValueChange', false);
         });
@@ -843,6 +901,7 @@ describe('SessionHandoffPickerModal', () => {
 
         expect(onResolve).toHaveBeenCalledWith({
             targetMachineId: 'machine_target',
+            stateTransfer: 'transfer',
             targetSessionStorageMode: 'direct',
         });
     });

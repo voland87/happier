@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { TransportDisconnectEvent } from '@happier-dev/connection-supervisor';
 import axios from 'axios';
+import { ConnectedServiceIdSchema } from '@happier-dev/protocol';
 import { bindApiSessionSocketMock, createApiSessionSocketStub } from '@/testkit/backends/apiSessionSocketHarness';
 
 const { mockIo } = vi.hoisted(() => ({
@@ -37,6 +38,7 @@ describe('createSessionSocketTransport', () => {
         const opts = mockIo.mock.calls[0]?.[1] as Record<string, unknown>;
         expect(opts.reconnection).toBe(false);
         expect(opts.autoConnect).toBe(false);
+        expect(opts.auth).toMatchObject({ connectedServiceIds: ConnectedServiceIdSchema.options });
 
         const connectedListener = vi.fn();
         const disconnectedListener = vi.fn<(event: TransportDisconnectEvent) => void>();

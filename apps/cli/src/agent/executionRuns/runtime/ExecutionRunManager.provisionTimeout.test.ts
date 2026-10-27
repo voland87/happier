@@ -100,7 +100,7 @@ describe('ExecutionRunManager backend provisioning bound (QA2-F04)', () => {
     expect(run?.error?.code).toBe('execution_run_backend_provision_timeout');
   });
 
-  it('cancels and disposes a backend session that appears after the provisioning timeout', async () => {
+  it('does not re-enter a disposed backend when its session appears after the provisioning timeout', async () => {
     process.env[PROVISION_TIMEOUT_ENV_KEY] = '200';
     let resolveSession!: (value: { sessionId: SessionId }) => void;
     const session = new Promise<{ sessionId: SessionId }>((resolve) => {
@@ -134,8 +134,9 @@ describe('ExecutionRunManager backend provisioning bound (QA2-F04)', () => {
     await manager.waitForTerminal(started.runId);
 
     resolveSession({ sessionId: 'late-provider-session' as SessionId });
-    await vi.waitFor(() => expect(cancel).toHaveBeenCalledWith('late-provider-session'));
-    expect(dispose).toHaveBeenCalledTimes(2);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(cancel).not.toHaveBeenCalled();
+    expect(dispose).toHaveBeenCalledTimes(1);
     expect(manager.get(started.runId)?.status).toBe('failed');
   });
 
@@ -169,7 +170,7 @@ describe('ExecutionRunManager backend provisioning bound (QA2-F04)', () => {
     expect(runs[0]?.error?.code).toBe('execution_run_backend_provision_timeout');
   });
 
-  it('terminalizes only the timed-out run and retains a running sibling contribution', async () => {
+  it('terminalizes only the timed-out run and retains a working sibling contribution', async () => {
     process.env[PROVISION_TIMEOUT_ENV_KEY] = '200';
     const reports: SessionRuntimeActivityContribution[] = [];
     const contributionHandle = {
@@ -184,9 +185,12 @@ describe('ExecutionRunManager backend provisioning bound (QA2-F04)', () => {
       createBackend: () => {
         backendCount += 1;
         if (backendCount === 2) return createNeverProvisioningBackend();
+        let complete!: () => void;
+        const response = new Promise<void>((resolve) => { complete = resolve; });
         return {
           async startSession() { return { sessionId: 'sibling' as SessionId }; },
-          async sendPrompt() {}, async cancel() {}, onMessage() {}, async dispose() {}, async waitForResponseComplete() {},
+          async sendPrompt() {}, async cancel() { complete(); }, onMessage() {}, async dispose() {},
+          async waitForResponseComplete() { await response; },
         };
       },
       sendAcp: () => {},
@@ -194,6 +198,7 @@ describe('ExecutionRunManager backend provisioning bound (QA2-F04)', () => {
     });
     const sibling = await manager.start({
       sessionId: 'session-1', intent: 'delegate', backendTarget: { kind: 'builtInAgent', agentId: 'codex' },
+      instructions: 'Keep working until cancelled.',
       permissionMode: 'read_only', retentionPolicy: 'resumable', runClass: 'long_lived', ioMode: 'request_response',
     });
 

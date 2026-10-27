@@ -19,6 +19,22 @@ async function withPlatform<T>(platform: NodeJS.Platform, run: () => Promise<T>)
     }
 }
 
+it.each([
+    { title: 'JavaScript launcher without native import evidence', platform: 'linux', executable: '/tmp/claude.js', javascript: true },
+] as const)('keeps a $title exit unqualified as provider stop', async ({ platform, executable, javascript }) => {
+    mockResolveClaudeCliPath.mockReturnValue(executable);
+    mockIsClaudeCliJavaScriptFile.mockReturnValue(javascript);
+    mockSpawn.mockReturnValue({ pid: 4242, stdio: [null, null, null, null],
+        on: vi.fn((event, callback) => { if (event === 'exit') process.nextTick(() => callback(0, null)); }),
+        kill: vi.fn() });
+    const exits: Array<Readonly<{ providerStopped: boolean }>> = [];
+    await withPlatform(platform, async () => {
+        await claudeLocal({ abort: new AbortController().signal, sessionId: null, path: '/tmp',
+            onSessionFound: () => {}, onProcessExit: result => { exits.push(result); } });
+    });
+    expect(exits).toEqual([{ providerStopped: false }]);
+});
+
 // Use vi.hoisted to ensure mock functions are available when vi.mock factory runs
 const { mockSpawn, mockClaudeFindLastSession, mockResolveClaudeCliPath, mockIsClaudeCliJavaScriptFile } = vi.hoisted(() => ({
     mockSpawn: vi.fn(),
@@ -85,6 +101,7 @@ describe('claudeLocal --continue handling', () => {
             stdio: [null, null, null, null],
             on: vi.fn((event, callback) => {
                 // Immediately call the 'exit' callback
+                if (event === 'message') process.nextTick(() => callback({ type: 'terminal-provider-in-launcher' }));
                 if (event === 'exit') {
                     process.nextTick(() => callback(0));
                 }
@@ -149,7 +166,8 @@ describe('claudeLocal --continue handling', () => {
             pid: 4242,
             killed: false,
             stdio: [null, null, null, fd3],
-            on: vi.fn((event: string, callback: (code: number | null, signal: NodeJS.Signals | null) => void) => {
+            on: vi.fn((event: string, callback: (value: unknown, signal?: NodeJS.Signals | null) => void) => {
+                if (event === 'message') process.nextTick(() => callback({ type: 'terminal-provider-in-launcher' }));
                 if (event === 'exit') {
                     exitHandlers.push(callback);
                 }
@@ -221,7 +239,8 @@ describe('claudeLocal --continue handling', () => {
             pid: 4242,
             killed: false,
             stdio: [null, null, null, fd3],
-            on: vi.fn((event: string, callback: (code: number | null, signal: NodeJS.Signals | null) => void) => {
+            on: vi.fn((event: string, callback: (value: unknown, signal?: NodeJS.Signals | null) => void) => {
+                if (event === 'message') process.nextTick(() => callback({ type: 'terminal-provider-in-launcher' }));
                 if (event === 'exit') {
                     exitHandlers.push(callback);
                 }
@@ -928,79 +947,20 @@ describe('claudeLocal --continue handling', () => {
         expect(onSessionFound).not.toHaveBeenCalled();
     });
 
-    it('treats exit code 143 as expected termination when abort is requested', async () => {
-        const controller = new AbortController();
-        controller.abort();
-
-        mockSpawn.mockReturnValueOnce({
-            stdio: [null, null, null, null],
-            on: vi.fn((event, callback) => {
-                if (event === 'exit') {
-                    process.nextTick(() => callback(143, null));
-                }
-            }),
-            addListener: vi.fn(),
-            removeListener: vi.fn(),
-            kill: vi.fn(),
-            stdout: { on: vi.fn() },
-            stderr: { on: vi.fn() },
-            stdin: {
-                on: vi.fn(),
-                end: vi.fn()
-            }
-        });
-
-        await expect(claudeLocal({
-            abort: controller.signal,
-            sessionId: null,
-            path: '/tmp',
-            onSessionFound,
-            claudeArgs: [],
-        })).resolves.toBeTruthy();
-    });
-
-    it('treats non-zero exit codes as expected termination when abort teardown is requested', async () => {
-        const controller = new AbortController();
-        controller.abort();
-
-        mockSpawn.mockReturnValueOnce({
-            pid: 4242,
-            killed: false,
-            stdio: [null, null, null, null],
-            on: vi.fn((event, callback) => {
-                if (event === 'exit') {
-                    process.nextTick(() => callback(1, null));
-                }
-            }),
-            addListener: vi.fn(),
-            removeListener: vi.fn(),
-            kill: vi.fn(),
-            stdout: { on: vi.fn() },
-            stderr: { on: vi.fn() },
-            stdin: {
-                on: vi.fn(),
-                end: vi.fn()
-            }
-        });
-
-        await expect(claudeLocal({
-            abort: controller.signal,
-            sessionId: null,
-            path: '/tmp',
-            onSessionFound,
-            claudeArgs: [],
-        })).resolves.toBeTruthy();
-    });
-
-    it(
-        'sends SIGINT to the Claude process when abort is requested after spawn (best-effort graceful shutdown)',
-        async () => {
+    it.each([
+        { code: 143, signal: null },
+        { code: null, signal: 'SIGINT' as NodeJS.Signals },
+    ])(
+        'accepts the local child exit $code/$signal after graceful abort',
+        async (termination) => {
         const controller = new AbortController();
 
         let exitCallback: ((code: number | null, signal: NodeJS.Signals | null) => void) | null = null;
+        let markSpawnReady = () => {};
+        const spawnReady = new Promise<void>(resolve => { markSpawnReady = resolve; });
         const kill = vi.fn((signal?: NodeJS.Signals) => {
             if (signal === 'SIGINT') {
-                process.nextTick(() => exitCallback?.(0, 'SIGINT'));
+                process.nextTick(() => exitCallback?.(termination.code, termination.signal));
             }
             return true;
         });
@@ -1010,8 +970,10 @@ describe('claudeLocal --continue handling', () => {
             killed: false,
             stdio: [null, null, null, null],
             on: vi.fn((event, callback) => {
+                if (event === 'message') process.nextTick(() => callback({ type: 'terminal-provider-in-launcher' }));
                 if (event === 'exit') {
                     exitCallback = callback;
+                    markSpawnReady();
                 }
             }),
             addListener: vi.fn(),
@@ -1033,6 +995,7 @@ describe('claudeLocal --continue handling', () => {
             claudeArgs: [],
         });
 
+        await spawnReady;
         controller.abort();
 
         await expect(promise).resolves.toBeTruthy();
@@ -1128,6 +1091,7 @@ describe('claudeLocal launcher selection', () => {
         mockSpawn.mockReturnValue({
             stdio: [null, null, null, null],
             on: vi.fn((event, callback) => {
+                if (event === 'message') process.nextTick(() => callback({ type: 'terminal-provider-in-launcher' }));
                 if (event === 'exit') {
                     process.nextTick(() => callback(0));
                 }
@@ -1206,7 +1170,7 @@ describe('claudeLocal launcher selection', () => {
         expect(spawnOpts?.env?.DISABLE_AUTOUPDATER).toBe('1');
     });
 
-    it('strips nested Claude Code env vars from the spawned process environment', async () => {
+    it.each([undefined, 'happier'] as const)('strips parent session markers and honors child entrypoint %s', async (entrypoint) => {
         const prevClaudeCode = process.env.CLAUDECODE;
         const prevEntrypoint = process.env.CLAUDE_CODE_ENTRYPOINT;
         process.env.CLAUDECODE = '1';
@@ -1219,12 +1183,13 @@ describe('claudeLocal launcher selection', () => {
                 path: '/tmp',
                 onSessionFound,
                 claudeArgs: [],
+                envOverlay: entrypoint ? { CLAUDE_CODE_ENTRYPOINT: entrypoint } : undefined,
             });
 
             expect(mockSpawn).toHaveBeenCalled();
             const spawnOpts = mockSpawn.mock.calls[0][2];
             expect(spawnOpts?.env?.CLAUDECODE).toBeUndefined();
-            expect(spawnOpts?.env?.CLAUDE_CODE_ENTRYPOINT).toBeUndefined();
+            expect(spawnOpts?.env?.CLAUDE_CODE_ENTRYPOINT).toBe(entrypoint);
         } finally {
             if (typeof prevClaudeCode === 'string') process.env.CLAUDECODE = prevClaudeCode;
             else delete process.env.CLAUDECODE;

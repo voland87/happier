@@ -10,13 +10,14 @@ import {
     openAccountScopedBlobCiphertext,
     readSessionWorkContextV1,
     sealAccountScopedBlobCiphertext,
+    type SessionOrganizationContentEnvelope,
     type SessionOrganizationTag,
 } from '@happier-dev/protocol';
 import { createHttpStatusError, createInvalidResponseShapeError } from '@/api/client/httpStatusError';
 import { throwIfCliClientUpgradeRequired } from '@/api/clientCompatibility/cliClientCompatibility';
 import { getRandomBytes } from '@/api/encryption';
 import { configuration } from '@/configuration';
-import type { Credentials } from '@/persistence';
+import { requireEncryptionCredentials, type Credentials } from '@/persistence';
 import { fetchSessionByIdCompat, type RawSessionRecord } from '@/session/transport/http/sessionsHttp';
 import { tryDecryptSessionMetadata } from '@/session/transport/encryption/sessionEncryptionContext';
 import { resolveServerHttpBaseUrl } from '@/session/transport/http/serverHttpBaseUrl';
@@ -43,7 +44,7 @@ function requireSuccess(response: { status: number; data: unknown }): void {
 
 function readTagLabel(tag: SessionOrganizationTag, credentials: Credentials): string {
     const display = tag.display?.t === 'plain' ? tag.display.v
-        : tag.display?.t === 'encrypted'
+        : tag.display?.t === 'encrypted' && credentials.encryption
             ? openAccountScopedBlobCiphertext({ kind: 'session_organization_display', material: credentials.encryption, ciphertext: tag.display.c })?.value
             : null;
     if (display && typeof display === 'object' && 'label' in display && typeof display.label === 'string' && display.label.trim()) {
@@ -112,10 +113,16 @@ export async function updateSessionWorkContextTags(params: Readonly<{
         }
         for (const label of missing) {
             const id = `tag_${randomUUID().replace(/-/g, '')}`;
-            const display = plain ? { t: 'plain' as const, v: { label } } : {
-                t: 'encrypted' as const,
-                c: sealAccountScopedBlobCiphertext({ kind: 'session_organization_display', material: params.credentials.encryption, payload: { label }, randomBytes: getRandomBytes }),
-            };
+            let display: SessionOrganizationContentEnvelope;
+            if (plain) {
+                display = { t: 'plain', v: { label } };
+            } else {
+                requireEncryptionCredentials(params.credentials);
+                display = {
+                    t: 'encrypted',
+                    c: sealAccountScopedBlobCiphertext({ kind: 'session_organization_display', material: params.credentials.encryption, payload: { label }, randomBytes: getRandomBytes }),
+                };
+            }
             const createdResponse = await axios.post(`${baseUrl}/v2/session-organization/tags`, {
                 tagId: id, tagKey: id, sortKey: null, display,
             }, options);

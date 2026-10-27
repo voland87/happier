@@ -544,39 +544,3 @@ export async function syncClaudeConnectedServiceHome(params: Readonly<{
   }
   return await withConnectedServiceStateSharingDestinationLock(params.targetDir, sync, { providerId: 'claude' });
 }
-
-/**
- * RD-CLD-2: a staged home rebuild (`replaceDirectoryAtomically`) used to destroy the previous
- * home's physical `projects` jsonl files — including SIBLING sessions of the one being resumed —
- * whenever provenance mismatched. Backfill them before the swap: into the shared store when the
- * staged home is shared (reachable through the link), or into the staged home's own `projects`
- * when isolated (self-preservation without importing ambient state).
- */
-export async function backfillPreviousClaudeHomeSessionFiles(params: Readonly<{
-  previousClaudeConfigDir: string;
-  stagedClaudeConfigDir: string;
-  effectiveStateMode: ClaudeStateMode;
-  sharedSourceProjectsRoot: string;
-}>): Promise<void> {
-  const previousProjectsRoot = join(params.previousClaudeConfigDir, 'projects');
-  if (await readClaudeProjectsEntryState(previousProjectsRoot) !== 'directory') {
-    // Missing or symlinked previous projects hold no physical files owned by this home; a symlink's
-    // contents live in the shared store already and must not be bulk-copied into an isolated home.
-    return;
-  }
-  const destinationRoot = params.effectiveStateMode === 'shared'
-    ? params.sharedSourceProjectsRoot
-    : join(params.stagedClaudeConfigDir, 'projects');
-  const [previousRealPath, destinationRealPath] = await Promise.all([
-    realpathOrNull(previousProjectsRoot),
-    realpathOrNull(destinationRoot),
-  ]);
-  if (previousRealPath && destinationRealPath && previousRealPath === destinationRealPath) return;
-  await importConnectedServiceSessionFiles({
-    roots: [{
-      sourceRoot: previousProjectsRoot,
-      destinationRoot,
-      includeFile: (relativePath: string) => relativePath.toLowerCase().endsWith('.jsonl'),
-    }],
-  });
-}

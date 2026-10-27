@@ -145,11 +145,15 @@ export interface GeminiBackendResult {
 export function createGeminiBackend(options: GeminiBackendOptions): GeminiBackendResult {
   const scopedEnv = options.env ?? {};
   const hasExactConnectedGeminiSelection = findConnectedServiceChildSelection(scopedEnv, 'gemini') !== null;
+  // The connected Gemini materializer owns OAuth-personal credentials. Ambient
+  // API-key, Vertex and gateway controls must not select a different account.
+  const connectedAuthUnsetEnv = hasExactConnectedGeminiSelection ? [
+    GEMINI_API_KEY_ENV, GOOGLE_API_KEY_ENV, 'GOOGLE_GENAI_USE_VERTEXAI',
+    GEMINI_ACP_AUTH_METHOD_ENV, GEMINI_ACP_AUTH_META_ENV,
+    'GOOGLE_CLOUD_PROJECT', 'GOOGLE_CLOUD_PROJECT_ID',
+  ] : [];
   const effectiveScopedEnv = { ...scopedEnv };
-  if (hasExactConnectedGeminiSelection) {
-    delete effectiveScopedEnv.GOOGLE_CLOUD_PROJECT;
-    delete effectiveScopedEnv.GOOGLE_CLOUD_PROJECT_ID;
-  }
+  for (const key of connectedAuthUnsetEnv) delete effectiveScopedEnv[key];
   const {
     [GEMINI_MODEL_ENV]: _scopedGeminiModel,
     [GEMINI_ACP_AUTH_METHOD_ENV]: _scopedGeminiAuthMethod,
@@ -160,10 +164,7 @@ export function createGeminiBackend(options: GeminiBackendOptions): GeminiBacken
     ...process.env,
     ...effectiveScopedEnv,
   };
-  if (hasExactConnectedGeminiSelection) {
-    delete mergedSourceEnv.GOOGLE_CLOUD_PROJECT;
-    delete mergedSourceEnv.GOOGLE_CLOUD_PROJECT_ID;
-  }
+  for (const key of connectedAuthUnsetEnv) delete mergedSourceEnv[key];
   const {
     [GEMINI_MODEL_ENV]: _inheritedGeminiModel,
     ...processEnvWithoutGeminiModel
@@ -172,10 +173,7 @@ export function createGeminiBackend(options: GeminiBackendOptions): GeminiBacken
     ...processEnvWithoutGeminiModel,
     ...scopedEnvWithoutModelAndAuthControl,
   };
-  if (hasExactConnectedGeminiSelection) {
-    delete modelSourceEnv.GOOGLE_CLOUD_PROJECT;
-    delete modelSourceEnv.GOOGLE_CLOUD_PROJECT_ID;
-  }
+  for (const key of connectedAuthUnsetEnv) delete modelSourceEnv[key];
 
   // Resolve API key from multiple sources (in priority order):
   // 1. Local Gemini CLI config files (~/.gemini/) (API keys only)
@@ -197,7 +195,7 @@ export function createGeminiBackend(options: GeminiBackendOptions): GeminiBacken
     localConfig.token ||
     null;
 
-  const apiKey = explicitApiKey;
+  const apiKey = hasExactConnectedGeminiSelection ? null : explicitApiKey;
 
   if (!apiKey) {
     // OAuth-personal is a valid default auth path; avoid surfacing this as a warning.
@@ -271,7 +269,7 @@ export function createGeminiBackend(options: GeminiBackendOptions): GeminiBacken
     GEMINI_ACP_AUTH_METHOD_ENV,
     GEMINI_ACP_AUTH_META_ENV,
     ...(shouldSetGeminiModelEnv ? [] : [GEMINI_MODEL_ENV]),
-    ...(hasExactConnectedGeminiSelection ? ['GOOGLE_CLOUD_PROJECT', 'GOOGLE_CLOUD_PROJECT_ID'] : []),
+    ...connectedAuthUnsetEnv,
   ];
 
   const backendOptions: AcpBackendOptions = {

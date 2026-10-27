@@ -465,6 +465,9 @@ export async function probeAgentModelsBestEffort(params: {
   processEnv?: NodeJS.ProcessEnv;
   connectedServiceSelectionCacheKey?: string | null;
   bypassCache?: boolean;
+  signal?: AbortSignal;
+  deadlineAt?: number;
+  onNativeCleanup?: import('./catalogProbeLifecycle').RegisterNativeCatalogCleanup;
 }): Promise<ProbedAgentModelsResult> {
   const nowMs = Date.now();
   const cwd = typeof params.cwd === 'string' && params.cwd.trim().length > 0 ? params.cwd.trim() : process.cwd();
@@ -497,6 +500,7 @@ export async function probeAgentModelsBestEffort(params: {
   if (!params.bypassCache && !usesProviderOwnedCache && cached?.kind === 'success' && agentModelsProbeCache.isFresh(cached, nowMs)) return cached.value;
 
   const runProbe = async (): Promise<ProbedAgentModelsResult> => {
+    params.signal?.throwIfAborted();
     const cached2 = agentModelsProbeCache.get(cacheKey);
     const nowMs2 = Date.now();
     if (!params.bypassCache && !usesProviderOwnedCache && cached2?.kind === 'success' && agentModelsProbeCache.isFresh(cached2, nowMs2)) return cached2.value;
@@ -533,6 +537,9 @@ export async function probeAgentModelsBestEffort(params: {
         processEnv: params.processEnv,
       });
       if (configuredBackend) {
+        const ownedBackend = configuredBackend;
+        params.onNativeCleanup?.(() => ownedBackend.dispose());
+        params.signal?.throwIfAborted();
         const models = await probeModelsFromAcpBackend({ backend: configuredBackend, timeoutMs }).catch(() => null);
         if (models) {
           const res: ProbedAgentModelsResult = { ...fallback, availableModels: models, source: 'dynamic', observedAt: Date.now() };
@@ -559,6 +566,9 @@ export async function probeAgentModelsBestEffort(params: {
           bypassCache: params.bypassCache,
           cwd,
           timeoutMs,
+          deadlineAt: params.deadlineAt,
+          signal: params.signal,
+          onNativeCleanup: params.onNativeCleanup,
           profileId,
           accountSettings: params.accountSettings ?? null,
           credentials: params.credentials ?? null,
@@ -658,6 +668,9 @@ export async function probeAgentModelsBestEffort(params: {
         readinessOnly: true,
       });
       backend = created.backend;
+      const ownedBackend = backend;
+      params.onNativeCleanup?.(() => ownedBackend.dispose());
+      params.signal?.throwIfAborted();
 
       const models = await probeModelsFromAcpBackend({ backend, timeoutMs }).catch(() => null);
       if (!models) {
@@ -678,7 +691,7 @@ export async function probeAgentModelsBestEffort(params: {
     }
   };
 
-  const result = usesProviderOwnedCache
+  const result = usesProviderOwnedCache || params.signal
     ? await runProbe()
     : await agentModelsProbeCache.runDedupe(cacheKey, runProbe);
   return usesProviderOwnedCache ? { ...result, cacheable: false } : result;

@@ -3,36 +3,81 @@ import { basename, join } from 'node:path';
 
 import { parse } from 'smol-toml';
 
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { createCodexHomePair, exists, loadSyncCodexConnectedServiceHome, mockAllSymlinksFail, mockSymlinkFailureForTempLink, settings, waitFor } from './syncCodexConnectedServiceHome.testUtils';
+import { createCodexHomePair, exists, loadSyncCodexConnectedServiceHome, settings, waitFor } from './syncCodexConnectedServiceHome.testUtils';
+
+const fsBoundary = vi.hoisted(() => ({
+  symlink: vi.fn<typeof import('node:fs/promises').symlink>(),
+  rename: vi.fn<typeof import('node:fs/promises').rename>(),
+}));
+
+// Inject OS failures without reloading the real materializer and its dependency graph per case.
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>();
+  return { ...actual, symlink: fsBoundary.symlink, rename: fsBoundary.rename };
+});
+
+function mockAllSymlinksFail(): void {
+  fsBoundary.symlink.mockImplementation(async () => {
+    const error = new Error('symlink unavailable') as NodeJS.ErrnoException;
+    error.code = 'EPERM';
+    throw error;
+  });
+}
+
+async function mockSymlinkFailureForTempLink(destinationPathFragment: string): Promise<void> {
+  const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+  fsBoundary.symlink.mockImplementation(async (...args) => {
+    if (String(args[1]).includes(destinationPathFragment)) {
+      const error = new Error('file symlink unavailable') as NodeJS.ErrnoException;
+      error.code = 'EPERM';
+      throw error;
+    }
+    return actual.symlink(...args);
+  });
+}
 
 function isSessionsTemporaryLink(path: unknown): boolean {
   return basename(String(path)).startsWith('sessions.happier-link-');
 }
 
 describe('syncCodexConnectedServiceHome', () => {
-  afterEach(async () => {
-    vi.doUnmock('node:fs/promises');
-    vi.doUnmock('@/backends/codex/connectedServices/codexConnectedServiceStateSharingDescriptor');
+  beforeEach(async () => {
+    const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+    fsBoundary.symlink.mockReset().mockImplementation(actual.symlink);
+    fsBoundary.rename.mockReset().mockImplementation(actual.rename);
+  });
+
+  afterEach(() => {
     vi.restoreAllMocks();
-    vi.resetModules();
   });
 
   it('preserves Codex-owned isolated state across repeated materialization', async () => {
     const { root, sourceCodexHome, destinationCodexHome } = await createCodexHomePair();
     try {
+      const previousCodexHome = join(root, 'previous-private-home');
+      await mkdir(previousCodexHome, { recursive: true });
+      await mkdir(destinationCodexHome, { recursive: true });
+      await writeFile(join(previousCodexHome, 'history.jsonl'), '{"text":"previous private"}\n');
+      await writeFile(join(previousCodexHome, 'session_index.jsonl'), '{"id":"session","updated_at":"2026-10-11"}\n');
+      await writeFile(join(destinationCodexHome, 'history.jsonl'), '{"text":"existing private"}\n');
+      await writeFile(join(destinationCodexHome, 'session_index.jsonl'), '{"id":"session","updated_at":"2026-10-10"}\n');
       const syncCodexConnectedServiceHome = await loadSyncCodexConnectedServiceHome();
 
       // Shared session state is the default now, so explicitly opt this Codex home
       // out via the isolated state mode to exercise the isolated-preservation path.
       const result = await syncCodexConnectedServiceHome({
         destinationCodexHome,
+        previousCodexHome,
         accountSettings: settings('linked', 'isolated'),
         processEnv: { CODEX_HOME: sourceCodexHome },
       });
 
       expect(result.targetSqliteHome).toBe(destinationCodexHome);
+      await expect(readFile(join(destinationCodexHome, 'history.jsonl'), 'utf8')).resolves.toBe('{"text":"existing private"}\n{"text":"previous private"}\n');
+      await expect(readFile(join(destinationCodexHome, 'session_index.jsonl'), 'utf8')).resolves.toBe('{"id":"session","updated_at":"2026-10-10"}\n{"id":"session","updated_at":"2026-10-11"}\n');
+      expect((await readdir(destinationCodexHome)).filter(entry => entry.startsWith('history.happier-import-') || entry.startsWith('session_index.happier-import-'))).toEqual([]);
 
       await mkdir(join(destinationCodexHome, 'sessions', '2026', '05', '20'), { recursive: true });
       await writeFile(join(destinationCodexHome, 'sessions', '2026', '05', '20', 'rollout.jsonl'), '{"id":"local"}\n');
@@ -48,6 +93,8 @@ describe('syncCodexConnectedServiceHome', () => {
       await expect(readFile(join(destinationCodexHome, 'sessions', '2026', '05', '20', 'rollout.jsonl'), 'utf8')).resolves.toBe('{"id":"local"}\n');
       await expect(readFile(join(destinationCodexHome, 'state_5.sqlite'), 'utf8')).resolves.toBe('sqlite');
       await expect(readFile(join(destinationCodexHome, 'state_5.sqlite-wal'), 'utf8')).resolves.toBe('wal');
+      await expect(readFile(join(destinationCodexHome, 'history.jsonl'), 'utf8')).resolves.toBe('{"text":"existing private"}\n{"text":"previous private"}\n');
+      await expect(readFile(join(previousCodexHome, 'history.jsonl'), 'utf8')).resolves.toBe('{"text":"previous private"}\n');
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -69,6 +116,26 @@ describe('syncCodexConnectedServiceHome', () => {
       });
 
       expect(result.targetSqliteHome).toBe(sourceSqliteHome);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('cleans abandoned source-filesystem preflight directories while retaining unrelated native state', async () => {
+    const { root, sourceCodexHome, destinationCodexHome } = await createCodexHomePair();
+    try {
+      const abandonedRoot = join(sourceCodexHome, '.happier-state-preflight-abandoned');
+      await mkdir(join(abandonedRoot, 'sessions'), { recursive: true });
+      await mkdir(join(sourceCodexHome, 'native-private'), { recursive: true });
+      await writeFile(join(sourceCodexHome, 'native-private', 'retained'), 'private');
+      const syncCodexConnectedServiceHome = await loadSyncCodexConnectedServiceHome();
+      await syncCodexConnectedServiceHome({
+        destinationCodexHome,
+        accountSettings: settings('copied', 'shared'),
+        processEnv: { CODEX_HOME: sourceCodexHome },
+      });
+      expect((await readdir(sourceCodexHome)).filter((name) => name.startsWith('.happier-state-preflight-'))).toEqual([]);
+      await expect(readFile(join(sourceCodexHome, 'native-private', 'retained'), 'utf8')).resolves.toBe('private');
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -104,7 +171,7 @@ describe('syncCodexConnectedServiceHome', () => {
     }
   });
 
-  it('imports local isolated rollouts while leaving SQLite state to CODEX_SQLITE_HOME', async () => {
+  it('adopts isolated rollouts, memories and history without a previous home while retaining private SQLite state', async () => {
     const { root, sourceCodexHome, destinationCodexHome } = await createCodexHomePair();
     try {
       await mkdir(join(sourceCodexHome, 'sessions'), { recursive: true });
@@ -115,9 +182,17 @@ describe('syncCodexConnectedServiceHome', () => {
       await writeFile(join(sourceCodexHome, 'logs_2.sqlite'), 'source logs');
       await mkdir(join(destinationCodexHome, 'sessions'), { recursive: true });
       await writeFile(join(destinationCodexHome, 'sessions', 'local-rollout.jsonl'), '{"id":"local"}\n');
+      await mkdir(join(destinationCodexHome, 'memories'), { recursive: true });
+      await writeFile(join(destinationCodexHome, 'memories', 'local-memory.md'), '# Local memory\n');
+      await writeFile(join(destinationCodexHome, 'history.jsonl'), '{"text":"local prompt"}\n');
       await writeFile(join(destinationCodexHome, 'state_5.sqlite'), 'local sqlite');
       const syncCodexConnectedServiceHome = await loadSyncCodexConnectedServiceHome();
 
+      await syncCodexConnectedServiceHome({
+        destinationCodexHome,
+        accountSettings: settings('linked', 'isolated'),
+        processEnv: { CODEX_HOME: sourceCodexHome },
+      });
       await syncCodexConnectedServiceHome({
         destinationCodexHome,
         accountSettings: settings('linked', 'shared'),
@@ -125,8 +200,13 @@ describe('syncCodexConnectedServiceHome', () => {
       });
 
       await expect(readFile(join(destinationCodexHome, 'sessions', 'source-rollout.jsonl'), 'utf8')).resolves.toBe('{"id":"source"}\n');
-      await expect(readFile(join(destinationCodexHome, 'history.jsonl'), 'utf8')).resolves.toBe('{"text":"source prompt"}\n');
+      expect([
+        await readFile(join(sourceCodexHome, 'history.jsonl'), 'utf8'),
+        await exists(join(sourceCodexHome, 'memories', 'local-memory.md')),
+      ]).toEqual(['{"text":"source prompt"}\n{"text":"local prompt"}\n', true]);
+      await expect(readFile(join(destinationCodexHome, 'history.jsonl'), 'utf8')).resolves.toBe('{"text":"source prompt"}\n{"text":"local prompt"}\n');
       await expect(readFile(join(destinationCodexHome, 'memories', 'raw_memories.md'), 'utf8')).resolves.toBe('# Source memory\n');
+      await expect(readFile(join(destinationCodexHome, 'memories', 'local-memory.md'), 'utf8')).resolves.toBe('# Local memory\n');
       await expect(readFile(join(sourceCodexHome, 'logs_2.sqlite'), 'utf8')).resolves.toBe('source logs');
       await expect(readFile(join(sourceCodexHome, 'sessions', 'local-rollout.jsonl'), 'utf8')).resolves.toBe('{"id":"local"}\n');
       await expect(readFile(join(destinationCodexHome, 'sessions', 'local-rollout.jsonl'), 'utf8')).resolves.toBe('{"id":"local"}\n');
@@ -135,29 +215,54 @@ describe('syncCodexConnectedServiceHome', () => {
       expect(migratedSessionsEntry).toBeDefined();
       await expect(readFile(join(destinationCodexHome, migratedSessionsEntry!, 'local-rollout.jsonl'), 'utf8')).resolves.toBe('{"id":"local"}\n');
       await expect(readFile(join(destinationCodexHome, 'state_5.sqlite'), 'utf8')).resolves.toBe('local sqlite');
+      await syncCodexConnectedServiceHome({
+        destinationCodexHome,
+        accountSettings: settings('linked', 'shared'),
+        processEnv: { CODEX_HOME: sourceCodexHome },
+      });
+      await expect(readFile(join(sourceCodexHome, 'history.jsonl'), 'utf8')).resolves.toBe('{"text":"source prompt"}\n{"text":"local prompt"}\n');
     } finally {
       await rm(root, { recursive: true, force: true });
     }
   });
 
-  it('removes linked state when returning to isolated mode without deleting real state', async () => {
+  it.each([false, true])('detaches shared state before private adoption while preserving config (self-source: %s)', async (selfSource) => {
     const { root, sourceCodexHome, destinationCodexHome } = await createCodexHomePair();
     try {
       await mkdir(join(sourceCodexHome, 'sessions'), { recursive: true });
       await writeFile(join(sourceCodexHome, 'sessions', 'source-rollout.jsonl'), '{"id":"source"}\n');
+      await writeFile(join(sourceCodexHome, 'history.jsonl'), '{"text":"ambient shared"}\n');
+      await writeFile(join(sourceCodexHome, 'session_index.jsonl'), '{"id":"ambient","updated_at":"2026-10-10"}\n');
+      await writeFile(join(sourceCodexHome, 'AGENTS.md'), '# Shared config\n');
+      const previousCodexHome = join(root, 'previous-shared-home');
+      await mkdir(previousCodexHome, { recursive: true });
+      await symlink(join(sourceCodexHome, 'history.jsonl'), join(previousCodexHome, 'history.jsonl'), 'file');
+      await writeFile(join(previousCodexHome, 'session_index.jsonl'), '{"id":"private","updated_at":"2026-10-11"}\n');
       await mkdir(destinationCodexHome, { recursive: true });
       await symlink(join(sourceCodexHome, 'sessions'), join(destinationCodexHome, 'sessions'), process.platform === 'win32' ? 'junction' : 'dir');
+      await symlink(join(sourceCodexHome, 'history.jsonl'), join(destinationCodexHome, 'history.jsonl'), 'file');
+      await symlink(join(sourceCodexHome, 'session_index.jsonl'), join(destinationCodexHome, 'session_index.jsonl'), 'file');
+      await symlink(join(sourceCodexHome, 'AGENTS.md'), join(destinationCodexHome, 'AGENTS.md'), 'file');
       await mkdir(join(destinationCodexHome, 'archived_sessions'), { recursive: true });
       await writeFile(join(destinationCodexHome, 'archived_sessions', 'local-rollout.jsonl'), '{"id":"local"}\n');
       const syncCodexConnectedServiceHome = await loadSyncCodexConnectedServiceHome();
 
       await syncCodexConnectedServiceHome({
         destinationCodexHome,
+        previousCodexHome,
         accountSettings: settings('linked', 'isolated'),
-        processEnv: { CODEX_HOME: sourceCodexHome },
+        processEnv: { CODEX_HOME: selfSource ? destinationCodexHome : sourceCodexHome },
       });
 
       await expect(exists(join(destinationCodexHome, 'sessions'))).resolves.toBe(false);
+      await expect(exists(join(destinationCodexHome, 'history.jsonl'))).resolves.toBe(false);
+      expect([
+        await readFile(join(sourceCodexHome, 'session_index.jsonl'), 'utf8'),
+        await exists(join(destinationCodexHome, 'session_index.jsonl')),
+      ]).toEqual(['{"id":"ambient","updated_at":"2026-10-10"}\n', true]);
+      await expect(readFile(join(destinationCodexHome, 'session_index.jsonl'), 'utf8')).resolves.toBe('{"id":"private","updated_at":"2026-10-11"}\n');
+      await expect(readFile(join(sourceCodexHome, 'history.jsonl'), 'utf8')).resolves.toBe('{"text":"ambient shared"}\n');
+      expect((await lstat(join(destinationCodexHome, 'AGENTS.md'))).isSymbolicLink()).toBe(true);
       await expect(readFile(join(destinationCodexHome, 'archived_sessions', 'local-rollout.jsonl'), 'utf8')).resolves.toBe('{"id":"local"}\n');
     } finally {
       await rm(root, { recursive: true, force: true });
@@ -209,43 +314,6 @@ describe('syncCodexConnectedServiceHome', () => {
     }
   });
 
-  it('honors descriptor symlink policy when set to block continuity', async () => {
-    const { root, sourceCodexHome, destinationCodexHome } = await createCodexHomePair();
-    try {
-      await mkdir(join(sourceCodexHome, 'sessions'), { recursive: true });
-      await writeFile(join(sourceCodexHome, 'sessions', 'source-rollout.jsonl'), '{"id":"source"}\n');
-      await mkdir(join(destinationCodexHome, 'sessions'), { recursive: true });
-      await writeFile(join(destinationCodexHome, 'sessions', 'local-rollout.jsonl'), '{"id":"local"}\n');
-
-      mockAllSymlinksFail();
-      vi.resetModules();
-      vi.doMock('@/backends/codex/connectedServices/codexConnectedServiceStateSharingDescriptor', async () => {
-        const actual = await vi.importActual<typeof import('./codexConnectedServiceStateSharingDescriptor')>(
-          './codexConnectedServiceStateSharingDescriptor',
-        );
-        return {
-          ...actual,
-          codexConnectedServiceStateSharingDescriptor: {
-            ...actual.codexConnectedServiceStateSharingDescriptor,
-            state: {
-              ...actual.codexConnectedServiceStateSharingDescriptor.state,
-              symlinkUnavailableDegradePolicy: 'block_continuity',
-            },
-          },
-        };
-      });
-      const syncCodexConnectedServiceHome = await loadSyncCodexConnectedServiceHome();
-
-      await expect(syncCodexConnectedServiceHome({
-        destinationCodexHome,
-        accountSettings: settings('linked', 'shared'),
-        processEnv: { CODEX_HOME: sourceCodexHome },
-      })).rejects.toThrow(/Cannot enable shared Codex state/);
-    } finally {
-      await rm(root, { recursive: true, force: true });
-    }
-  });
-
   it('shares SQLite state through one CODEX_SQLITE_HOME while keeping rollouts under CODEX_HOME', async () => {
     const { root, sourceCodexHome, destinationCodexHome } = await createCodexHomePair();
     try {
@@ -281,7 +349,7 @@ describe('syncCodexConnectedServiceHome', () => {
     try {
       await writeFile(join(sourceCodexHome, 'session_index.jsonl'), '{"id":"initial"}\n');
 
-      mockSymlinkFailureForTempLink('session_index.jsonl.happier-link');
+      await mockSymlinkFailureForTempLink('session_index.jsonl.happier-link');
       const syncCodexConnectedServiceHome = await loadSyncCodexConnectedServiceHome();
 
       await syncCodexConnectedServiceHome({
@@ -306,21 +374,14 @@ describe('syncCodexConnectedServiceHome', () => {
       await mkdir(join(sourceCodexHome, 'sessions'), { recursive: true });
       await writeFile(join(sourceCodexHome, 'sessions', 'source-rollout.jsonl'), '{"id":"source"}\n');
 
-      vi.resetModules();
-      vi.doMock('node:fs/promises', async () => {
-        const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
-        return {
-          ...actual,
-          rename: vi.fn(async (...args: Parameters<typeof actual.rename>) => {
-            const [sourcePath] = args;
-            if (isSessionsTemporaryLink(sourcePath)) {
-              const error = new Error('replace failed') as NodeJS.ErrnoException;
-              error.code = 'EACCES';
-              throw error;
-            }
-            return actual.rename(...args);
-          }),
-        };
+      const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+      fsBoundary.rename.mockImplementation(async (...args) => {
+        if (isSessionsTemporaryLink(args[0])) {
+          const error = new Error('replace failed') as NodeJS.ErrnoException;
+          error.code = 'EACCES';
+          throw error;
+        }
+        return actual.rename(...args);
       });
       const syncCodexConnectedServiceHome = await loadSyncCodexConnectedServiceHome();
 
@@ -490,13 +551,13 @@ describe('syncCodexConnectedServiceHome', () => {
     }
   });
 
-  it.each(['hooks.json', 'config.toml'])('rebases native %s hook decisions to the promoted home without overriding profile decisions', async (entry) => {
+  it.each(['hooks.json', 'config.toml'])('rebases native %s hook decisions to the destination without importing another home approvals', async (entry) => {
     const { root, sourceCodexHome, destinationCodexHome } = await createCodexHomePair();
     try {
       const sync = await loadSyncCodexConnectedServiceHome();
       const promotedHome = join(root, 'promoted');
       const sourceKey = `${join(sourceCodexHome, entry)}:stop:0:0`;
-      const promotedKey = `${join(promotedHome, entry)}:stop:0:0`;
+      const promotedKey = `${join(destinationCodexHome, entry)}:stop:0:0`;
       const unrelatedKey = `${join(sourceCodexHome, `${entry}.other`)}:stop:0:0`;
       const nativeConfig = [
         `[hooks.state.${JSON.stringify(sourceKey)}]`, 'trusted_hash = "sha256:reviewed-native"', 'enabled = false',
@@ -514,7 +575,8 @@ describe('syncCodexConnectedServiceHome', () => {
         'plugin:example:stop:0:0': { trusted_hash: 'sha256:plugin' },
       });
       await mkdir(promotedHome, { recursive: true });
-      await writeFile(join(promotedHome, 'config.toml'), `[hooks.state.${JSON.stringify(promotedKey)}]\ntrusted_hash = "sha256:reviewed-profile"\nenabled = false\n`);
+      await writeFile(join(promotedHome, 'config.toml'), `[hooks.state.${JSON.stringify(`${join(promotedHome, entry)}:stop:0:0`)}]\ntrusted_hash = "sha256:unrelated-account"\nenabled = true\n`);
+      await writeFile(join(destinationCodexHome, 'config.toml'), `[hooks.state.${JSON.stringify(promotedKey)}]\ntrusted_hash = "sha256:reviewed-profile"\nenabled = false\n`);
       await materialize();
       expect((await readStates())[promotedKey]).toEqual({ trusted_hash: 'sha256:reviewed-profile', enabled: false });
       expect(await readFile(join(sourceCodexHome, 'config.toml'), 'utf8')).toBe(nativeConfig);
@@ -523,18 +585,19 @@ describe('syncCodexConnectedServiceHome', () => {
     }
   });
 
-  it.each(['linked', 'copied'] as const)('preserves native hook trust and disabled state in a staged %s config', async (configMode) => {
+  it.each(['linked', 'copied'] as const)('preserves destination hook trust and disabled state with a previous home in %s config', async (configMode) => {
     const { root, sourceCodexHome, destinationCodexHome } = await createCodexHomePair();
     try {
       const syncCodexConnectedServiceHome = await loadSyncCodexConnectedServiceHome();
       const previousCodexHome = join(root, 'promoted', 'codex-home');
       await mkdir(previousCodexHome, { recursive: true });
-      const hookId = `${join(previousCodexHome, 'hooks.json')}:stop:0:0`;
-      const disabledOnlyId = `${join(previousCodexHome, 'hooks.json')}:session_start:0:0`;
+      const hookId = `${join(destinationCodexHome, 'hooks.json')}:stop:0:0`;
+      const disabledOnlyId = `${join(destinationCodexHome, 'hooks.json')}:session_start:0:0`;
       const unrelatedId = `${join(sourceCodexHome, 'hooks.json')}:stop:0:0`;
       const hash = `sha256:${'a'.repeat(64)}`;
       await writeFile(join(sourceCodexHome, 'config.toml'), 'model = "source"\n');
-      await writeFile(join(previousCodexHome, 'config.toml'), [
+      await mkdir(destinationCodexHome, { recursive: true });
+      await writeFile(join(destinationCodexHome, 'config.toml'), [
         `[hooks.state.'${hookId}'] # native user preferences`,
         `trusted_hash = '${hash}' # reviewed hook`,
         'enabled = false',
@@ -651,22 +714,16 @@ describe('syncCodexConnectedServiceHome', () => {
         releaseFirstSymlink = resolve;
       });
 
-      vi.resetModules();
-      vi.doMock('node:fs/promises', async () => {
-        const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
-        return {
-          ...actual,
-          symlink: vi.fn(async (...args: Parameters<typeof actual.symlink>) => {
-            const [, destinationPath] = args;
-            if (isSessionsTemporaryLink(destinationPath)) {
-              symlinkCalls.push(String(destinationPath));
-              if (symlinkCalls.length === 1) {
-                await firstSymlinkCanFinish;
-              }
-            }
-            return actual.symlink(...args);
-          }),
-        };
+      const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+      fsBoundary.symlink.mockImplementation(async (...args) => {
+        const [, destinationPath] = args;
+        if (isSessionsTemporaryLink(destinationPath)) {
+          symlinkCalls.push(String(destinationPath));
+          if (symlinkCalls.length === 1) {
+            await firstSymlinkCanFinish;
+          }
+        }
+        return actual.symlink(...args);
       });
       const syncCodexConnectedServiceHome = await loadSyncCodexConnectedServiceHome();
 
@@ -692,7 +749,8 @@ describe('syncCodexConnectedServiceHome', () => {
       expect(overlapped).toBe(false);
       releaseFirstSymlink();
       await Promise.all([firstSync, secondSync]);
-      expect(symlinkCalls).toHaveLength(4);
+      expect((await lstat(join(destinationCodexHome, 'sessions'))).isSymbolicLink()).toBe(true);
+      await expect(readFile(join(destinationCodexHome, 'sessions', 'source-rollout.jsonl'), 'utf8')).resolves.toBe('{"id":"source"}\n');
     } finally {
       releaseFirstSymlink();
       await rm(root, { recursive: true, force: true });

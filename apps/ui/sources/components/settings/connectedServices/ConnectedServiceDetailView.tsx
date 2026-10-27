@@ -15,6 +15,7 @@ import { useProfile, useSettings } from '@/sync/store/hooks';
 import { useApplySettings } from '@/sync/store/settingsWriters';
 import { deleteConnectedServiceCredentialForAccount } from '@/sync/domains/connectedServices/storeConnectedServiceCredentialForAccount';
 import { getConnectedServiceRegistryEntry } from '@/sync/domains/connectedServices/connectedServiceRegistry';
+import { getConnectedServiceOauthAdapter } from '@/sync/domains/connectedServices/oauth/connectedServiceOauthAdapters';
 import {
   connectedServiceProfileKey,
   pruneConnectedServiceProfilePreferencesForDeletedProfile,
@@ -30,6 +31,8 @@ import {
   type ConnectedServiceId,
 } from '@happier-dev/protocol';
 import { useFeatureEnabled } from '@/hooks/server/useFeatureEnabled';
+import { useServerFeaturesRuntimeSnapshot } from '@/sync/domains/features/featureDecisionRuntime';
+import { supportsConnectedServiceOperation } from '@happier-dev/protocol';
 
 import { AccountBlock } from './account/AccountBlock';
 import { buildConnectedServiceAccountRowActions } from './account/buildConnectedServiceAccountRowActions';
@@ -53,6 +56,7 @@ import {
   resolveConnectedServiceProfileGroupReferenceLabels,
 } from './model/resolveConnectedServiceProfileGroupReferences';
 import { resolveConnectedServiceOauthAddActionModesForPlatform } from './oauth/resolveConnectedServiceOauthAddActionModesForPlatform';
+import { resolveConnectedServiceOauthPasteCopy } from './oauth/resolveConnectedServiceOauthPasteCopy';
 import { promptConnectedServiceTokenValue } from './promptConnectedServiceTokenValue';
 import { storeConnectedServiceCredentialWithIdentityConfirmation } from './storeConnectedServiceCredentialWithIdentityConfirmation';
 import { runConnectedServiceCredentialStoredEffects } from './runConnectedServiceCredentialStoredEffects';
@@ -89,7 +93,13 @@ export const ConnectedServiceDetailView = React.memo(function ConnectedServiceDe
   const rawServiceId = asStringParam((params as Record<string, unknown>).serviceId).trim();
   const parsedServiceId = ConnectedServiceIdSchema.safeParse(rawServiceId);
   const serviceId: ConnectedServiceId | null = parsedServiceId.success ? parsedServiceId.data : null;
-  const entry = serviceId ? getConnectedServiceRegistryEntry(serviceId) : null;
+  const serverFeatures = useServerFeaturesRuntimeSnapshot({
+    enabled: connectedServicesEnabled && serviceId !== null && !supportsConnectedServiceOperation(null, serviceId),
+  });
+  const operationSupported = serviceId !== null && supportsConnectedServiceOperation(
+    serverFeatures.status === 'ready' ? serverFeatures.features : null, serviceId,
+  );
+  const entry = serviceId && operationSupported ? getConnectedServiceRegistryEntry(serviceId) : null;
   const serviceLabel = serviceId ? resolveConnectedServiceDisplayName(serviceId, t) : t('connectedServices.fallbackName');
 
   const services = profile.connectedServicesV2;
@@ -118,8 +128,8 @@ export const ConnectedServiceDetailView = React.memo(function ConnectedServiceDe
   // Pools ("auth groups") read path + create flow. Member/policy mutations live
   // in PoolDetailView; the shell only needs the list + create.
   const authGroups = useConnectedServiceAuthGroups({
-    serviceId,
-    accountGroupsEnabled,
+    serviceId: operationSupported ? serviceId : null,
+    accountGroupsEnabled: accountGroupsEnabled && operationSupported,
     groupConfigurationSupported,
     runtimeGroupFallbackSupported,
     serviceProjectionSignature,
@@ -345,6 +355,7 @@ export const ConnectedServiceDetailView = React.memo(function ConnectedServiceDe
   };
 
   const handleOpenTokenSetupUrl = async (url: string) => {
+    if (!entry) return;
     const ok = await openExternalUrl(url);
     if (!ok) {
       await Modal.alert(
@@ -355,6 +366,7 @@ export const ConnectedServiceDetailView = React.memo(function ConnectedServiceDe
   };
 
   const handleAddOauthProfile = async (method: 'device' | 'paste' | 'browser' | null) => {
+    if (!entry) return;
     const profileId = await promptProfileId();
     if (!profileId) return;
     await handleConnectOauth(profileId, method);
@@ -366,6 +378,13 @@ export const ConnectedServiceDetailView = React.memo(function ConnectedServiceDe
       pathname: '/settings/connected-services/profile',
       params: { serviceId, profileId },
     });
+  };
+
+  const handleImportNativeLogin = async () => {
+    if (!entry || !serviceId) return;
+    const profileId = await promptProfileId();
+    if (!profileId) return;
+    router.push({ pathname: '/settings/connected-services/import', params: { serviceId, profileId } });
   };
 
   const handleOpenPool = (groupId: string) => {
@@ -498,7 +517,7 @@ export const ConnectedServiceDetailView = React.memo(function ConnectedServiceDe
       <ItemList>
         <ItemGroup title={t('connectedServices.title')}>
           <View style={{ paddingHorizontal: 16, paddingVertical: 12 }}>
-            <Text style={{ color: theme.colors.text.secondary }}>{t('connectedServices.detail.unknownService')}</Text>
+            <Text style={{ color: theme.colors.text.secondary }}>{t(serviceId && !operationSupported ? 'connectedServices.detail.errors.serviceUnsupportedServer' : 'connectedServices.detail.unknownService')}</Text>
           </View>
         </ItemGroup>
       </ItemList>
@@ -579,10 +598,15 @@ export const ConnectedServiceDetailView = React.memo(function ConnectedServiceDe
       <ConnectedServiceDetailActionsGroup
         supportsOauth={Boolean(entry.supportsOauth)}
         oauthAddActionModes={oauthAddActionModes}
+        oauthAddActionTitle={entry.oauthAddActionTitleKey ? t(entry.oauthAddActionTitleKey) : undefined}
+        oauthPasteSubtitle={getConnectedServiceOauthAdapter(serviceId)?.allowRawAuthorizationCode
+          ? resolveConnectedServiceOauthPasteCopy(serviceId).connectWebDescription
+          : undefined}
         supportsToken={Boolean(entry.supportsToken)}
         tokenKind={entry.tokenKind ?? null}
         tokenSetupUrl={entry.tokenSetupUrl ?? null}
         onAddOauthProfile={(method) => void handleAddOauthProfile(method)}
+        onImportNativeLogin={handleImportNativeLogin}
         onConnectToken={() => void handleConnectToken()}
         onOpenTokenSetupUrl={(url) => void handleOpenTokenSetupUrl(url)}
       />

@@ -748,6 +748,7 @@ describe('resolveSharedManagedOpenCodeServerBaseUrl', () => {
       probeHealth: vi.fn(async () => true),
       getProcessInfo: vi.fn(async () => ({ name: 'opencode', cmd: commandLine })),
       readProcessStartTimeMs: vi.fn(async () => 2_501),
+      readProcessInstanceFingerprint: vi.fn(async () => 'linux-proc:90'),
       killPid: vi.fn(() => true),
       startServer: vi.fn(async (params?: { onSpawned?: (started: { baseUrl: string; pid: number }) => void | Promise<void> }) => {
         await params?.onSpawned?.({ baseUrl: 'http://127.0.0.1:9999', pid: 222 });
@@ -773,6 +774,7 @@ describe('resolveSharedManagedOpenCodeServerBaseUrl', () => {
           startedAtMs: 5,
           status: 'starting',
           launchEnvFingerprint: 'scope-b',
+          processInstanceFingerprint: 'linux-proc:90',
           ownerToken: expect.any(String),
           startTimeMs: expect.any(Number),
           expectedCmdlineHash: expect.any(String),
@@ -788,6 +790,7 @@ describe('resolveSharedManagedOpenCodeServerBaseUrl', () => {
           startedAtMs: 5,
           status: 'ready',
           launchEnvFingerprint: 'scope-b',
+          processInstanceFingerprint: 'linux-proc:90',
           ownerToken: expect.any(String),
           startTimeMs: expect.any(Number),
           expectedCmdlineHash: expect.any(String),

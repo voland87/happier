@@ -142,7 +142,7 @@ function buildQuotaView(
         ? buildConnectedServiceQuotaGaugeMeterRows(displaySnapshot.meters, nowMs, GAUGE_LABEL_FORMATTER, hook.pinnedMeterIds)
         : []);
     const resetRows = hook.canConsumeRecoveryCredit
-        ? buildQuotaResetRows(snapshot?.recoveryCredits, nowMs, RESET_COUNTDOWN_DAYS_FORMATTER)
+        ? buildQuotaResetRows(snapshot?.recoveryCredits, nowMs, RESET_COUNTDOWN_DAYS_FORMATTER, snapshot?.recoveryCreditDetails)
         : [];
 
     return {

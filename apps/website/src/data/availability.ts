@@ -17,10 +17,10 @@
  *   SHIPPED   in the published release. Present tense is allowed. This is the
  *             only state that may appear in a capability table, a support
  *             matrix, or a sentence of the form "Happier runs X".
- *   UPCOMING  in this repository and not in the release. Must be named as not
+ *   UPCOMING  selected from development and absent from the release. Must be named as not
  *             yet available and tied to the upcoming version. Never in a table,
  *             never in the present tense, never counted in "13 agents".
- *   ABSENT    in neither. Does not appear at all.
+ *   ABSENT    omitted from the site, including unannounced development work.
  *
  * WHERE THE SHIPPED SET COMES FROM
  * --------------------------------
@@ -72,8 +72,9 @@ export const SHIPPED_CLI_RUNTIME_SOURCE = 'packages/agents/src/providers/provide
 /**
  * The same arrangement, pointing the other way.
  *
- * UPCOMING is defined as "in the unreleased tree and not in the release", so the
- * guard needs to read the unreleased registry too. That used to be a static
+ * Curated UPCOMING claims must exist in the unreleased tree and be absent from
+ * the release, so the guard reads the unreleased registry too. It need not list
+ * every development entry. That used to be a static
  * `import ... from '../../../../packages/agents/src/generated/agentIds'`, which
  * silently assumed this site lives in the unreleased checkout. It does not
  * always: the site is promoted into the release tree to be built and deployed,

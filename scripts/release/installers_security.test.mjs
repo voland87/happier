@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFile, mkdtemp, rm, writeFile } from 'node:fs/promises';
-import { execFileSync } from 'node:child_process';
+import { chmod, readFile, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -38,11 +38,6 @@ test('release-owned windows installer enforces minisign verification defaults', 
   assert.match(installPs1, /https:\/\/happier\.dev\/happier-release\.pub/);
   assert.match(installPs1, /Signature verified\./);
   assert.doesNotMatch(installPs1, /skip.*signature/i);
-  assert.match(installPs1, /\[System.Runtime.InteropServices.RuntimeInformation\]::OSArchitecture/);
-  assert.match(installPs1, /"X64"\s*\{\s*"x86_64"\s*\}/);
-  assert.match(installPs1, /"Arm64"\s*\{\s*"aarch64"\s*\}/);
-  assert.match(installPs1, /Join-Path[^\n]+\$archiveArchitecture[^\n]+"minisign.exe"/);
-  assert.doesNotMatch(installPs1.match(/function Ensure-Minisign[\s\S]*?\n\}/)[0], /Get-ChildItem[^\n]+Select-Object -First 1/);
   assert.match(installPs1, /&\s+\$exe\.FullName\s+-v\s+\*>\s+\$null/);
   assert.match(
     installPs1,
@@ -79,10 +74,7 @@ test('release-owned minisign public key exists', async () => {
   assert.match(publicKey, /^RWQ/m);
 });
 
-for (const powerShell of ['powershell.exe', 'pwsh']) {
-test(`install.ps1 bootstraps the native minisign executable without winget under ${powerShell}`, {
-  skip: process.platform !== 'win32' && 'Requires Windows executable and PowerShell boundaries',
-}, async (t) => {
+async function createMinisignBootstrapFixture(t) {
   const raw = (await readFile(installPs1Path, 'utf8')).replaceAll('\r\n', '\n');
   const functions = ['Resolve-MinisignExecutablePath', 'Invoke-NativeCommandCapturingOutput',
     'Test-InstallerTransientWebException', 'Invoke-InstallerWebRequestWithRetry', 'Ensure-Minisign'].map((name) => {
@@ -90,31 +82,39 @@ test(`install.ps1 bootstraps the native minisign executable without winget under
     assert.ok(source, `Missing installer function ${name}`);
     return source[0];
   });
-  const scratch = await mkdtemp(join(tmpdir(), 'happier-minisign-'));
+  // PowerShell expands Windows 8.3 TEMP aliases when returning executable paths.
+  const scratch = await realpath(await mkdtemp(join(tmpdir(), 'happier-minisign-')));
   t.after(() => rm(scratch, { recursive: true, force: true }));
-  const fixtureSource = join(scratch, 'Fixture.cs');
-  await writeFile(fixtureSource, 'class Fixture { static int Main(string[] args) { return args.Length == 1 && args[0] == "-v" ? 0 : 17; } }');
   const binary = join(scratch, 'minisign.exe');
-  execFileSync(join(process.env.SystemRoot, 'Microsoft.NET', 'Framework64', 'v4.0.30319', 'csc.exe'),
-    ['/nologo', '/target:exe', `/out:${binary}`, fixtureSource], { encoding: 'utf8' });
+  if (process.platform === 'win32') {
+    const fixtureSource = join(scratch, 'Fixture.cs');
+    await writeFile(fixtureSource, 'class Fixture { static int Main(string[] args) { return args.Length == 1 && args[0] == "-v" ? 0 : 17; } }');
+    execFileSync(join(process.env.SystemRoot, 'Microsoft.NET', 'Framework64', 'v4.0.30319', 'csc.exe'),
+      ['/nologo', '/target:exe', `/out:${binary}`, fixtureSource], { encoding: 'utf8' });
+  } else {
+    await writeFile(binary, '#!/bin/sh\n[ "$#" -eq 1 ] && [ "$1" = "-v" ]\n');
+    await chmod(binary, 0o755);
+  }
   const quote = (value) => `'${value.replaceAll("'", "''")}'`;
   const script = join(scratch, 'exercise.ps1');
   const hash = raw.match(/\$expectedSha = "([a-f0-9]{64})"/)[1];
-  await writeFile(script, [
+  const prelude = [
     "$ErrorActionPreference = 'Stop'", "$ProgressPreference = 'SilentlyContinue'",
     `$fixtureRoot = ${quote(scratch)}`,
-    '$env:PATH = "$env:SystemRoot\\System32;$env:SystemRoot"',
+    process.platform === 'win32' ? '$env:PATH = "$env:SystemRoot\\System32;$env:SystemRoot"' : '$env:PATH = "/usr/bin:/bin"',
     '$env:LOCALAPPDATA = $fixtureRoot', '$env:HAPPIER_NO_ANIMATION = "1"',
     'Add-Type -AssemblyName System.IO.Compression.FileSystem',
     '$archiveRoot = Join-Path $fixtureRoot "archive"',
     // Both directories model the vendor archive. Native execution is an OS
     // boundary; the fixture verifies selection and successful version probing.
     'foreach ($arch in @("aarch64", "x86_64")) {',
-    '  $dir = Join-Path $archiveRoot ("minisign-win64\\" + $arch)',
+    '  $dir = Join-Path (Join-Path $archiveRoot "minisign-win64") $arch',
     '  [IO.Directory]::CreateDirectory($dir) | Out-Null',
     `  [IO.File]::Copy(${quote(binary)}, (Join-Path $dir 'minisign.exe'))`, '}',
     '$fixtureZip = Join-Path $fixtureRoot "fixture.zip"',
     '[IO.Compression.ZipFile]::CreateFromDirectory($archiveRoot, $fixtureZip)',
+    // Installed system commands must not bypass the fallback under test.
+    'function Get-Command { param($Name, $ErrorAction); if ($Name -eq "minisign") { return $null }; Microsoft.PowerShell.Core\\Get-Command @PSBoundParameters }',
     // Network/download bytes and filesystem visibility are genuine system
     // boundaries. Hash the real vendor archive separately in live validation;
     // here the fake network artifact has the pinned checksum at that boundary.
@@ -129,13 +129,73 @@ test(`install.ps1 bootstraps the native minisign executable without winget under
       return Microsoft.PowerShell.Management\\Test-Path -LiteralPath $Path
     }`,
     'function winget { throw "Bundled minisign must work without installing a system package" }',
-    ...functions,
+  ];
+  return { scratch, script, prelude, functions };
+}
+
+for (const powerShell of ['powershell.exe', 'pwsh']) {
+test(`install.ps1 bootstraps the native minisign executable without winget under ${powerShell}`, {
+  skip: process.platform !== 'win32' && 'Requires Windows executable and PowerShell boundaries',
+}, async (t) => {
+  const { script, prelude, functions } = await createMinisignBootstrapFixture(t);
+  await writeFile(script, [
+    ...prelude, ...functions,
     '$selected = Ensure-Minisign -TempRoot $fixtureRoot',
-    '$arch = if ([Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString() -eq "Arm64") { "aarch64" } else { "x86_64" }',
-    '$expected = Join-Path $fixtureRoot ("minisign-extract\\minisign-win64\\" + $arch + "\\minisign.exe")',
-    'if ($selected -ne $expected) { throw ("Wrong minisign selected: " + $selected) }',
+    'if (-not (Test-Path -LiteralPath $selected -PathType Leaf)) { throw "Bundled minisign is missing" }',
     'Write-Output "native-minisign-ready"',
   ].join('\n'));
   assert.match(execFileSync(powerShell, ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script], { encoding: 'utf8' }), /native-minisign-ready/);
 });
+}
+
+const architectureCases = [
+  { name: 'runtime x64 wins over the environment', runtime: 'X64', wow64: 'ARM64', processor: 'ARM64', expected: 'x86_64' },
+  { name: 'runtime ARM64 wins over the environment', runtime: 'Arm64', wow64: 'AMD64', processor: 'AMD64', expected: 'aarch64' },
+  { name: 'null runtime uses AMD64 environment', runtime: null, wow64: '', processor: 'AMD64', expected: 'x86_64' },
+  { name: 'WOW64 uses OS architecture before x86 process architecture', runtime: null, wow64: 'AMD64', processor: 'x86', expected: 'x86_64' },
+  { name: 'WOW64 ARM64 wins over AMD64 process architecture', runtime: '', wow64: 'ARM64', processor: 'AMD64', expected: 'aarch64' },
+  { name: 'empty runtime uses ARM64 environment case-insensitively', runtime: '', wow64: '', processor: 'arm64', expected: 'aarch64' },
+  { name: 'unsupported x86 is rejected', runtime: null, wow64: '', processor: 'x86', expected: null },
+  { name: 'missing architecture is rejected', runtime: null, wow64: '', processor: '', expected: null },
+];
+
+for (const powerShell of process.platform === 'win32' ? ['powershell.exe', 'pwsh'] : ['pwsh']) {
+  const available = spawnSync(powerShell, ['-NoProfile', '-Command', 'exit 0']).status === 0;
+  test(`install.ps1 selects bundled minisign from runtime and fallback architectures under ${powerShell}`, {
+    skip: process.platform !== 'win32' && !available && `${powerShell} is unavailable`,
+  }, async (t) => {
+    const { scratch, script, prelude, functions } = await createMinisignBootstrapFixture(t);
+    // Replace only the .NET OS query boundary; execute the real installer logic.
+    const boundaryFunctions = functions.map((source) => source.replaceAll(
+      '[System.Runtime.InteropServices.RuntimeInformation]', '[FixtureRuntimeInformation]',
+    ));
+    for (const scenario of architectureCases) {
+      await t.test(scenario.name, async () => {
+        const quote = (value) => value === null ? '$null' : `'${value}'`;
+        await writeFile(script, [
+          ...prelude,
+          'Add-Type "public static class FixtureRuntimeInformation { public static object OSArchitecture; }"',
+          `[FixtureRuntimeInformation]::OSArchitecture = ${quote(scenario.runtime)}`,
+          `$env:PROCESSOR_ARCHITEW6432 = ${quote(scenario.wow64)}`,
+          `$env:PROCESSOR_ARCHITECTURE = ${quote(scenario.processor)}`,
+          ...boundaryFunctions,
+          '$selected = Ensure-Minisign -TempRoot $fixtureRoot',
+          'Write-Output $selected',
+        ].join('\n'));
+        // Recreate the archive for each case; extraction and native probing stay real.
+        await rm(join(scratch, 'archive'), { recursive: true, force: true });
+        await rm(join(scratch, 'fixture.zip'), { force: true });
+        const result = spawnSync(powerShell, ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script], { encoding: 'utf8' });
+        assert.ifError(result.error);
+        if (scenario.expected === null) {
+          assert.notEqual(result.status, 0);
+          assert.match(result.stderr, /Unsupported Windows architecture for bundled minisign/);
+        } else {
+          assert.equal(result.status, 0, result.stderr);
+          const expected = join(scratch, 'minisign-extract', 'minisign-win64', scenario.expected, 'minisign.exe');
+          assert.equal(result.stdout.trim(), expected);
+        }
+      });
+    }
+  });
 }

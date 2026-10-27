@@ -9,6 +9,7 @@ export interface HappierSocketData {
     uiFocus?: Readonly<{ computer: boolean; focused: boolean }>;
     sessionId?: string;
     machineId?: string;
+    connectedServiceIds?: readonly import("@happier-dev/protocol").ConnectedServiceId[];
     sessionScopedBinding?: SessionScopedSocketBinding;
 }
 

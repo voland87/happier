@@ -770,9 +770,9 @@ describe('createClaudeUnifiedHookLifecycleBridge', () => {
       await vi.waitFor(() => {
         expect(onUsageLimitDetails).toHaveBeenCalledWith(expect.objectContaining({
           v: 1,
-          providerLimitId: 'rate_limit',
           recoverability: 'wait',
         }));
+        expect(onUsageLimitDetails.mock.calls[0]?.[0]).not.toHaveProperty('providerLimitId');
       });
     } finally {
       bridge.dispose();

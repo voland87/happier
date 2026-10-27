@@ -3,6 +3,27 @@ import { describe, expect, it } from 'vitest';
 import { parseRawJsonLinesLine, parseRawJsonLinesObject } from './parseRawJsonLines';
 
 describe('parseRawJsonLines', () => {
+  it.each(['completed', 'failed', 'stopped'] as const)('retains released native task %s findings while normalizing its error status', status => {
+    // cli-v0.2.16@b8d1c449c46ab4dfa8637db36b66f643d149e66d sessionScanner:452–472.
+    const content = [{ type: 'text', text: 'Historical background findings' }];
+    const parsed = parseRawJsonLinesObject({ type: 'user', uuid: 'released-task', isMeta: true,
+      origin: { kind: 'task-notification', taskId: 'task', toolUseId: 'tool', status },
+      message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'tool', content, is_error: false }] } });
+    expect(parsed).toMatchObject({ type: 'user', origin: { kind: 'task-notification', toolUseId: 'tool', status },
+      message: { content: [{ type: 'tool_result', tool_use_id: 'tool', content, is_error: status !== 'completed' }] } });
+    expect(parseRawJsonLinesObject(parsed)).toEqual(parsed);
+  });
+
+  it.each(['completed', 'failed', 'stopped'] as const)('projects native task %s before direct and history readers filter attachments', status => {
+    const parsed = parseRawJsonLinesObject({ type: 'attachment', uuid: 'native-task', isMeta: true,
+      attachment: { type: 'queued_command', commandMode: 'task-notification', prompt:
+        `<task-notification><task-id>task</task-id><tool-use-id>tool</tool-use-id><status>${status}</status><result>final</result></task-notification>` } });
+    expect(parsed).toMatchObject({ type: 'user', uuid: 'native-task', origin: { kind: 'task-notification', toolUseId: 'tool', status },
+      message: { content: [{ type: 'tool_result', tool_use_id: 'tool', is_error: status !== 'completed' }] } });
+    expect(parsed?.isMeta).toBeUndefined();
+    expect(parsed?.attachment).toBeUndefined();
+  });
+
   it('projects a delivered native cross-session attachment with its sender and peer origin', () => {
     // Claude Code 2.1.292 delivered JSONL shape reported in #508.
     const parsed = parseRawJsonLinesObject({

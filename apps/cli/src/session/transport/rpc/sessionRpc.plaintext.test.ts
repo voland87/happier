@@ -150,7 +150,8 @@ describe('callSessionRpc (plaintext sessions)', () => {
         request: { a: 1 },
         ctx: { encryptionKey: new Uint8Array(32), encryptionVariant: 'dataKey' },
       }),
-    ).rejects.toSatisfy((error: unknown) => readRpcErrorCode(error) === RPC_ERROR_CODES.METHOD_NOT_AVAILABLE);
+    ).rejects.toSatisfy((error: unknown) => readRpcErrorCode(error) === RPC_ERROR_CODES.METHOD_NOT_AVAILABLE
+      && readRpcRequestDisposition(error) === 'notSent');
     expect(createdSockets[0]?.disconnectCalls).toBe(1);
     expect(createdSockets[0]?.closeCalls).toBe(1);
     expect(createdSockets[0]?.listenerCount('connect')).toBe(0);

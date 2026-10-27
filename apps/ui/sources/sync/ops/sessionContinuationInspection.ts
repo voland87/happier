@@ -58,6 +58,9 @@ export type InspectSessionContinuationsOnMachineInput = Readonly<{
 export async function inspectSessionContinuationOnMachine(
     input: InspectSessionContinuationOnMachineInput,
 ): Promise<SessionContinuationInspectionQueryV1> {
+    if (input.selection.backendTarget?.kind === 'configuredAcpBackend') {
+        return (await inspectSessionContinuationsOnMachine({ ...input, selections: [input.selection] }))[0] ?? INDETERMINATE;
+    }
     const payload = SessionContinuationInspectionRequestV1Schema.parse({
         v: 1,
         sourceSessionId: input.sessionId,
@@ -83,12 +86,28 @@ export async function inspectSessionContinuationOnMachine(
 }
 
 /**
- * Resolves the whole Agent-picker projection through one source Session read.
- * Older daemons retain the published single-target operation as the narrow
- * compatibility fallback; all domain decisions still come from that owner.
+ * Resolves each target family in a batch. Configured targets use their exact-target
+ * operation so a released strict parser cannot reject unrelated built-in rows.
+ * Only built-ins retain the published single-target compatibility fallback.
  */
 export async function inspectSessionContinuationsOnMachine(
     input: InspectSessionContinuationsOnMachineInput,
+): Promise<readonly SessionContinuationInspectionQueryV1[]> {
+    const indexed = input.selections.map((selection, index) => ({ selection, index }));
+    const configured = indexed.filter(({ selection }) => selection.backendTarget?.kind === 'configuredAcpBackend');
+    const builtin = indexed.filter(({ selection }) => selection.backendTarget?.kind !== 'configuredAcpBackend');
+    const answers: SessionContinuationInspectionQueryV1[] = input.selections.map(() => INDETERMINATE);
+    await Promise.all([builtin, configured].map(async (group) => {
+        if (group.length === 0) return;
+        const results = await inspectSessionContinuationBatch({ ...input, selections: group.map(({ selection }) => selection) }, group === configured);
+        group.forEach(({ index }, offset) => { answers[index] = results[offset] ?? INDETERMINATE; });
+    }));
+    return answers;
+}
+
+async function inspectSessionContinuationBatch(
+    input: InspectSessionContinuationsOnMachineInput,
+    configured: boolean,
 ): Promise<readonly SessionContinuationInspectionQueryV1[]> {
     if (input.selections.length === 0) return [];
     const payload = SessionContinuationInspectionBatchRequestV1Schema.parse({
@@ -101,11 +120,12 @@ export async function inspectSessionContinuationsOnMachine(
         raw = await machineRpcWithServerScope<unknown, typeof payload>({
             machineId: input.machineId,
             serverId: input.serverId,
-            method: RPC_METHODS.SESSION_CONTINUATION_INSPECT_BATCH,
+            method: configured ? RPC_METHODS.SESSION_CONTINUATION_INSPECT_BACKEND_TARGETS : RPC_METHODS.SESSION_CONTINUATION_INSPECT_BATCH,
             payload,
         });
     } catch (error) {
         if (readRpcErrorCode(error) === RPC_ERROR_CODES.METHOD_NOT_AVAILABLE) {
+            if (configured) return input.selections.map(() => OPERATION_UNAVAILABLE);
             return await Promise.all(input.selections.map(async (selection) => (
                 await inspectSessionContinuationOnMachine({
                     machineId: input.machineId,

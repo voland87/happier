@@ -29,6 +29,18 @@ vi.mock('node:child_process', async (importOriginal) => ({
   spawnSync: spawnSyncMock,
 }));
 
+function isHappierTaskFolderListing(command: string, args: readonly string[] | undefined): boolean {
+  return command === 'powershell.exe' && Boolean(args?.some((arg) => arg.includes('.GetFolder("\\Happier")')));
+}
+
+function happierTaskFolderListing(taskPaths: readonly string[]) {
+  return { status: 0, stdout: `${JSON.stringify(taskPaths)}\r\n`, stderr: '' } as never;
+}
+
+function ranFullScheduledTaskEnumeration(): boolean {
+  return spawnSyncMock.mock.calls.some(([command, args]) => command === 'schtasks' && !args?.includes('/TN'));
+}
+
 describe('discoverInstalledDaemonServiceEntries', () => {
   beforeEach(async () => {
     readdirSyncMock.mockReset();
@@ -37,7 +49,10 @@ describe('discoverInstalledDaemonServiceEntries', () => {
     readFileSyncMock.mockReset();
     readFileSyncMock.mockImplementation(fs.readFileSync);
     spawnSyncMock.mockReset();
-    spawnSyncMock.mockReturnValue({ status: 0, stdout: '', stderr: '' } as never);
+    // Successful empty OS enumeration; individual tests override real task results.
+    spawnSyncMock.mockImplementation((command, args) => (isHappierTaskFolderListing(command, args)
+      ? happierTaskFolderListing([])
+      : { status: 0, stdout: '', stderr: '' } as never));
   });
 
   it.each(['EACCES', 'EIO'])('propagates %s rather than reporting an empty service inventory', async (code) => {
@@ -700,17 +715,13 @@ describe('discoverInstalledDaemonServiceEntries', () => {
       mkdirSync(join(happierHomeDir, 'services'), { recursive: true });
 
       spawnSyncMock.mockImplementation((command, args) => {
+        if (isHappierTaskFolderListing(command, args)) {
+          return happierTaskFolderListing(['\\Happier\\happier-daemon.default']);
+        }
         if (command !== 'schtasks') {
           return { status: 1, stdout: '', stderr: '' } as never;
         }
         const normalizedArgs = Array.isArray(args) ? args.map((value) => String(value)) : [];
-        if (normalizedArgs.join(' ') === '/Query /FO CSV /NH') {
-          return {
-            status: 0,
-            stdout: '"\\\\Happier\\\\happier-daemon.default","N/A"\r\n',
-            stderr: '',
-          } as never;
-        }
         if (normalizedArgs.join(' ') === '/Query /TN Happier\\happier-daemon.default /XML') {
           return {
             status: 0,
@@ -748,6 +759,7 @@ describe('discoverInstalledDaemonServiceEntries', () => {
           path: 'C:\\Users\\tester\\.happier\\services\\happier-daemon.default.ps1',
         }),
       ]);
+      expect(ranFullScheduledTaskEnumeration()).toBe(false);
     });
   });
 
@@ -757,17 +769,13 @@ describe('discoverInstalledDaemonServiceEntries', () => {
       mkdirSync(join(happierHomeDir, 'services'), { recursive: true });
 
       spawnSyncMock.mockImplementation((command, args) => {
+        if (isHappierTaskFolderListing(command, args)) {
+          return happierTaskFolderListing(['\\Happier\\happier-daemon.default']);
+        }
         if (command !== 'schtasks') {
           return { status: 1, stdout: '', stderr: '' } as never;
         }
         const normalizedArgs = Array.isArray(args) ? args.map((value) => String(value)) : [];
-        if (normalizedArgs.join(' ') === '/Query /FO CSV /NH') {
-          return {
-            status: 0,
-            stdout: '"\\\\Happier\\\\happier-daemon.default","N/A"\r\n',
-            stderr: '',
-          } as never;
-        }
         if (normalizedArgs.join(' ') === '/Query /TN Happier\\happier-daemon.default /XML') {
           return {
             status: 1,
@@ -817,17 +825,13 @@ describe('discoverInstalledDaemonServiceEntries', () => {
       mkdirSync(join(happierHomeDir, 'services'), { recursive: true });
 
       spawnSyncMock.mockImplementation((command, args) => {
+        if (isHappierTaskFolderListing(command, args)) {
+          return happierTaskFolderListing(['\\Happier\\happier-daemon.default']);
+        }
         if (command !== 'schtasks') {
           return { status: 1, stdout: '', stderr: '' } as never;
         }
         const normalizedArgs = Array.isArray(args) ? args.map((value) => String(value)) : [];
-        if (normalizedArgs.join(' ') === '/Query /FO CSV /NH') {
-          return {
-            status: 0,
-            stdout: '"\\\\Happier\\\\happier-daemon.default","N/A"\r\n',
-            stderr: '',
-          } as never;
-        }
         if (normalizedArgs.join(' ') === '/Query /TN Happier\\happier-daemon.default /XML') {
           return {
             status: 1,
@@ -858,7 +862,9 @@ describe('discoverInstalledDaemonServiceEntries', () => {
   it('enumerates Scheduler without a local wrapper directory and retains foreign tasks', async () => {
     await withTempDir('happier-discover-task-no-directory-', async (homeDir) => {
       const wrapper = String.raw`C:\Other\.happier\services\happier-daemon.company.ps1`;
-      spawnSyncMock.mockImplementation((_command, args) => ({ status: 0, stdout: args?.includes('/XML') ? `<Task><Actions><Exec><Arguments>-File "${wrapper}"</Arguments></Exec></Actions></Task>` : '"\\Happier\\happier-daemon.company","N/A"\r\n', stderr: '' } as never));
+      spawnSyncMock.mockImplementation((command, args) => (isHappierTaskFolderListing(command, args)
+        ? happierTaskFolderListing(['\\Happier\\happier-daemon.company'])
+        : { status: 0, stdout: args?.includes('/XML') ? `<Task><Actions><Exec><Arguments>-File "${wrapper}"</Arguments></Exec></Actions></Task>` : '', stderr: '' } as never));
       const entries = await discoverInstalledDaemonServiceEntries({ platform: 'win32', userHomeDir: homeDir, happierHomeDir: join(homeDir, '.happier'), mode: 'user', serversById: {} });
       expect(entries).toEqual([expect.objectContaining({ serverId: 'company', path: wrapper })]);
     });
@@ -866,7 +872,7 @@ describe('discoverInstalledDaemonServiceEntries', () => {
 
   it('names the task when the OS process boundary throws during inspection', async () => {
     readdirSyncMock.mockReturnValue([]);
-    spawnSyncMock.mockReturnValueOnce({ status: 0, stdout: '"\\Happier\\happier-daemon.company","N/A"\r\n', stderr: '' } as never)
+    spawnSyncMock.mockReturnValueOnce(happierTaskFolderListing(['\\Happier\\happier-daemon.company']))
       .mockImplementationOnce(() => { throw new Error('OS process unavailable'); });
     await expect(discoverInstalledDaemonServiceEntries({ platform: 'win32', userHomeDir: '/unused', happierHomeDir: '/unused/.happier', mode: 'user', serversById: {} }))
       .rejects.toMatchObject({ code: 'service_inventory_unavailable', message: expect.stringContaining('happier-daemon.company') });
@@ -875,12 +881,41 @@ describe('discoverInstalledDaemonServiceEntries', () => {
   it('omits a task only after a successful Scheduler enumeration proves it disappeared', async () => {
     await withTempDir('happier-discover-task-disappeared-', async (homeDir) => {
       mkdirSync(join(homeDir, '.happier', 'services'), { recursive: true });
-      spawnSyncMock.mockReturnValueOnce({ status: 0, stdout: '"\\Happier\\happier-daemon.company","N/A"\r\n', stderr: '' } as never)
+      spawnSyncMock.mockReturnValueOnce(happierTaskFolderListing(['\\Happier\\happier-daemon.company']))
         .mockReturnValueOnce({ status: 1, stdout: '', stderr: 'not found' } as never)
         .mockReturnValueOnce({ status: 1, stdout: '', stderr: 'not found' } as never)
-        .mockReturnValueOnce({ status: 0, stdout: '', stderr: '' } as never);
+        .mockReturnValueOnce(happierTaskFolderListing([]));
       await expect(discoverInstalledDaemonServiceEntries({ platform: 'win32', userHomeDir: homeDir, happierHomeDir: join(homeDir, '.happier'), mode: 'user', serversById: {} })).resolves.toEqual([]);
+      expect(ranFullScheduledTaskEnumeration()).toBe(false);
     });
+  });
+
+  it('reports an unreadable Happier task folder instead of an empty inventory', async () => {
+    await withTempDir('happier-discover-task-folder-unreadable-', async (homeDir) => {
+      mkdirSync(join(homeDir, '.happier', 'services'), { recursive: true });
+      spawnSyncMock.mockReturnValueOnce({ status: 1, stdout: '', stderr: 'Access is denied.' } as never);
+      await expect(discoverInstalledDaemonServiceEntries({ platform: 'win32', userHomeDir: homeDir, happierHomeDir: join(homeDir, '.happier'), mode: 'user', serversById: {} }))
+        .rejects.toMatchObject({ code: 'service_inventory_unavailable' });
+    });
+  });
+
+  it.each(['', ' \r\n', 'not-json'])('rejects an unproven inventory from status-zero output %j', async (stdout) => {
+    readdirSyncMock.mockReturnValue([]);
+    spawnSyncMock.mockReturnValueOnce({ status: 0, stdout, stderr: '' } as never);
+    await expect(discoverInstalledDaemonServiceEntries({
+      platform: 'win32', userHomeDir: '/unused', happierHomeDir: '/unused/.happier', mode: 'user', serversById: {},
+    })).rejects.toMatchObject({ code: 'service_inventory_unavailable' });
+  });
+
+  it('does not infer a task disappeared from blank output after its detail reads failed', async () => {
+    readdirSyncMock.mockReturnValue([]);
+    spawnSyncMock.mockReturnValueOnce(happierTaskFolderListing(['\\Happier\\happier-daemon.company']))
+      .mockReturnValueOnce({ status: 1, stdout: '', stderr: 'not found' } as never)
+      .mockReturnValueOnce({ status: 1, stdout: '', stderr: 'not found' } as never)
+      .mockReturnValueOnce({ status: 0, stdout: '', stderr: '' } as never);
+    await expect(discoverInstalledDaemonServiceEntries({
+      platform: 'win32', userHomeDir: '/unused', happierHomeDir: '/unused/.happier', mode: 'user', serversById: {},
+    })).rejects.toMatchObject({ code: 'service_inventory_unavailable' });
   });
 
   it('applies a timeout to Windows schtasks discovery calls', async () => {
@@ -890,18 +925,14 @@ describe('discoverInstalledDaemonServiceEntries', () => {
 
       const observedTimeouts: number[] = [];
       spawnSyncMock.mockImplementation((command, args, options) => {
+        observedTimeouts.push(Number((options as { timeout?: number } | undefined)?.timeout ?? 0));
+        if (isHappierTaskFolderListing(command, args)) {
+          return happierTaskFolderListing(['\\Happier\\happier-daemon.default']);
+        }
         if (command !== 'schtasks') {
           return { status: 1, stdout: '', stderr: '' } as never;
         }
-        observedTimeouts.push(Number((options as { timeout?: number } | undefined)?.timeout ?? 0));
         const normalizedArgs = Array.isArray(args) ? args.map((value) => String(value)) : [];
-        if (normalizedArgs.join(' ') === '/Query /FO CSV /NH') {
-          return {
-            status: 0,
-            stdout: '"\\\\Happier\\\\happier-daemon.default","N/A"\r\n',
-            stderr: '',
-          } as never;
-        }
         if (normalizedArgs.join(' ') === '/Query /TN Happier\\happier-daemon.default /XML') {
           return {
             status: 0,

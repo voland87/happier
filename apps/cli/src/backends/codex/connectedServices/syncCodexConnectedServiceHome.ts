@@ -1,4 +1,4 @@
-import { lstat, mkdir, mkdtemp, open, readdir, readFile, rm } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, open, readdir, readFile, realpath, rm } from 'node:fs/promises';
 import { basename, join, resolve } from 'node:path';
 
 import { stringify, type TomlTable, type TomlValue } from 'smol-toml';
@@ -11,6 +11,9 @@ import {
 
 import { codexConnectedServiceStateSharingDescriptor } from '@/backends/codex/connectedServices/codexConnectedServiceStateSharingDescriptor';
 import { resolveConfiguredCodexHome } from '@/backends/codex/utils/resolveConfiguredCodexHome';
+import { isMatchingCodexRolloutFileName, normalizeCodexVendorResumeId } from '@/backends/codex/utils/codexSessionFiles';
+import { resolveConnectedServiceHomesDir } from '@/daemon/connectedServices/homes/resolveConnectedServiceHomeDir';
+import { isConnectedServiceStateRootWithin } from '@/daemon/connectedServices/materialize/resolveConnectedServicePreviousStateRoot';
 import { ConnectedServiceSharedStateLinkUnavailableError } from '@/daemon/connectedServices/stateSharing/createSharedStateLink';
 import { withConnectedServiceStateSharingLocks } from '@/daemon/connectedServices/stateSharing/connectedServiceStateSharingLock';
 import {
@@ -26,7 +29,7 @@ import {
 import { logger } from '@/ui/logger';
 
 import { resolveConfiguredCodexSqliteHome } from './codexStateFileNames';
-import { reconcileCodexSharedJsonlState } from './reconcileCodexSharedJsonlState';
+import { isCodexFixedJsonlStateFile, reconcileCodexSharedJsonlState } from './reconcileCodexSharedJsonlState';
 
 const CODEX_IMPORTABLE_SESSION_HOME_ENTRIES = Object.freeze([
   'sessions',
@@ -209,22 +212,30 @@ async function ensureNativeCodexSharedStateStore(sourceCodexHome: string): Promi
   }));
 }
 
-async function backfillPreviousCodexNonSessionState(params: Readonly<{
+async function backfillCodexNonSessionState(params: Readonly<{
+  destinationCodexHome: string;
   previousCodexHome?: string | null;
   sourceCodexHome: string;
 }>): Promise<void> {
-  if (!params.previousCodexHome) return;
-  await importConnectedServiceSessionFiles({
-    roots: [{
-      sourceRoot: params.previousCodexHome,
-      destinationRoot: params.sourceCodexHome,
-      includeDirectory: (relativePath) =>
-        relativePath === 'memories' || relativePath.startsWith('memories/'),
-      includeFile: (relativePath) =>
-        relativePath.startsWith('memories/'),
-    }],
-  });
-  await reconcileCodexSharedJsonlState(params);
+  for (const stateSourceHome of dedupeEntries([
+    resolve(params.destinationCodexHome),
+    ...(params.previousCodexHome ? [resolve(params.previousCodexHome)] : []),
+  ])) {
+    await importConnectedServiceSessionFiles({
+      roots: [{
+        sourceRoot: stateSourceHome,
+        destinationRoot: params.sourceCodexHome,
+        includeDirectory: (relativePath) =>
+          relativePath === 'memories' || relativePath.startsWith('memories/'),
+        includeFile: (relativePath) =>
+          relativePath.startsWith('memories/'),
+      }],
+    });
+    await reconcileCodexSharedJsonlState({
+      previousCodexHome: stateSourceHome,
+      sourceCodexHome: params.sourceCodexHome,
+    });
+  }
 }
 
 async function withCodexSharedStatePreflightSource<T>(params: Readonly<{
@@ -234,6 +245,13 @@ async function withCodexSharedStatePreflightSource<T>(params: Readonly<{
 }>): Promise<T> {
   if (!params.enabled) return await params.run(null);
   await mkdir(params.sourceCodexHome, { recursive: true });
+  // Shared preparation holds the source-home lock for this whole callback. A prior invocation
+  // cannot still own a scratch directory here, so remove interrupted preflights before ours exists.
+  for (const entry of await readdir(params.sourceCodexHome, { withFileTypes: true })) {
+    if (entry.isDirectory() && entry.name.startsWith('.happier-state-preflight-')) {
+      await rm(join(params.sourceCodexHome, entry.name), { recursive: true, force: true });
+    }
+  }
   const preflightSourceCodexHome = await mkdtemp(join(params.sourceCodexHome, '.happier-state-preflight-'));
   try {
     await Promise.all(CODEX_SHARED_STATE_DIRECTORY_ENTRIES.map(async (entryName) => {
@@ -252,21 +270,24 @@ async function withCodexSharedStatePreflightSource<T>(params: Readonly<{
 export async function syncCodexConnectedServiceHome(params: Readonly<{
   destinationCodexHome: string;
   previousCodexHome?: string | null;
+  activeServerDir?: string;
+  vendorResumeId?: string | null;
   accountSettings?: AccountSettings | Readonly<Record<string, unknown>> | null;
   processEnv?: NodeJS.ProcessEnv;
 }>): Promise<SyncCodexConnectedServiceHomeResult> {
   const settings = resolveCodexHomeSharingSettings(params.accountSettings ?? null);
   const processEnv = params.processEnv ?? process.env;
-  const sourceCodexHome = resolveSourceCodexHome({
+  const configuredSourceCodexHome = resolveSourceCodexHome({
     destinationCodexHome: params.destinationCodexHome,
     processEnv,
   });
-  const lockRoots = settings.stateMode === 'shared' && sourceCodexHome
+  const sourceCodexHome = configuredSourceCodexHome ?? resolve(params.destinationCodexHome);
+  const lockRoots = settings.stateMode === 'shared' && configuredSourceCodexHome
     ? [params.destinationCodexHome, sourceCodexHome]
     : [params.destinationCodexHome];
   return await withConnectedServiceStateSharingLocks(lockRoots, async () => {
     const sourceSqliteHome = resolve(resolveConfiguredCodexSqliteHome(processEnv));
-    if (!sourceCodexHome) {
+    if (!configuredSourceCodexHome && settings.stateMode === 'shared') {
       return {
         providerId: 'codex',
         requestedStateMode: settings.stateMode,
@@ -282,7 +303,7 @@ export async function syncCodexConnectedServiceHome(params: Readonly<{
     const manifest = await readConnectedServiceStateSharingManifest(params.destinationCodexHome);
     const hookState = settings.configMode === 'isolated'
       ? {}
-      : await readCodexProfileHookState(params.previousCodexHome ?? params.destinationCodexHome);
+      : await readCodexProfileHookState(params.destinationCodexHome);
     const configEntryNames = await resolveCodexConfigEntryNames(sourceCodexHome);
     const stateEntryNames = codexConnectedServiceStateSharingDescriptor.state.entries.map((entry) => entry.path);
 
@@ -307,11 +328,12 @@ export async function syncCodexConnectedServiceHome(params: Readonly<{
         configEntryNames,
         copyTransformByEntry: {
           'config.toml': (content) => mergeCodexHookState(content, hookState, sourceCodexHome,
-            resolve(params.previousCodexHome ?? params.destinationCodexHome)),
+            resolve(params.destinationCodexHome)),
         },
         stateEntryNames,
         prepareSharedStateSource: preflightSourceCodexHome ? async () => {
-          await backfillPreviousCodexNonSessionState({
+          await backfillCodexNonSessionState({
+            destinationCodexHome: params.destinationCodexHome,
             previousCodexHome: params.previousCodexHome ?? null,
             sourceCodexHome,
           });
@@ -337,6 +359,48 @@ export async function syncCodexConnectedServiceHome(params: Readonly<{
       }),
     });
 
+    if (settings.stateMode === 'isolated' && params.previousCodexHome
+      && resolve(params.previousCodexHome) !== resolve(params.destinationCodexHome)) {
+      let previousAccountHome: string | null = null;
+      if (params.activeServerDir) {
+        try {
+          const [accountHomesRoot, previousRoot] = await Promise.all([
+            realpath(resolveConnectedServiceHomesDir({ activeServerDir: params.activeServerDir })),
+            realpath(params.previousCodexHome),
+          ]);
+          if (isConnectedServiceStateRootWithin(accountHomesRoot, previousRoot)) previousAccountHome = previousRoot;
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException)?.code !== 'ENOENT') throw error;
+        }
+      }
+      if (previousAccountHome) {
+        const vendorResumeId = normalizeCodexVendorResumeId(params.vendorResumeId);
+        if (vendorResumeId) {
+          // Account-local history is not session carry-forward. Adopt only the requested
+          // conversation through the same importer; archives, memories and fixed indexes stay local.
+          await importConnectedServiceSessionFiles({ roots: [{
+            sourceRoot: join(previousAccountHome, 'sessions'),
+            destinationRoot: join(params.destinationCodexHome, 'sessions'),
+            includeFile: path => isMatchingCodexRolloutFileName(basename(path), vendorResumeId),
+          }] });
+        }
+      } else {
+        const entries = codexConnectedServiceStateSharingDescriptor.state.entries.map((entry) => entry.path);
+        // Legacy per-session homes belong to this resumed session, not another account. Canonical
+        // preparation detaches borrowed state first; symlinked ambient state is never bulk-imported.
+        await importConnectedServiceSessionFiles({ roots: [{
+          sourceRoot: params.previousCodexHome, destinationRoot: params.destinationCodexHome,
+          includeDirectory: (path) => entries.some((entry) => path === entry || path.startsWith(`${entry}/`) || entry.startsWith(`${path}/`)),
+          includeFile: (path) => !isCodexFixedJsonlStateFile(path)
+            && entries.some((entry) => path === entry || path.startsWith(`${entry}/`)),
+        }] });
+        await reconcileCodexSharedJsonlState({
+          previousCodexHome: params.previousCodexHome,
+          sourceCodexHome: params.destinationCodexHome,
+          localStateOnly: true,
+        });
+      }
+    }
     await writeConnectedServiceStateSharingManifest(params.destinationCodexHome, applyResult.manifest);
     await removeLegacyConnectedServiceStateSharingManifest(params.destinationCodexHome);
 

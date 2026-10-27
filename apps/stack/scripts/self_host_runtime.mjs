@@ -2364,7 +2364,7 @@ async function cmdUninstall({ channel, mode, argv, json }) {
     homeDir: homedir(),
     spec: serviceSpec,
     persistent: true,
-  }).catch(() => {});
+  });
 
   await rm(config.serverBinaryPath, { force: true });
   await rm(config.serverPreviousBinaryPath, { force: true });

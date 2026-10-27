@@ -104,6 +104,24 @@ export const PressableSurface = React.memo((props: PressableSurfaceProps) => {
             accessibilityLabel={props.accessibilityLabel}
             accessibilityHint={props.accessibilityHint}
             accessibilityState={{ ...props.accessibilityState, disabled }}
+            aria-checked={props.accessibilityState?.checked}
+            aria-expanded={props.accessibilityState?.expanded}
+            aria-selected={props.accessibilityState?.selected}
+            aria-busy={props.accessibilityState?.busy}
+            {...(Platform.OS === 'web' && (props.accessibilityRole === 'switch' || props.accessibilityRole === 'checkbox') ? {
+                // RN Web activates Space only for button roles; checkable controls need the same key contract.
+                onKeyDown: (event: React.KeyboardEvent<HTMLElement>) => {
+                    if (event.key !== ' ') return;
+                    event.preventDefault();
+                    event.stopPropagation();
+                },
+                onKeyUp: (event: React.KeyboardEvent<HTMLElement>) => {
+                    if (event.key !== ' ') return;
+                    event.preventDefault();
+                    event.stopPropagation();
+                    if (!disabled) event.currentTarget.click();
+                },
+            } : null)}
             style={resolveStyle}
         >
             {props.children}

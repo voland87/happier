@@ -37,10 +37,20 @@ export function createAcpRequestFailureLogRecord(params: Readonly<{
 }>): Readonly<{
   operation: AcpRequestOperation;
   failureKind: AcpRequestFailureKind;
+  requestErrorCode?: number;
+  authenticationSetupFailure?: true;
 }> {
+  // JSON-RPC numeric codes are diagnostic metadata; provider messages/data may contain credentials.
+  const code = params.error && typeof params.error === 'object' && 'code' in params.error
+    ? params.error.code
+    : undefined;
   return Object.freeze({
     operation: params.operation,
     failureKind: classifyAcpRequestFailureForLog(params.error),
+    ...(params.error && typeof params.error === 'object'
+      && 'authenticationSetupFailure' in params.error
+      && params.error.authenticationSetupFailure === true ? { authenticationSetupFailure: true as const } : {}),
+    ...(typeof code === 'number' && Number.isSafeInteger(code) ? { requestErrorCode: code } : {}),
   });
 }
 

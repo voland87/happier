@@ -606,6 +606,8 @@ async function maybeSelectGroupActiveProfileForSpawn(params: Readonly<{
   }
 
   const selected = selectConnectedServiceAuthGroupCandidate({
+    lastSwitchReason: state.lastSwitchReason,
+    lastSwitchAt: state.lastSwitchAt,
     nowMs: params.nowMs,
     quotaFreshnessMs: params.quotaFreshnessMs,
     activeProfileId: state.activeProfileId,
@@ -785,6 +787,8 @@ function isAuthoritativeGroupActiveProfileEligible(params: Readonly<{
   const activeMembers = state.members.filter((member) => member.profileId === params.activeProfileId);
   if (activeMembers.length === 0) return false;
   const selected = selectConnectedServiceAuthGroupCandidate({
+    lastSwitchReason: state.lastSwitchReason,
+    lastSwitchAt: state.lastSwitchAt,
     nowMs: params.nowMs,
     quotaFreshnessMs: params.quotaFreshnessMs,
     activeProfileId: params.activeProfileId,
@@ -1070,6 +1074,7 @@ function resolveMaxSpawnMaterializationAttempts(
 
 async function materializeAndVerifyConnectedServiceAuthForSpawn(params: Readonly<{
   agentId: CatalogAgentId;
+  materializationPurpose?: 'probe';
   materializationKey: string;
   connectedServiceMaterializationIdentityV1: ConnectedServiceMaterializationIdentityV1 | null;
   activeServerDir: string;
@@ -1080,6 +1085,8 @@ async function materializeAndVerifyConnectedServiceAuthForSpawn(params: Readonly
   selectionsByServiceId: ReadonlyMap<ConnectedServiceId, ConnectedServiceResolvedSelection>;
   accountSettings: AccountSettings | Readonly<Record<string, unknown>> | null;
   processEnv: NodeJS.ProcessEnv;
+  previousMaterializedRoot?: string | null;
+  existingSessionMetadata?: unknown;
   refreshService: ConnectedServiceSpawnCredentialRefreshService | null;
   forceOauthRefresh: boolean;
   nowMs: number;
@@ -1087,6 +1094,7 @@ async function materializeAndVerifyConnectedServiceAuthForSpawn(params: Readonly
   resumeReachabilityRequired: boolean;
   candidatePersistedSessionFile: string | null;
   validateGroupMutationCurrentness: ReturnType<typeof createConnectedServiceGroupMutationCurrentnessValidator>;
+  sessionStateMode?: 'existing';
   signal?: AbortSignal;
   onCleanup?: (cleanup: () => Promise<void>) => void;
 }>): Promise<(ConnectedServicesMaterializeResult & Readonly<{
@@ -1095,6 +1103,7 @@ async function materializeAndVerifyConnectedServiceAuthForSpawn(params: Readonly
 }>) | null> {
   const materialized = await materializeConnectedServicesForSpawn({
     agentId: params.agentId,
+    materializationPurpose: params.materializationPurpose,
     materializationKey: params.materializationKey,
     connectedServiceMaterializationIdentityV1: params.connectedServiceMaterializationIdentityV1,
     activeServerDir: params.activeServerDir,
@@ -1121,8 +1130,11 @@ async function materializeAndVerifyConnectedServiceAuthForSpawn(params: Readonly
       : null,
     accountSettings: params.accountSettings,
     processEnv: params.processEnv,
+    previousMaterializedRoot: params.previousMaterializedRoot,
+    existingSessionMetadata: params.existingSessionMetadata,
     vendorResumeId: params.vendorResumeId,
     candidatePersistedSessionFile: params.candidatePersistedSessionFile,
+    sessionStateMode: params.sessionStateMode,
     validateGroupMutationCurrentness: params.validateGroupMutationCurrentness,
     signal: params.signal,
     onCleanup: params.onCleanup,
@@ -1136,7 +1148,9 @@ async function materializeAndVerifyConnectedServiceAuthForSpawn(params: Readonly
         materializedEnv: env,
         vendorResumeId: params.vendorResumeId,
         cwd: params.sessionDirectory,
-        resumeReachabilityRequired: params.resumeReachabilityRequired,
+        // Existing-state handoff verifies the final composed launch environment for both native
+        // and connected sessions at resolveSpawnChildEnvironment; never run a repairing probe here.
+        resumeReachabilityRequired: params.sessionStateMode === 'existing' ? false : params.resumeReachabilityRequired,
         candidatePersistedSessionFile: params.candidatePersistedSessionFile,
       });
     },
@@ -1147,6 +1161,7 @@ async function materializeAndVerifyConnectedServiceAuthForSpawn(params: Readonly
 
 export async function resolveConnectedServiceAuthForSpawn(params: Readonly<{
   agentId: CatalogAgentId;
+  materializationPurpose?: 'probe';
   sessionDirectory?: string | null;
   connectedServicesBindingsRaw: unknown;
   materializationKey: string;
@@ -1164,6 +1179,8 @@ export async function resolveConnectedServiceAuthForSpawn(params: Readonly<{
   quotaProbeDeadlineAtMs?: number;
   accountSettings?: AccountSettings | Readonly<Record<string, unknown>> | null;
   processEnv?: NodeJS.ProcessEnv;
+  previousMaterializedRoot?: string | null;
+  existingSessionMetadata?: unknown;
   credentialRefreshService?: ConnectedServiceSpawnCredentialRefreshService | null;
   /**
    * The vendor `--resume` reference the spawned process will resume from. Required for the §2
@@ -1183,6 +1200,7 @@ export async function resolveConnectedServiceAuthForSpawn(params: Readonly<{
    * hard-fail.
    */
   candidatePersistedSessionFile?: string | null;
+  sessionStateMode?: 'existing';
   signal?: AbortSignal;
   onCleanup?: (cleanup: () => Promise<void>) => void;
 }>): Promise<Readonly<{
@@ -1282,6 +1300,7 @@ export async function resolveConnectedServiceAuthForSpawn(params: Readonly<{
     try {
       const materialized = await materializeAndVerifyConnectedServiceAuthForSpawn({
         agentId: params.agentId,
+        materializationPurpose: params.materializationPurpose,
         materializationKey: params.materializationKey,
         connectedServiceMaterializationIdentityV1: params.connectedServiceMaterializationIdentityV1 ?? null,
         activeServerDir: params.activeServerDir,
@@ -1292,12 +1311,15 @@ export async function resolveConnectedServiceAuthForSpawn(params: Readonly<{
         selectionsByServiceId,
         accountSettings: params.accountSettings ?? null,
         processEnv: params.processEnv ?? process.env,
+        previousMaterializedRoot: params.previousMaterializedRoot,
+        existingSessionMetadata: params.existingSessionMetadata,
         refreshService: params.credentialRefreshService ?? null,
         forceOauthRefresh: forceSpawnPreflightOauthRefresh,
         nowMs,
         vendorResumeId: params.vendorResumeId ?? null,
         resumeReachabilityRequired: params.resumeReachabilityRequired ?? false,
         candidatePersistedSessionFile: params.candidatePersistedSessionFile ?? null,
+        sessionStateMode: params.sessionStateMode,
         signal: params.signal,
         onCleanup: params.onCleanup,
         validateGroupMutationCurrentness: createConnectedServiceGroupMutationCurrentnessValidator({
@@ -1305,7 +1327,12 @@ export async function resolveConnectedServiceAuthForSpawn(params: Readonly<{
           credentials: params.credentials,
         }),
       });
-      if (materialized === null) return null;
+      if (materialized === null) {
+        if (params.sessionStateMode === 'existing') {
+          throw new Error('connected_service_existing_state_materialization_unavailable');
+        }
+        return null;
+      }
       return {
         ...materialized,
         connectedServicesBindings,

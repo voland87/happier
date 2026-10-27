@@ -13,6 +13,9 @@ import { makeMode } from './claudeRemoteAgentSdk.testkit';
 import type { EnhancedMode } from '../loop';
 import type { Query } from '@anthropic-ai/claude-agent-sdk';
 import { resolveClaudeProjectId } from '../utils/path';
+import type { SessionWorkflowRunSnapshotV1 } from '@happier-dev/protocol';
+import { createClaudeWorkflowActivitySource } from '../workflows/claudeWorkflowActivitySource';
+import { completedNativeChildTranscript } from '../workflows/claudeWorkflowActivitySource.testkit';
 
 const ORIGINAL_CLAUDE_CONFIG_DIR = process.env.CLAUDE_CONFIG_DIR;
 
@@ -57,6 +60,47 @@ afterEach(() => {
 });
 
 describe('claudeRemoteAgentSdk options and hooks', () => {
+    it('projects an authenticated SDK SubagentStart into the exact completed workflow child', async () => {
+        let latest: SessionWorkflowRunSnapshotV1 | undefined;
+        const source = createClaudeWorkflowActivitySource({
+            backendId: 'claude', getCurrentClaudeSessionId: () => 'claude-session-1',
+            commitRecord: async (snapshot) => { latest = snapshot; }, writeHeadlines: () => {},
+        });
+        for (const row of completedNativeChildTranscript()) source.observeTranscriptMessage(row);
+        await source.flush();
+        expect(latest?.status).toBe('complete');
+        // The query is the external Agent SDK boundary; normalization, tracker and publisher stay real.
+        const createQuery = vi.fn((_params: any) => ({
+            async *[Symbol.asyncIterator]() {
+                await _params.options.hooks.SubagentStart[0].hooks[0]({
+                    hook_event_name: 'SubagentStart', agent_id: 'native-a', session_id: 'claude-session-1',
+                });
+                yield { type: 'result' };
+            },
+            close: vi.fn(), setPermissionMode: vi.fn(), setModel: vi.fn(), setMaxThinkingTokens: vi.fn(),
+            supportedCommands: vi.fn(async () => []), supportedModels: vi.fn(async () => []),
+        } as any));
+        let sent = false;
+        const onMessage = vi.fn();
+        try {
+            await claudeRemoteAgentSdk({
+                sessionId: null, transcriptPath: null, path: '/tmp', claudeArgs: [], claudeExecutablePath: '/tmp/claude',
+                canCallTool: async () => ({ behavior: 'allow', updatedInput: {} }), isAborted: () => false,
+                nextMessage: async () => {
+                    if (sent) return null;
+                    sent = true;
+                    return { message: 'hello', mode: makeMode({ permissionMode: 'default' }) };
+                },
+                onReady: () => {}, onSessionFound: () => {}, onMessage,
+                onSessionHook: (data: unknown) => source.observeTranscriptMessage(data, { historicalReplay: false, authenticatedHook: true }),
+                createQuery,
+            });
+            await source.flush();
+            expect(latest?.agents.map(agent => [agent.id, agent.status])).toEqual([['a', 'active'], ['b', 'complete']]);
+            expect(latest?.status).toBe('active');
+            expect(onMessage.mock.calls.flat()).not.toContainEqual(expect.objectContaining({ hook_event_name: 'SubagentStart' }));
+        } finally { source.dispose(); }
+    });
     afterEach(() => {
         ensureJavaScriptRuntimeExecutableMock.mockReset();
         ensureJavaScriptRuntimeExecutableMock.mockResolvedValue('/managed/js-runtime');
@@ -2362,7 +2406,7 @@ describe('claudeRemoteAgentSdk options and hooks', () => {
         }
     });
 
-    it('injects isolated XDG dirs so Claude Code does not contend with global version locks', async () => {
+    it('leaves unset XDG directories unset so Claude Code uses its native user caches', async () => {
         const transcriptPath = await createMaterializedClaudeTranscript('sess_1');
         const originals = {
             XDG_DATA_HOME: process.env.XDG_DATA_HOME,
@@ -2415,12 +2459,9 @@ describe('claudeRemoteAgentSdk options and hooks', () => {
             } as any);
 
             expect(capturedOptions?.env).toBeTruthy();
-            expect(typeof capturedOptions.env.XDG_DATA_HOME).toBe('string');
-            expect(typeof capturedOptions.env.XDG_CACHE_HOME).toBe('string');
-            expect(typeof capturedOptions.env.XDG_STATE_HOME).toBe('string');
-            expect(capturedOptions.env.XDG_DATA_HOME).toContain(join(configuration.activeServerDir, 'isolation'));
-            expect(capturedOptions.env.XDG_CACHE_HOME).toContain(join(configuration.activeServerDir, 'isolation'));
-            expect(capturedOptions.env.XDG_STATE_HOME).toContain(join(configuration.activeServerDir, 'isolation'));
+            expect(capturedOptions.env.XDG_DATA_HOME).toBeUndefined();
+            expect(capturedOptions.env.XDG_CACHE_HOME).toBeUndefined();
+            expect(capturedOptions.env.XDG_STATE_HOME).toBeUndefined();
         } finally {
             if (originals.XDG_DATA_HOME === undefined) delete process.env.XDG_DATA_HOME;
             else process.env.XDG_DATA_HOME = originals.XDG_DATA_HOME;

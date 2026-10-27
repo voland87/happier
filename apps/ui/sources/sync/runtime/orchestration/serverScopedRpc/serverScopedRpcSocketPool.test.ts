@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { ConnectedServiceIdSchema } from '@happier-dev/protocol';
 
 import type { ScopedSocketClient } from './serverScopedRpcTypes';
 import { createServerScopedRpcSocketPool } from './serverScopedRpcSocketPool';
@@ -125,6 +126,7 @@ describe('serverScopedRpcSocketPool', () => {
             'https://server.example.test',
             expect.objectContaining({
                 path: '/v1/updates/',
+                auth: expect.objectContaining({ connectedServiceIds: ConnectedServiceIdSchema.options }),
                 withCredentials: false,
             }),
         );

@@ -6,7 +6,7 @@ import { encodeBase64, encrypt } from '@/api/encryption';
 import { updateSessionWorkContextTags } from './updateSessionWorkContextTags';
 
 vi.mock('axios', () => ({ default: { get: vi.fn(), put: vi.fn(), post: vi.fn() } }));
-const credentials: Credentials = { token: 'token', encryption: { type: 'legacy', secret: new Uint8Array(32).fill(7) } };
+const credentials = { token: 'token', encryption: { type: 'legacy', secret: new Uint8Array(32).fill(7) } } satisfies Credentials;
 const tag = (id: string, display: unknown = { t: 'plain', v: { label: 'Known' } }) => ({ tagId: id, tagKey: id, display, sortKey: null, archivedAt: null, createdAt: 1, updatedAt: 1 });
 function snapshot(tags = [tag('known')]) {
     return { status: 200, data: { snapshot: { schemaVersion: 1, version: 1, pins: [], folders: [], folderAssignments: [], tags, tagAssignments: [], orderEntries: [], labels: [] } } };
@@ -79,13 +79,28 @@ describe('agent canonical tag autofill', () => {
         expect(axios.put).toHaveBeenCalledTimes(1);
     });
 
-    it('creates plaintext displays only for accounts explicitly in plaintext mode', async () => {
+    it('creates explicit plaintext displays with token-only credentials while retaining existing tags', async () => {
         vi.resetAllMocks();
-        vi.mocked(axios.get).mockImplementation(async (url) => String(url).endsWith('/v1/account/encryption') ? { status: 200, data: { mode: 'plain', updatedAt: 0 } } : snapshot([]));
+        const opaque = { t: 'encrypted', c: sealAccountScopedBlobCiphertext({ kind: 'session_organization_display', material: credentials.encryption, payload: { label: 'Private' }, randomBytes: (n) => new Uint8Array(n).fill(2) }) };
+        vi.mocked(axios.get).mockImplementation(async (url) => String(url).endsWith('/v1/account/encryption') ? { status: 200, data: { mode: 'plain', updatedAt: 0 } } : snapshot([tag('known'), tag('opaque', opaque)]));
         vi.mocked(axios.post).mockImplementation(async (_url, body: any) => ({ status: 200, data: { tag: tag(body.tagId, body.display) } }));
         vi.mocked(axios.put).mockResolvedValue({ status: 200, data: { sessionId: 's1', tagIds: ['created'] } });
-        await updateSessionWorkContextTags({ sessionId: 's1', tags: ['New'], credentials, session: session() });
+        await updateSessionWorkContextTags({ sessionId: 's1', tags: ['Known', 'New'], credentials: { token: 'plain-token', encryption: null }, session: session() });
+        expect(axios.post).toHaveBeenCalledTimes(1);
         expect(vi.mocked(axios.post).mock.calls[0][1]).toMatchObject({ display: { t: 'plain', v: { label: 'New' } } });
+        expect(vi.mocked(axios.put).mock.calls[0][1]).toMatchObject({ tagIds: ['known', expect.any(String)], mode: 'add' });
+    });
+
+    it.each(['e2ee', 'unknown'] as const)('requires encryption keys before creating tags when account mode is %s', async (mode) => {
+        vi.resetAllMocks();
+        vi.mocked(axios.get).mockImplementation(async (url) => String(url).endsWith('/v1/account/encryption')
+            ? mode === 'unknown' ? { status: 404, data: {} } : { status: 200, data: { mode, updatedAt: 0 } }
+            : snapshot([]));
+
+        await expect(updateSessionWorkContextTags({ sessionId: 's1', tags: ['New'], credentials: { token: 'plain-token', encryption: null }, session: session() }))
+            .rejects.toMatchObject({ code: 'ACCOUNT_ENCRYPTION_KEY_REQUIRED' });
+        expect(axios.post).not.toHaveBeenCalled();
+        expect(axios.put).not.toHaveBeenCalled();
     });
 
     it('does no network writes when manual tags were already locked', async () => {

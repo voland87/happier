@@ -1,4 +1,5 @@
 import { io } from 'socket.io-client';
+import { ConnectedServiceIdSchema, CONNECTED_SERVICE_READER_SUPPORT_SOCKET_AUTH_FIELD } from '@happier-dev/protocol';
 
 import { canonicalizeServerUrl } from '@/sync/domains/server/url/serverUrlCanonical';
 import { resolveSocketIoTransports } from '@/sync/runtime/socketIoTransports';
@@ -164,6 +165,7 @@ export function createServerScopedRpcSocketPool(overrides?: Partial<Deps>): Read
             return io(params.serverUrl, {
                 path: '/v1/updates/',
                 auth: {
+                    [CONNECTED_SERVICE_READER_SUPPORT_SOCKET_AUTH_FIELD]: ConnectedServiceIdSchema.options,
                     token: params.token,
                     clientType: 'user-scoped' as const,
                     clientPurpose: 'scoped-rpc' as const,

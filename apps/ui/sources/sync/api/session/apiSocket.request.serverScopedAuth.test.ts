@@ -1,3 +1,4 @@
+import { getServerFetchUrl } from '@/dev/testkit/mocks/serverFetch';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { runInNewContext } from 'node:vm';
 
@@ -206,7 +207,7 @@ describe('apiSocket.request server-scoped credentials', () => {
         const gate = new Promise<void>((resolve) => { release = resolve; });
         let reads = 0;
         vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
-            if (!String(input).endsWith('/v1/ping')) return new Response('ok');
+            if (getServerFetchUrl(input).pathname !== '/v1/ping') return new Response('ok');
             if (++reads === 1) {
                 await gate;
                 return Response.json({ state: 'delivering' });
@@ -232,7 +233,7 @@ describe('apiSocket.request server-scoped credentials', () => {
         const pingPromise = new Promise<Response>((resolve) => { resolvePing = resolve; });
 
         const fetchMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
-            const url = typeof input === 'string' ? input : String(input);
+            const url = getServerFetchUrl(input).pathname;
             if (url.endsWith('/health')) {
                 return new Response('ok', { status: 200, headers: new Headers() });
             }
@@ -352,7 +353,7 @@ describe('apiSocket.request server-scoped credentials', () => {
         process.env.EXPO_PUBLIC_HAPPIER_SERVER_REACHABILITY_WAIT_TIMEOUT_MS = '5';
 
         const fetchMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
-            const url = typeof input === 'string' ? input : String(input);
+            const url = getServerFetchUrl(input).pathname;
             if (url.endsWith('/health') || url.endsWith('/v1/auth/ping')) {
                 throw new TypeError('Network request failed');
             }

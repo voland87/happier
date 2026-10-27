@@ -294,6 +294,7 @@ const acpCatalogTranslationExtension = {
     acpCatalogAuthParser: 'Analizador de estado',
     acpCatalogCapabilities: 'Capacidades',
     acpCatalogTransportProfile: 'Perfil de transporte',
+    acpCatalogSupportsLoadSession: 'Admite reanudar sesiones',
     acpCatalogSupportsModes: 'Admite modos',
     acpCatalogSupportsModels: 'Admite modelos',
     acpCatalogSupportsConfigOptions: 'Admite opciones de configuración',
@@ -481,6 +482,15 @@ const promptLibraryUxRefinementTranslationExtension = {
 
 const sessionHandoffTranslationExtensions = {
   es: {
+    transferSessionData: {
+      title: "Transferir datos de la sesión",
+      subtitle: "Copia el historial de conversación de esta sesión a la otra máquina. Desactívalo si ya está allí.",
+      checking: "Comprobando la compatibilidad de ambas máquinas…",
+      agentRequiresTransfer: "Este Agente requiere transferir los datos de la sesión entre máquinas.",
+      updateRequired: "Actualiza Happier en ambas máquinas para desactivar esta opción.",
+      sessionMissing: "El historial de esta sesión no está en la máquina de destino. Activa «Transferir datos de la sesión» e inténtalo de nuevo.",
+      workspaceRequiresTransfer: "Activa «Transferir datos de la sesión» para copiar o sincronizar archivos del espacio de trabajo.",
+    },
     activeWarning: {
       title: 'Esta sesión sigue ejecutándose aquí',
       message: 'La transferencia detendrá esta sesión en esta máquina antes de transferirla a la máquina seleccionada.',
@@ -1307,6 +1317,7 @@ export const es: TranslationStructure = {
     working: "trabajando...",
     workingRetained: "trabajando, esperando actualizaciones…",
     keptInAttention: "mantenida en atención",
+    archiving: "archivando…",
     backgroundActive: ({ count }: { count: number }) => `${count} en ejecución en segundo plano`,
     activityUnknown: "estado de actividad no disponible",
     readyForReview: "listo para revisión",
@@ -2482,6 +2493,19 @@ export const es: TranslationStructure = {
   },
 
   connectedServices: {
+    importAccounts: {
+        unknownResult: "El resultado de la importación es desconocido. Actualiza la lista de cuentas y revisa este perfil antes de reintentar.",
+        title: "Importar inicio de sesión existente",
+        failed: "No se pudo importar. Comprueba que has iniciado sesión en el equipo seleccionado y reinténtalo.",
+        actionDescription: "Copiar una sesión de una de tus máquinas",
+        description: "Copia la sesión al perfil cifrado. Los tokens de renovación compartidos pueden rotar y la app local puede pedirte que inicies sesión de nuevo.",
+        unsupported: "Importación no disponible. Elige otra máquina o actualiza su CLI.",
+        credentialsUnavailable: "No se encontró una sesión válida. Inicia sesión en la app local y vuelve a intentarlo.",
+        profileConflict: "El perfil pertenece a otra cuenta o cambió durante la importación. Elige un nombre nuevo.",
+        reauthorizationRequired: "Inicia sesión de nuevo en la app local y vuelve a intentarlo.",
+        imported: "Sesión importada",
+        refreshFailed: "La sesión se importó, pero la lista de cuentas no se actualizó. Abre de nuevo los servicios conectados.",
+    },
       subscription: {
           title: "Suscripción",
           currentPeriod: "Período actual",
@@ -2511,6 +2535,7 @@ export const es: TranslationStructure = {
       openai: "Clave API de OpenAI",
       anthropic: "Clave API de Anthropic",
       gemini: "Gemini de Google",
+      antigravity: 'Google Antigravity',
       github: "GitHub",
     },
     title: "Servicios conectados",
@@ -2532,6 +2557,7 @@ export const es: TranslationStructure = {
                 profileMissing: 'La cuenta conectada seleccionada ya no está disponible. Actualiza la lista de cuentas y elige otra.',
                 groupMissing: 'El Pool de cuentas seleccionado ya no está disponible. Actualiza la lista de cuentas y elige otro Pool.',
                 metadataUpdateFailed: 'La sesión no pudo guardar la nueva selección de autenticación. Inténtalo de nuevo cuando termine de sincronizarse.',
+                restartDisallowedByExecutionPolicy: 'Este cambio de autenticación requiere un reinicio que no está permitido mientras la sesión está en ejecución. Detén la sesión antes de cambiar su autenticación.',
                 restartFailed: 'La sesión no pudo reiniciarse con la nueva selección de autenticación. Detén la sesión e inténtalo de nuevo.',
                 hotApplyFailed: 'La sesión en ejecución rechazó la nueva selección de autenticación. Reinicia la sesión e inténtalo de nuevo.',
                 agentMismatch: 'Esta selección de autenticación no coincide con el backend de la sesión.',
@@ -2713,6 +2739,7 @@ export const es: TranslationStructure = {
       },
     },
     quota: {
+      refreshing: "Actualizando uso…",
       loading: "Cargando…",
       error: ({ message }: { message: string }) => `Error: ${message}`,
       lastUpdated: ({ time }: { time: string }) =>
@@ -2760,6 +2787,21 @@ export const es: TranslationStructure = {
       resets: {
         use: "Usar",
         available: "Reinicio disponible",
+        remainingCount: ({ count }: { count: number }) => `Reinicios guardados: ${count}`,
+        appliesTo: ({ limits }: { limits: string }) => `Se aplica a: ${limits}`,
+        fiveHourLimit: "Límite de 5 horas",
+        weeklyLimit: "Límite semanal",
+        unavailableReasons: {
+          paused: "En pausa",
+          cooldown: "Esperando el periodo de espera",
+          ineligible: "No elegible",
+          not_selected: "No seleccionado",
+          provider_unavailable: "Proveedor no disponible",
+          not_started: "Aún no ha comenzado",
+          expired: "Caducado",
+          consumed: "Ya usado",
+          unknown: "No disponible ahora",
+        },
         rowLabel: ({ date, countdown }: { date: string; countdown: string }) => `Caduca ${date} · ${countdown}`,
         now: "ahora",
         inDays: ({ days }: { days: number }) => `en ${days}d`,
@@ -2781,6 +2823,12 @@ export const es: TranslationStructure = {
       pasteRedirectUrlPromptBody:
         "Después de completar OAuth, copia la URL final redirigida desde la barra de direcciones del navegador y pégala aquí.",
       providerOverrides: {
+        antigravity: {
+          connectWebDescription: "Siguiente paso: inicia sesión con Google. Antigravity muestra un código de autorización para copiar.",
+          pasteRedirectUrlPromptBody: "1) Inicia sesión con Google. 2) Copia el código de autorización que aparece en antigravity.google. 3) Pégalo abajo y mantén abierto este inicio de sesión.",
+          pasteRedirectUrlPlaceholder: "Pega el código de autorización de Antigravity",
+          pasteRedirectUrlTitle: "Pegar código de autorización",
+        },
         claudeSubscription: {
           connectWebDescription:
             "Siguiente paso: inicia sesión en la página que se abre. Claude puede mostrar un código en lugar de redirigir automáticamente.",
@@ -2866,6 +2914,7 @@ export const es: TranslationStructure = {
       addOauthProfileDeviceTitle: "Añadir con autenticación del dispositivo",
       addOauthProfileDeviceSubtitle: "Recomendado para web/entornos remotos",
       addOauthProfilePasteTitle: "Añadir pegando redirección",
+      signInWithGoogle: 'Iniciar sesión con Google',
       addOauthProfilePasteSubtitle: "Flujo manual de copiar/pegar URL de redirección",
       addOauthProfileBrowserTitle: "Añadir con navegador en la app",
       addOauthProfileBrowserSubtitle: "Usa un navegador integrado cuando sea compatible",
@@ -2909,6 +2958,7 @@ export const es: TranslationStructure = {
       errors: {
         credentialReferencedByGroup: "Esta cuenta todavía se usa en un Pool de cuentas. Quítala del Pool y vuelve a intentarlo.",
         credentialNotFound: "Esta cuenta conectada ya se eliminó.",
+        serviceUnsupportedServer: 'Este relay no admite este servicio conectado. Actualiza el relay para conectarlo.',
         credentialRequestFailed: "La solicitud de la cuenta conectada falló. Actualiza los servicios conectados y vuelve a intentarlo.",
         groupRequestFailed: "La solicitud del Pool de cuentas falló. Actualiza los servicios conectados y vuelve a intentarlo.",
         generationConflict: "Este Pool de cuentas cambió antes de que terminara la acción. Actualiza los servicios conectados y vuelve a intentarlo.",
@@ -4102,6 +4152,10 @@ export const es: TranslationStructure = {
                             }
                         }
                     },
+                    claudeCodeIncludeInNativeHistory: {
+                        title: "Mostrar sesiones en Claude Code",
+                        subtitle: "Usar la atribución de Happier para nuevas sesiones de Claude, incluidas las del Agent SDK. Desactivado conserva los valores predeterminados."
+                    },
                     claudeCodeExperimentalAgentTeamsEnabled: {
                         title: "Forzar activación de Agent Teams",
                         subtitle: "Activa Agent Teams experimental de Claude Code (enjambre de agentes) en todas las sesiones de Claude iniciadas por Happier."
@@ -4290,6 +4344,7 @@ export const es: TranslationStructure = {
             agy: { title: 'Antigravity' },
             fx: { title: "FX" },
             droid: { title: "Factory Droid" },
+            codebuddy: { title: "CodeBuddy" },
             grok: {
                 title: "Grok Build"
             },
@@ -4401,6 +4456,9 @@ export const es: TranslationStructure = {
       full: "Ancho completo",
       fullDescription: "Usa el ancho disponible de la ventana",
     },
+    feedback: "Respuesta",
+    haptics: "Respuesta háptica",
+    hapticsDescription: "Usa la respuesta táctil para las acciones y la reordenación en este dispositivo.",
     backdropBlur: "Desenfoque de fondo",
     backdropBlurDescription:
       "Usa desenfoque de fondo detrás de modales y menús. Desactívalo para mejorar el rendimiento del navegador.",
@@ -4431,6 +4489,13 @@ export const es: TranslationStructure = {
       "Mostrar números de línea en vistas de herramientas",
     showLineNumbersInToolViewsDescription:
       "Mostrar números de línea en diferencias de vistas de herramientas",
+    chatCodeBlocks: {
+        title: 'Bloques de código del chat',
+        showWrapControls: 'Mostrar controles de ajuste de línea',
+        showWrapControlsDescription: 'Mostrar un botón de ajuste de línea en cada bloque de código del chat',
+        wrapByDefault: 'Ajustar líneas de forma predeterminada',
+        wrapByDefaultDescription: 'Ajustar las líneas largas del código del chat, salvo que elijas otra opción para un bloque',
+    },
     wrapLinesInDiffs: "Ajustar líneas en vistas de código",
     wrapLinesInDiffsDescription:
       "Ajustar líneas largas en vistas previas de código y editores en lugar de desplazarse horizontalmente",
@@ -4719,6 +4784,8 @@ export const es: TranslationStructure = {
   },
 
   errors: {
+    machineRpcDecryptionFailed: "No se pueden descifrar los datos de esta máquina. Inicia sesión con la clave de cuenta correspondiente e inténtalo de nuevo.",
+    machineRpcContextUnavailable: "La conexión con esta máquina no está disponible. Actualiza tus máquinas e inténtalo de nuevo.",
     networkError: "Error de conexión",
     serverError: "Error del servidor",
     unknownError: "Error desconocido",
@@ -5496,6 +5563,11 @@ export const es: TranslationStructure = {
             showBannerAction: 'Mostrar aviso',
             hideBannerAction: 'Ocultar aviso',
 	    },
+	    runnerRestartBackgroundWork: {
+	        title: 'Hay trabajo en segundo plano en ejecución',
+	        body: ({ count }: { count: number }) => `Hay trabajo en segundo plano en ejecución (${count}). Reiniciar lo detendrá.`,
+	        confirmAction: 'Detener y reiniciar',
+	    },
 	    staleRunner: {
 	      title: "La sesión sigue ejecutándose con una CLI anterior",
 	      body: "Reinicia el runner de esta sesión para continuar con la CLI actualizada del daemon. La sesión de Happier se mantiene.",
@@ -5896,7 +5968,7 @@ export const es: TranslationStructure = {
         discarded: {
           title: "Mensajes descartados",
           subtitle:
-            "Estos mensajes no se enviaron al agente (por ejemplo, al cambiar de remoto a local).",
+            "Estos mensajes ya no están en la cola. La entrega puede ser incierta; revisa la transcripción antes de volver a enviarlos.",
           label: "Descartado",
           removeConfirm: {
             title: "¿Eliminar mensaje descartado?",
@@ -6103,6 +6175,28 @@ export const es: TranslationStructure = {
     targetSession: "Sesión objetivo",
     noTarget: "Ninguna sesión seleccionada",
     clearTarget: "Limpiar objetivo",
+    errors: {
+        sendFailed: "No se pudo enviar tu mensaje a la sesión.",
+        sttFailed: "No se pudo transcribir lo que dijiste. Inténtalo de nuevo.",
+        sttTimeout: "El reconocimiento de voz agotó el tiempo de espera. Revisa tu conexión e inténtalo de nuevo.",
+        sttAuthFailed: "El reconocimiento de voz rechazó la clave API. Revisa la clave y sus restricciones en Ajustes → Voz.",
+        sttRateLimited: "El reconocimiento de voz tiene límite de solicitudes. Espera un momento e inténtalo de nuevo.",
+        missingSttBaseUrl: "Configura la URL del servidor de reconocimiento de voz en Ajustes → Voz.",
+        missingSttApiKey: "Añade una clave API de reconocimiento de voz en Ajustes → Voz.",
+        recordingStartFailed: "No se pudo iniciar el micrófono. Comprueba que ninguna otra app lo esté usando.",
+        recordingStopFailed: "No se pudo terminar la grabación. Inténtalo de nuevo.",
+        deviceSttUnavailable: "El reconocimiento de voz no está disponible en este dispositivo. Elige otro proveedor de reconocimiento de voz en Ajustes → Voz.",
+        speechPermissionDenied: "Se denegó el acceso al micrófono o al reconocimiento de voz. Permítelo en los ajustes del dispositivo.",
+        deviceSttStartFailed: "No se pudo iniciar el reconocimiento de voz. Inténtalo de nuevo.",
+        localNeuralSttUnavailable: "El reconocimiento de voz en el dispositivo no está disponible en esta versión. Elige otro proveedor de reconocimiento de voz en Ajustes → Voz.",
+        localNeuralPackNotInstalled: "Descarga el modelo de voz en Ajustes → Voz.",
+        localNeuralSttStartFailed: "No se pudo iniciar el reconocimiento de voz en el dispositivo. Inténtalo de nuevo.",
+        localNeuralAudioCaptureFailed: "El micrófono se detuvo inesperadamente. Inténtalo de nuevo.",
+        ttsFailed: "No se pudo reproducir la respuesta hablada. Revisa la síntesis de voz en Ajustes → Voz.",
+        voiceAgentRequiresFeature: ({ feature }: { feature: string }) => `El modo agente necesita activar «${feature}» en Ajustes → Funciones.`,
+        voiceAgentUnavailable: "El agente de voz no está disponible en este servidor.",
+        generic: "La voz tuvo un problema.",
+    },
     a11y: {
       teleport: "Teletransportar agente de voz",
       toggleActivity: "Mostrar/ocultar actividad de voz",
@@ -6548,7 +6642,9 @@ export const es: TranslationStructure = {
     fxSessionId: "ID de sesión de FX",
     fxSessionIdCopied: "ID de sesión de FX copiado al portapapeles",
     droidSessionId: "ID de sesión de Factory Droid",
+    codebuddySessionId: "ID de sesión de CodeBuddy",
     droidSessionIdCopied: "ID de sesión de Factory Droid copiado al portapapeles",
+    codebuddySessionIdCopied: "ID de sesión de CodeBuddy copiado al portapapeles",
     customAcpSessionId: "ID de sesión de ACP personalizado",
     grokSessionId: "ID de sesión de Grok",
     grokSessionIdCopied: "ID de sesión de Grok copiado al portapapeles",
@@ -6787,6 +6883,8 @@ export const es: TranslationStructure = {
     permissionMode: {
       title: "MODO DE PERMISOS",
       effectiveLabel: ({ label }: { label: string }) => `Efectivo: ${label}`,
+      nativeModeOverrides: ({ mode }: { mode: string }) => `El modo del agente ${mode} tiene prioridad sobre este permiso. Borra la selección de Modo para usar el permiso.`,
+            usePermissionSetting: 'Usar el ajuste de permisos',
       default: "Por defecto",
       readOnly: "Solo lectura",
       acceptEdits: "Aceptar ediciones",
@@ -6817,6 +6915,7 @@ export const es: TranslationStructure = {
       agy: 'Antigravity',
       fx: "FX",
       droid: "Factory Droid",
+      codebuddy: "CodeBuddy",
       customAcp: "ACP personalizado",
       pi: "Pi",
       copilot: "Copilot",
@@ -7930,7 +8029,7 @@ export const es: TranslationStructure = {
         invalidActionSubtitle: 'Esta acción ya no está disponible en esta compilación.',
         configureActionAccessibilityLabel: 'Configurar acción',
         approvalHelpTitle: 'Modos de aprobación',
-        approvalHelpBody: '“Preguntar primero” crea una solicitud de aprobación antes de que esta acción se ejecute desde esa superficie. Para las sesiones de IA, esa solicitud queda en la superficie de aprobaciones existente y no espera en un modal. “Permitido” deja que la acción se ejecute desde esa superficie sin una solicitud de aprobación.',
+        approvalHelpBody: "“Preguntar primero” requiere aprobación antes de ejecutar esta acción desde esa superficie. Los controles de la aplicación pueden mostrar un diálogo de confirmación. Para las sesiones de IA, la solicitud queda en la superficie de aprobaciones existente y no espera en un modal. “Permitido” deja ejecutar la acción sin una solicitud de aprobación.",
         toolExposure: {
             title: 'Exposición de herramienta',
             footer: 'Controla si las acciones compatibles aparecen como herramientas directas o solo quedan disponibles mediante descubrimiento de acciones.',
@@ -8103,6 +8202,14 @@ settingsSession: {
 	          workingStatusAnimatedTextTitle: 'Texto de trabajo animado',
 	          workingStatusAnimatedTextEnabledSubtitle: 'Alterna verbos de trabajo mientras una sesión se ejecuta',
 	          workingStatusAnimatedTextDisabledSubtitle: 'Muestra una etiqueta fija de trabajando... mientras una sesión se ejecuta',
+	          backgroundWorkAttentionModeTitle: "Respuestas sin leer durante el trabajo en segundo plano",
+	          backgroundWorkAttentionModeSubtitle: "Elige dónde aparecen las respuestas sin leer mientras continúa el trabajo en segundo plano. Las solicitudes dirigidas a ti siguen requiriendo atención.",
+	          backgroundWorkAttentionKeepWorkingTitle: "Mantener el estado de trabajo",
+	          backgroundWorkAttentionKeepWorkingSubtitle: "Mantener el estado de trabajo y mostrar un punto central azul para las respuestas sin leer",
+	          backgroundWorkAttentionKeepWorkingUnreadTitle: "Mostrar el estado sin leer en Trabajando",
+	          backgroundWorkAttentionKeepWorkingUnreadSubtitle: "Mantener las sesiones en Trabajando y mostrar el estado sin leer hasta que leas la respuesta",
+	          backgroundWorkAttentionShowUnreadTitle: "Mover sesiones sin leer a Requiere atención",
+	          backgroundWorkAttentionShowUnreadSubtitle: "Mover las sesiones con respuestas sin leer a Requiere atención mientras continúa el trabajo en segundo plano",
 	          attentionPromotionModeTitle: 'Sesiones que requieren atención',
 	          attentionPromotionModeSubtitle: 'Elige dónde aparecen las sesiones que esperan tu acción o están listas para revisar',
 	          attentionPromotionModeOffTitle: 'Dejar en su posición normal',
@@ -9286,6 +9393,26 @@ settingsSession: {
           },
         },
       },
+      modelPackDownload: {
+        progress: ({ loaded, total }: { loaded: string; total: string }) => `${loaded} de ${total}`,
+        progressWithFiles: ({ loaded, total, filesDone, filesTotal }: { loaded: string; total: string; filesDone: number; filesTotal: number }) =>
+          `${loaded} de ${total} · ${filesDone} de ${filesTotal} ${filesTotal === 1 ? 'archivo' : 'archivos'}`,
+        progressAccessibilityLabel: "Progreso de la descarga",
+        verifyingDetail: "Verificando",
+        verifyingProgress: ({ verified, total, filesDone, filesTotal }: { verified: string; total: string; filesDone: number; filesTotal: number }) =>
+          `Verificado ${verified} de ${total} · ${filesDone} de ${filesTotal} ${filesTotal === 1 ? 'archivo' : 'archivos'}`,
+        verifyingAccessibilityLabel: "Progreso de la verificación",
+        failedDetail: "Falló",
+        failedSubtitle: "No se pudo preparar el modelo. Toca para volver a intentarlo.",
+        failedResumableSubtitle: ({ size }: { size: string }) => `La descarga no terminó. Se conservan ${size}; toca para reanudarla.`,
+        incompleteDetail: "Incompleta",
+        incompleteSubtitle: ({ size }: { size: string }) => `${size} descargados hasta ahora. Toca para continuar.`,
+        discardSubtitle: "Elimina la descarga sin terminar para liberar espacio.",
+        discardConfirmTitle: "¿Descartar la descarga sin terminar?",
+        discardConfirmBody: ({ size }: { size: string }) => `Se eliminarán los ${size} descargados hasta ahora. Podrás volver a descargar el modelo más adelante.`,
+        insufficientStorage: ({ required, available }: { required: string; available: string }) =>
+            `No hay suficiente espacio libre. Esta descarga necesita ${required}, pero solo hay ${available} libres.`,
+      },
       localNeuralStt: {
         modelPack: {
           title: "Paquete de modelos",
@@ -9309,13 +9436,6 @@ settingsSession: {
           installedWithBuild: ({ build }: { build: string }) =>
             `Instalado • ${build}`,
           notInstalled: "No instalado",
-        },
-        language: {
-          title: "Idioma",
-          subtitle: "Etiqueta de idioma BCP-47 opcional.",
-          promptTitle: "Idioma",
-          promptBody:
-            "Introduce una etiqueta de idioma BCP-47 (p. ej. en, en-US).",
         },
         alerts: {
           downloadFailedTitle: "La descarga falló",
@@ -9350,6 +9470,8 @@ settingsSession: {
           enableTitle: "Activar manos libres",
           silenceTitle: "Tiempo de silencio (ms)",
           minSpeechTitle: "Habla mínima (ms)",
+          pushToTalkTitle: "Pulsar para hablar",
+          pushToTalkSubtitle: "Este proveedor transcribe una grabación terminada; toca el micrófono otra vez para enviar. Para manos libres, elige el reconocimiento de voz del dispositivo o el neuronal local.",
         },
         customBackendIdSubtitle: "Introduce un id de backend personalizado.",
         searchBackendsPlaceholder: "Buscar backends",
@@ -9608,8 +9730,7 @@ settingsSession: {
       sttProvider: "Proveedor de STT",
       neuralStt: {
         title: "STT en el dispositivo",
-        webNotAvailableSubtitle:
-          "No disponible en web. Usa Dispositivo, compatible con OpenAI o STT de Gemini.",
+        webFallbackSubtitle: "Solo funciona en la app móvil. En el navegador, la voz usa el reconocimiento de voz del navegador.",
       },
       ttsBaseUrl: "Base URL TTS",
       ttsBaseUrlTitle: "Base URL TTS",
@@ -9882,6 +10003,7 @@ settingsSession: {
       checking: "Comprobando…",
       failedGeneric: "La actualización no terminó. Inténtalo de nuevo.",
       remoteUnsupported: "Esta máquina no puede actualizar su línea de comandos a distancia. Actualízala en la propia máquina.",
+      archiveExpandedByteLimit: "El entorno descargado supera el límite de tamaño de extracción. Actualiza Happier antes de volver a intentarlo.",
       updateNotVerified: "La actualización se ejecutó, pero la versión no cambió.",
       rolledBackLocal: "La actualización no arrancó, así que este ordenador volvió a la versión anterior.",
       smokeFailed: "La nueva versión no funcionó en este ordenador, así que no cambió nada.",
@@ -10422,6 +10544,7 @@ settingsSession: {
     blockedTitle: 'Configuración detenida',
     blockedStatusFallback: 'La configuración no pudo terminar. Tu cuenta y tus sesiones siguen intactas.',
     blockedServiceConflictStatus: 'Primero hay que resolver otro servicio en segundo plano de este ordenador. Se dejó tal cual: abre Detalles para ver cuál es.',
+    blockedServiceManagerUnavailableStatus: 'Happier no puede configurar el servicio en segundo plano en este ordenador. Abre Detalles para obtener ayuda o continúa con tus otras máquinas.',
     blockedConsentDeclinedStatus: 'La configuración se detuvo. El servicio en segundo plano que ya había en este ordenador se dejó tal cual.',
     blockedAccountKeptStatus: 'La configuración se detuvo. Este ordenador sigue conectado a la cuenta con la que tiene la sesión iniciada.',
     blockedAccountChangedStatus: 'Este ordenador inició sesión en otra cuenta mientras se configuraba, así que la configuración se detuvo antes de vincularlo. Inténtalo de nuevo.',
@@ -10725,6 +10848,7 @@ settingsSession: {
     providerStateSharingDegraded: "Compartición de estado del proveedor aplicada parcialmente",
     connectedServiceRuntimeAuthRecoveryRecovered: "Autenticación del proveedor recuperada",
     connectedServiceRuntimeAuthRecoveryCancelled: "Recuperación de autenticación del proveedor cancelada",
+        connectedServiceRuntimeAuthRecoveryStopped: "La recuperación del proveedor se detuvo; no se reintentará automáticamente",
     runtimeConfigOutcomeAppliesBeforeNextMessage: "Se aplicará antes de tu próximo mensaje",
     runtimeConfigOutcomeQueuedUntilReady: "En cola hasta que esté listo",
     runtimeConfigOutcomeAlreadySet: "Ya está configurado",
@@ -11112,8 +11236,8 @@ settingsSession: {
       anthropic: "Anthropic (Predeterminado)",
       deepseek: "DeepSeek (Razonamiento)",
       zai: "Z.AI (GLM-4.6)",
-      minimax: "MiniMax (M3)",
-      minimaxCn: "MiniMax (M3, CN)",
+      minimax: "MiniMax (M3.1 Flash)",
+      minimaxCn: "MiniMax (M3.1 Flash, CN)",
       codex: "Codex (Predeterminado)",
       openai: "OpenAI (GPT-5)",
       azureOpenai: "Azure OpenAI",
@@ -11285,6 +11409,7 @@ settingsSession: {
       agySubtitleExperimental: "CLI de Antigravity (experimental)",
       fxSubtitleExperimental: "CLI de FX (experimental)",
       droidSubtitleExperimental: "CLI de Factory Droid (experimental)",
+      codebuddySubtitleExperimental: "CLI de CodeBuddy Code (experimental)",
       customAcpSubtitleExperimental: "CLI de ACP personalizado (experimental)",
       grokSubtitleExperimental: "CLI de Grok Build (experimental)",
       piSubtitleExperimental: "CLI de Pi (experimental)",

@@ -1,6 +1,7 @@
 import axios, { type AxiosResponse } from 'axios';
 import {
   projectSessionMetadataForWire,
+  withConnectedServiceReaderSupport,
   type SessionStoredMessageContent,
   type SessionMessageRole,
   type SessionMessageAttentionImpact,
@@ -36,7 +37,7 @@ export async function fetchSessionTurnsProjection(params: Readonly<{
   sessionId: string;
 }>): Promise<SessionTurnsProjectionV1 | null> {
   const path = `/v1/sessions/${encodeSessionIdPathSegment(params.sessionId)}/turns`;
-  const response = await axios.get(`${resolveServerHttpBaseUrl()}${path}`, {
+  const response = await axios.get(withConnectedServiceReaderSupport(`${resolveServerHttpBaseUrl()}${path}`), {
     headers: {
       Authorization: `Bearer ${params.token}`,
       'Content-Type': 'application/json',
@@ -98,7 +99,7 @@ async function getSessionByIdResponse(params: Readonly<{
   const serverUrl = resolveServerHttpBaseUrl();
   const encodedSessionId = encodeSessionIdPathSegment(params.sessionId);
   const requestPurpose = buildSessionDetailRequestPurpose(params.reason ?? 'legacy-compat-proof');
-  const request = () => axios.get(`${serverUrl}/v2/sessions/${encodedSessionId}`, {
+  const request = () => axios.get(withConnectedServiceReaderSupport(`${serverUrl}/v2/sessions/${encodedSessionId}`), {
     headers: {
       Authorization: `Bearer ${params.token}`,
       'Content-Type': 'application/json',
@@ -279,7 +280,7 @@ export async function fetchSessionsPage(params: Readonly<{
   }
 
   const path = params.activeOnly ? '/v2/sessions/active' : params.archivedOnly ? '/v2/sessions/archived' : '/v2/sessions';
-  const response = await axios.get(`${serverUrl}${path}`, {
+  const response = await axios.get(withConnectedServiceReaderSupport(`${serverUrl}${path}`), {
     headers: {
       Authorization: `Bearer ${params.token}`,
       'Content-Type': 'application/json',
@@ -412,7 +413,7 @@ export async function getOrCreateSessionByTag(params: Readonly<{
         ? encodeBase64(dataEncryptionKey)
         : null;
 
-  const response = await axios.post(`${serverUrl}/v1/sessions`, {
+  const response = await axios.post(withConnectedServiceReaderSupport(`${serverUrl}/v1/sessions`), {
     tag: params.tag,
     metadata: metadataPayload,
     agentState: agentStatePayload,

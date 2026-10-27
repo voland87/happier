@@ -1,4 +1,5 @@
 import { vi } from 'vitest';
+import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
 
 import {
     CURRENT_PENDING_INPUT_PROTOCOL_VERSION,
@@ -64,6 +65,7 @@ export function buildServerFeaturesResponse(overrides: FixtureOverrides = {}): F
                 keylessAccounts: { enabled: false },
             },
             encryption: {
+                plaintextMachine: { enabled: false },
                 plaintextStorage: { enabled: false },
                 accountOptOut: { enabled: false },
             },
@@ -88,6 +90,7 @@ export function buildServerFeaturesResponse(overrides: FixtureOverrides = {}): F
                     enabled: overrides.connectedServicesQuotasEnabled ?? false,
                 },
                 subscription: { enabled: false },
+                quotaRecoveryCreditDetails: { enabled: false },
                 accountGroups: {
                     enabled: false,
                 },
@@ -176,7 +179,7 @@ export function buildServerFeaturesResponse(overrides: FixtureOverrides = {}): F
             },
         },
         capabilities: {
-            connectedServices: { credentialDelete: { revisionGuard: false } },
+            connectedServices: createRootLayoutFeaturesResponse().capabilities.connectedServices,
             session: {
                 ...DEFAULT_SESSION_CAPABILITIES,
                 runtimeActivity: {

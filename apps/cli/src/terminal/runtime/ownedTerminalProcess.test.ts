@@ -37,7 +37,7 @@ describe('launchOwnedTerminalProcess', () => {
       expect(native.launcherPid).toBe(launcher!.pid);
       expect(native.pid).not.toBe(launcher!.pid);
       await launched.terminate();
-      await launched.whenExited;
+      expect(await launched.whenExited).toMatchObject({ processTreeStopped: true });
       expect(isPidAlive(native.pid)).toBe(false);
     } finally {
       if (launcher) await killProcessTree(launcher);
@@ -105,7 +105,7 @@ describe('launchOwnedTerminalProcess', () => {
     // repository-hoisted node_modules hiding a missing ps-list runtime dependency.
     const scriptsDirectory = join(directory, 'scripts');
     await mkdir(scriptsDirectory);
-    for (const filename of ['terminal_launch_spec_runner.cjs', 'process_tree.cjs']) {
+    for (const filename of ['terminal_launch_spec_runner.cjs', 'process_tree.cjs', 'native_process_exit.cjs']) {
       await cp(resolve('scripts', filename), join(scriptsDirectory, filename));
     }
     bundleInstalledPackageWithRuntimeDependencies({
@@ -177,7 +177,7 @@ describe('launchOwnedTerminalProcess', () => {
         spawn: { spawnArgv: [process.execPath, resolve('scripts/terminal_launch_spec_runner.cjs'), specPath], spawnEnv: {} },
         cwd: directory,
       });
-      await expect(launched.whenExited).resolves.toEqual({ code: 0, signal: null });
+      await expect(launched.whenExited).resolves.toMatchObject({ code: 0, signal: null, nativeExited: true });
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
@@ -195,8 +195,8 @@ describe('launchOwnedTerminalProcess', () => {
       await rm(directory, { recursive: true, force: true });
     }
   });
-  it('runs the existing launch argv in the current terminal and terminates only its process tree', async () => {
-    const child = Object.assign(new EventEmitter(), { pid: 42, exitCode: null as number | null });
+  it.each([false, true])('waits for IPC drainage and exposes only qualified native exit proof (native exited: %s)', async (nativeExited) => {
+    const child = Object.assign(new EventEmitter(), { pid: 42, exitCode: null as number | null, connected: true });
     const spawnProcess = vi.fn(() => {
       queueMicrotask(() => child.emit('message', { type: 'terminal-native-spawned' }));
       return child;
@@ -224,7 +224,13 @@ describe('launchOwnedTerminalProcess', () => {
     );
 
     child.emit('exit', 0, null);
-    await expect(launched.whenExited).resolves.toEqual({ code: 0, signal: null });
+    let exitSettled = false;
+    void launched.whenExited.then(() => { exitSettled = true; });
+    await new Promise<void>(resolve => setImmediate(resolve));
+    expect(exitSettled).toBe(false);
+    child.emit('message', { type: 'terminal-native-exited', code: nativeExited ? 0 : null, signal: null });
+    child.emit('disconnect');
+    await expect(launched.whenExited).resolves.toEqual({ code: 0, signal: null, ...(nativeExited ? { nativeExited: true } : {}) });
     await launched.terminate();
     await launched.terminate();
     expect(terminateProcess).toHaveBeenCalledOnce();

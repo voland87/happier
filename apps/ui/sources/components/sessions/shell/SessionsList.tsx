@@ -1,7 +1,7 @@
 import React from 'react';
+import { normalizeSessionListBackgroundWorkAttentionMode } from '@/sync/domains/session/listing/sessionListBackgroundWorkAttention';
 import {
     View,
-    FlatList,
     Platform,
     RefreshControl,
     type NativeScrollEvent,
@@ -144,7 +144,6 @@ import {
     sessionUnarchiveWithServerScope,
 } from '@/sync/ops';
 import {
-    clearSessionVisibleWhenInactive,
     stopSessionAndMaybeArchive,
 } from '@/components/sessions/sessionStopArchiveFlow';
 import {
@@ -189,7 +188,6 @@ const stylesheet = StyleSheet.create((theme) => ({
     },
 }));
 
-const SEARCH_FOCUS_TRANSFER_SETTLE_MS = 50;
 const SESSION_LIST_END_REACHED_THRESHOLD_RATIO = 0.4;
 
 function isSessionListScrollNearEnd(event: NativeSyntheticEvent<NativeScrollEvent>): boolean {
@@ -203,50 +201,6 @@ function isSessionListScrollNearEnd(event: NativeSyntheticEvent<NativeScrollEven
     return offsetY + viewportHeight >= contentHeight - thresholdPx;
 }
 
-/**
- * Web `FlatList` (React Native Web `VirtualizedList`) virtualization bounds.
- *
- * Phase 5 of the session-list drag geometry & performance unification
- * (`.project/plans/session-list-drag-geometry-performance-unification.md`,
- * sections 3.6, 13.6). Plan section 1.2 measured the live web list mounting all
- * 148 rows for an ~11.5-viewport list: the cause is `VirtualizedList`'s default
- * `windowSize` of 21 viewport heights, which exceeds the content length, so the
- * whole list mounts. Drag correctness no longer requires every row to be
- * mounted — row/header geometry is content-coordinate and measured on mount,
- * including while autoscrolling to a previously offscreen target, and the drag
- * snapshot freezes tree topology only (never pixel geometry). So the web list
- * can be windowed safely.
- *
- * Chosen bounds — deliberately conservative (~3 viewports mounted, ~1 viewport
- * of overscan each side around the visible viewport):
- * - `windowSize` 3: the mounted region is the visible viewport plus one
- *   viewport of overscan above and below. With the measured ~84px session rows
- *   and a typical viewport that mounts roughly 3x the visible rows, far below
- *   the previous full-list mount, while keeping enough overscan that a drag
- *   autoscroll always has measured geometry slightly ahead of the pointer.
- * - `initialNumToRender` 12: ~one viewport-and-a-half of rows on first paint so
- *   the first screen and its header are populated without a visible fill-in.
- * - `maxToRenderPerBatch` 8 with `updateCellsBatchingPeriod` 50ms: incremental
- *   fill of newly revealed rows in small batches so scroll/drag-autoscroll keep
- *   a steady frame budget instead of one large synchronous mount.
- *
- * `getItemLayout` is intentionally NOT set: the list interleaves fixed-height
- * session rows with variable-height headers (folder/project/collapsible
- * headers and the search/primary header, which wrap by content), plus a
- * variable-height list header/footer — a single-stride `getItemLayout` would
- * report wrong offsets for every header and corrupt scrolling/anchoring. The
- * conservative `windowSize` keeps measurement-driven virtualization correct for
- * the mixed-height list without needing precomputed offsets.
- *
- * `removeClippedSubviews` is NOT enabled: on React Native Web it detaches
- * clipped cells and is a known source of disappearing rows / measurement gaps
- * during fast scroll, which would undermine the content-coordinate geometry the
- * drag relies on. The native FlashList path is untouched.
- */
-const WEB_LIST_WINDOW_SIZE = 3;
-const WEB_LIST_INITIAL_NUM_TO_RENDER = 12;
-const WEB_LIST_MAX_TO_RENDER_PER_BATCH = 8;
-const WEB_LIST_UPDATE_CELLS_BATCHING_PERIOD_MS = 50;
 const WEB_LIST_NON_VIRTUALIZED_MAX_ITEMS = 120;
 const WEB_LIST_SCROLL_EVENT_THROTTLE_MS = 32;
 const NATIVE_LIST_ALL_RENDERED_ROW_STORE_MAX_ITEMS = 200;
@@ -264,39 +218,6 @@ const SESSION_LIST_IDLE_MOVE_RESULT = Object.freeze({
     instruction: Object.freeze({ kind: 'idle' as const }),
     visual: Object.freeze({ kind: 'none' as const }),
 });
-
-function isPrioritySessionListHeader(item: Extract<SessionListViewItem, { type: 'header' }>): boolean {
-    return item.headerKind === 'attention'
-        || item.headerKind === 'working'
-        || item.headerKind === 'pinned'
-        || item.headerKind === 'active';
-}
-
-function isInactiveSessionListBoundary(item: SessionListViewItem): boolean {
-    return item.type === 'header' && item.headerKind === 'inactive';
-}
-
-function resolveWebListInitialNumToRender(items: ReadonlyArray<SessionListViewItem>): number {
-    if (items.length <= WEB_LIST_INITIAL_NUM_TO_RENDER) return WEB_LIST_INITIAL_NUM_TO_RENDER;
-
-    let hasPrioritySection = false;
-    let firstInactiveIndex = -1;
-    for (let index = 0; index < items.length; index += 1) {
-        const item = items[index];
-        if (!item) continue;
-        if (item.type === 'header' && isPrioritySessionListHeader(item)) {
-            hasPrioritySection = true;
-        }
-        if (isInactiveSessionListBoundary(item)) {
-            firstInactiveIndex = index;
-            break;
-        }
-    }
-
-    if (!hasPrioritySection) return WEB_LIST_INITIAL_NUM_TO_RENDER;
-    const priorityPrefixLength = firstInactiveIndex >= 0 ? firstInactiveIndex : items.length;
-    return Math.max(WEB_LIST_INITIAL_NUM_TO_RENDER, priorityPrefixLength);
-}
 
 function buildStringListSignature(values: ReadonlyArray<string> | null | undefined): string {
     if (!values || values.length === 0) return '';
@@ -614,10 +535,8 @@ export const SessionsListContent = React.memo(function SessionsListContent(props
         setSelectedHeaderTags,
     } = useSessionListHeaderFilterRetention(retentionKey);
     const [activeSearchHeaderControlsAnchorKey, setActiveSearchHeaderControlsAnchorKey] = React.useState<string | null>(null);
-    const [focusedSearchHeaderControlsAnchorKey, setFocusedSearchHeaderControlsAnchorKey] = React.useState<string | null>(null);
     const [refreshingSessions, setRefreshingSessions] = React.useState(false);
     const refreshingSessionsRef = React.useRef(false);
-    const searchFocusTransferTimeoutRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
     const getSessionListMemoryCandidateKeys = React.useCallback(
         () => buildSessionCandidateKeySet(data ?? EMPTY_SESSION_LIST_VIEW_ITEMS),
         [data],
@@ -646,40 +565,9 @@ export const SessionsListContent = React.memo(function SessionsListContent(props
         controlsAnchorKey: activeSearchHeaderControlsAnchorKey,
     }), [activeMemoryMatchedSessionKeys, activeSearchHeaderControlsAnchorKey, searchQuery, searchableTextBySessionKey, selectedHeaderTags]);
 
-    React.useEffect(() => {
-        if (
-            focusedSearchHeaderControlsAnchorKey !== null
-            || searchQuery.trim().length > 0
-            || selectedHeaderTags.length > 0
-        ) {
-            return;
-        }
-        setActiveSearchHeaderControlsAnchorKey(null);
-    }, [focusedSearchHeaderControlsAnchorKey, searchQuery, selectedHeaderTags.length]);
-
-    const clearSearchFocusTransferTimeout = React.useCallback(() => {
-        if (searchFocusTransferTimeoutRef.current === null) return;
-        clearTimeout(searchFocusTransferTimeoutRef.current);
-        searchFocusTransferTimeoutRef.current = null;
+    const handleHeaderSearchOpenChange = React.useCallback((anchorKey: string, open: boolean) => {
+        setActiveSearchHeaderControlsAnchorKey((current) => open ? anchorKey : current === anchorKey ? null : current);
     }, []);
-
-    React.useEffect(() => () => {
-        clearSearchFocusTransferTimeout();
-    }, [clearSearchFocusTransferTimeout]);
-
-    const handleHeaderSearchFocusChange = React.useCallback((anchorKey: string, focused: boolean) => {
-        clearSearchFocusTransferTimeout();
-        if (focused) {
-            setActiveSearchHeaderControlsAnchorKey(anchorKey);
-            setFocusedSearchHeaderControlsAnchorKey(anchorKey);
-            return;
-        }
-
-        searchFocusTransferTimeoutRef.current = setTimeout(() => {
-            searchFocusTransferTimeoutRef.current = null;
-            setFocusedSearchHeaderControlsAnchorKey((current) => current === anchorKey ? null : current);
-        }, SEARCH_FOCUS_TRANSFER_SETTLE_MS);
-    }, [clearSearchFocusTransferTimeout]);
 
     const stopScrollEventPropagationOnWeb = React.useCallback((event: any) => {
         // Expo Router (Vaul/Radix) modals on web often install document-level scroll-lock listeners
@@ -751,6 +639,7 @@ export const SessionsListContent = React.memo(function SessionsListContent(props
         storageKind: props.storageKind,
     });
     const sessionListWorkingIndicatorStyle = useSetting('sessionListNarrowWorkingIndicatorStyle');
+    const backgroundWorkAttentionMode = normalizeSessionListBackgroundWorkAttentionMode(useSetting('sessionListBackgroundWorkAttentionModeV1'));
     const sessionListAgentActivityCountEnabled = useSetting('sessionListAgentActivityCountEnabled');
     const sessionListIdentityDisplay = useSessionListIdentityDisplay();
     const sessionListActiveColorMode = useSetting('sessionListActiveColorModeV1');
@@ -1048,6 +937,7 @@ export const SessionsListContent = React.memo(function SessionsListContent(props
             activeColorMode: normalizeActiveColorMode(sessionListActiveColorMode),
             workingIndicatorMode: normalizeWorkingIndicatorMode(sessionListWorkingIndicatorStyle),
             workingTextMode: 'static',
+            backgroundWorkAttentionMode,
             statusColors: theme.colors.status,
             hideInactiveSessions,
             showServerBadge,
@@ -1084,6 +974,7 @@ export const SessionsListContent = React.memo(function SessionsListContent(props
         sessionListActiveColorMode,
         sessionListIdentityDisplay,
         sessionListWorkingIndicatorStyle,
+        backgroundWorkAttentionMode,
         sessionTagsEnabled,
         sessionTagsV1,
         showPinnedServerBadge,
@@ -1125,12 +1016,12 @@ export const SessionsListContent = React.memo(function SessionsListContent(props
         }
     }, [handleLoadMoreSessions, handleTreeScroll, scrollRetention]);
     const handleNativeListScrollInteractionStart = React.useCallback(() => {
-        if (Platform.OS !== 'ios') return;
+        if (Platform.OS !== 'ios' && Platform.OS !== 'android') return;
         nativeListScrollInteractionActiveRef.current = true;
         setNativeContextMenuSessionKey(null);
     }, [setNativeContextMenuSessionKey]);
     const handleNativeListScrollInteractionEnd = React.useCallback(() => {
-        if (Platform.OS !== 'ios') return;
+        if (Platform.OS !== 'ios' && Platform.OS !== 'android') return;
         nativeListScrollInteractionActiveRef.current = false;
     }, []);
 
@@ -1434,12 +1325,8 @@ export const SessionsListContent = React.memo(function SessionsListContent(props
             stopErrorMessage: t('sessionInfo.failedToStopSession'),
             archiveErrorMessage: t('sessionInfo.failedToArchiveSession'),
             stopSession: async (target) => await sessionStopWithServerScope(target.sessionId, { serverId: target.serverId ?? null }),
-            archiveSession: async (target) => {
-                const result = await sessionArchiveWithServerScope(target.sessionId, { serverId: target.serverId ?? null });
-                if (result.success) {
-                    clearSessionVisibleWhenInactive(target.sessionId);
-                }
-                return result;
+            archiveSession: async (target, options) => {
+                return await sessionArchiveWithServerScope(target.sessionId, { serverId: target.serverId ?? null, ...options });
             },
             unarchiveSession: async (target) => await sessionUnarchiveWithServerScope(target.sessionId, { serverId: target.serverId ?? null }),
             setManualReadState: async (target, readState) => await sessionSetManualReadStateWithServerScope(
@@ -1448,8 +1335,9 @@ export const SessionsListContent = React.memo(function SessionsListContent(props
                 { serverId: target.serverId ?? null },
             ),
             stopSessionAndMaybeArchive: async (params) => {
-                await stopSessionAndMaybeArchive({
+                return await stopSessionAndMaybeArchive({
                     sessionId: params.sessionId,
+                    serverId: params.target.serverId,
                     hideInactiveSessions: params.hideInactiveSessions,
                     isPinned: params.isPinned,
                     archiveAfterStop: params.archiveAfterStop,
@@ -1578,21 +1466,23 @@ export const SessionsListContent = React.memo(function SessionsListContent(props
     }, [resolveDragLabel]);
 
     const handleA11yTreeDropResult = React.useCallback((event: Parameters<typeof handleTreeDropResult>[0]) => {
-        handleTreeDropResultRef.current(event);
+        const outcome = handleTreeDropResultRef.current(event);
         sessionListA11yRef.current.announceDropResult({
             label: resolveDragLabel(event.sessionKey),
             destinationLabel: resolveDropResultDestinationLabel(event.result),
             result: event.result,
         });
+        return outcome;
     }, [resolveDragLabel, resolveDropResultDestinationLabel]);
 
     const handleA11yFolderHeaderTreeDropResult = React.useCallback((event: Parameters<typeof handleFolderHeaderTreeDropResult>[0]) => {
-        handleFolderHeaderTreeDropResultRef.current(event);
+        const outcome = handleFolderHeaderTreeDropResultRef.current(event);
         sessionListA11yRef.current.announceDropResult({
             label: resolveDragLabel(event.sessionKey),
             destinationLabel: resolveDropResultDestinationLabel(event.result),
             result: event.result,
         });
+        return outcome;
     }, [resolveDragLabel, resolveDropResultDestinationLabel]);
 
     const handleStableDragCancel = React.useCallback((event: Parameters<typeof handleDragCancel>[0]) => {
@@ -1914,14 +1804,22 @@ export const SessionsListContent = React.memo(function SessionsListContent(props
         return `session:${index}`;
     }, []);
 
-    const fallbackHeaderControlsAnchorKey = React.useMemo(() => {
-        const anchor = listItems.find((item): item is Extract<SessionListViewItem, { type: 'header' }> =>
-            item.type === 'header' && isSessionListPrimaryHeaderKind(item.headerKind)
-        );
-        return anchor ? getSessionListHeaderControlsAnchorKey(anchor) : null;
-    }, [listItems]);
-    const headerControlsAnchorKey = activeSearchHeaderControlsAnchorKey
-        ?? (hasActiveSessionListHeaderFilters(headerFilters) ? fallbackHeaderControlsAnchorKey : null);
+    const headerControlsAnchorKey = React.useMemo(() => {
+        if (activeSearchHeaderControlsAnchorKey === null && !hasActiveSessionListHeaderFilters(headerFilters)) return null;
+        let fallback: string | null = null;
+        for (const item of listItems) {
+            if (item.type !== 'header' || !isSessionListPrimaryHeaderKind(item.headerKind)) continue;
+            const key = getSessionListHeaderControlsAnchorKey(item);
+            fallback ??= key;
+            if (key === activeSearchHeaderControlsAnchorKey) return key;
+        }
+        return fallback;
+    }, [activeSearchHeaderControlsAnchorKey, headerFilters, listItems]);
+    React.useEffect(() => {
+        if (activeSearchHeaderControlsAnchorKey !== null && activeSearchHeaderControlsAnchorKey !== headerControlsAnchorKey) {
+            setActiveSearchHeaderControlsAnchorKey(headerControlsAnchorKey);
+        }
+    }, [activeSearchHeaderControlsAnchorKey, headerControlsAnchorKey]);
 
     const collapsedKeys = collapsedGroupKeysV1 ?? EMPTY_COLLAPSED_GROUP_KEYS;
     const searchTrailingAccessory = React.useMemo(() => (
@@ -1954,18 +1852,19 @@ export const SessionsListContent = React.memo(function SessionsListContent(props
                 allKnownTags={sessionTagsEnabled === true ? allKnownTags : EMPTY_SESSION_KEYS}
                 selectedTags={selectedHeaderTags}
                 searchQuery={searchQuery}
-                searchOpen={focusedSearchHeaderControlsAnchorKey === anchorKey}
+                searchOpen={activeSearchHeaderControlsAnchorKey !== null && headerControlsAnchorKey === anchorKey}
                 onSelectedTagsChange={setSelectedHeaderTags}
                 onSearchQueryChange={setSearchQuery}
-                onSearchFocusChange={(focused) => handleHeaderSearchFocusChange(anchorKey, focused)}
+                onSearchOpenChange={(open) => handleHeaderSearchOpenChange(anchorKey, open)}
                 searchTrailingAccessory={searchTrailingAccessory}
                 viewMenu={menu}
             />
         );
     }, [
         allKnownTags,
-        focusedSearchHeaderControlsAnchorKey,
-        handleHeaderSearchFocusChange,
+        headerControlsAnchorKey,
+        activeSearchHeaderControlsAnchorKey,
+        handleHeaderSearchOpenChange,
         selectedHeaderTags,
         searchQuery,
         searchTrailingAccessory,
@@ -1980,7 +1879,6 @@ export const SessionsListContent = React.memo(function SessionsListContent(props
         setHideInactiveSessions,
         setSessionFolderViewModeV1,
         setActiveSearchHeaderControlsAnchorKey,
-        setFocusedSearchHeaderControlsAnchorKey,
     ]);
     const renderHeaderItem = React.useCallback((item: Extract<SessionListViewItem, { type: 'header' }>, index: number) => {
         const headerTestId = item.headerKind === 'project'
@@ -1991,6 +1889,7 @@ export const SessionsListContent = React.memo(function SessionsListContent(props
             const collapseKey = folderHeader.groupKey ?? `folder:${folderHeader.folderId}`;
             const treeRow = treeRowId.folder(folderHeader.folderId);
             const folderLabel = rowLabelByTreeRowId.get(treeRow) ?? folderHeader.title;
+            const moveActionHandlers = getRowMoveActionHandlers({ sourceRowId: treeRow, sourceLabel: folderLabel });
             return (
                 <DraggableSessionFolderHeaderFrame
                     folderId={folderHeader.folderId}
@@ -2005,29 +1904,31 @@ export const SessionsListContent = React.memo(function SessionsListContent(props
                     onRegisterTreeRowBounds={registerTreeRowBounds}
                     onUnregisterTreeRowBounds={unregisterTreeRowBounds}
                 >
+                    {(dragHandleGesture) => (
                     <FolderGroupHeader
                         item={folderHeader}
                         collapsed={Boolean(collapsedKeys[collapseKey])}
+                        dragHandleGesture={dragHandleGesture}
                         onToggleCollapse={() => handleToggleCollapse(collapseKey)}
                         onFocus={() => handleFocusSessionFolder(folderHeader)}
                         onNewSession={() => handleCreateSessionFromFolder(folderHeader)}
                         onAddSubfolder={() => handleAddSessionSubfolder(folderHeader)}
                         onRename={() => handleRenameSessionFolder(folderHeader)}
                         onDelete={() => handleDeleteSessionFolder(folderHeader)}
-                        onMove={() => {
-                            void openMoveSheetForTreeRow(treeRow, folderLabel);
-                        }}
-                        onMoveToWorkspaceRoot={() => moveTreeRowToWorkspaceRoot(treeRow, folderLabel)}
-                        onMoveUp={() => moveTreeRowByKeyboard(treeRow, folderLabel, 'up')}
-                        onMoveDown={() => moveTreeRowByKeyboard(treeRow, folderLabel, 'down')}
+                        onMove={moveActionHandlers.onMoveToFolder}
+                        onMoveToWorkspaceRoot={moveActionHandlers.onMoveToWorkspaceRoot}
+                        onMoveUp={moveActionHandlers.onMoveUp}
+                        onMoveDown={moveActionHandlers.onMoveDown}
                         disabled={!folderActionsEnabled}
                     />
+                    )}
                 </DraggableSessionFolderHeaderFrame>
             );
         }
         if (item.title && item.headerKind === 'project') {
             const collapseKey = item.groupKey ?? '';
             const treeRow = treeRowId.workspaceRoot(item.groupKey ?? item.title);
+            const moveActionHandlers = getRowMoveActionHandlers({ sourceRowId: treeRow, sourceLabel: item.title });
             return (
                 <DraggableSessionFolderHeaderFrame
                     dragKey={treeRow}
@@ -2042,12 +1943,16 @@ export const SessionsListContent = React.memo(function SessionsListContent(props
                     onRegisterTreeRowBounds={registerTreeRowBounds}
                     onUnregisterTreeRowBounds={unregisterTreeRowBounds}
                 >
+                    {(dragHandleGesture) => (
                     <ProjectGroupHeader
                         item={item}
                         hasMultipleMachines={hasMultipleMachines}
+                        dragHandleGesture={dragHandleGesture}
                         workspaceLabelsV1={workspaceLabelsV1}
                         workspaceFaviconsEnabled={workspaceFaviconsEnabled}
                         workspaceMachineSubtitlesEnabled={workspaceMachineSubtitlesEnabled}
+                        onMoveUp={moveActionHandlers.onMoveUp}
+                        onMoveDown={moveActionHandlers.onMoveDown}
                         onRenameWorkspace={handleRenameWorkspace}
                         onResetWorkspaceName={handleResetWorkspaceName}
                         onCreateSession={() => handleCreateSessionFromProject(item)}
@@ -2056,6 +1961,7 @@ export const SessionsListContent = React.memo(function SessionsListContent(props
                         onToggleCollapse={() => handleToggleCollapse(collapseKey)}
                         headerTestId={headerTestId}
                     />
+                    )}
                 </DraggableSessionFolderHeaderFrame>
             );
         }
@@ -2107,6 +2013,7 @@ export const SessionsListContent = React.memo(function SessionsListContent(props
         handleToggleCollapse,
         headerControlsAnchorKey,
         hasMultipleMachines,
+        getRowMoveActionHandlers,
         registerTreeRowBounds,
         renderHeaderControls,
         resolveDropResult,
@@ -2144,7 +2051,16 @@ export const SessionsListContent = React.memo(function SessionsListContent(props
         () => buildReachableDisplaySignature(reachableSessionDisplayByKey),
         [reachableSessionDisplayByKey],
     );
+    const selectedHeaderTagsSignature = buildStringListSignature(selectedHeaderTags);
     const virtualizedRowExtraData = React.useMemo(() => ({
+        headerControlsAnchorKey,
+        activeSearchHeaderControlsAnchorKey,
+        headerSearchQuery: searchQuery,
+        headerSelectedTagsSignature: selectedHeaderTagsSignature,
+        headerSearchLoading: memorySearch.isSearchingMemory,
+        // Stable renderItem refs do not update mounted engine cells. Viewport membership
+        // must reach the row boundary before its local store subscription can activate.
+        rowStoreSubscriptionKeys,
         activeServerId: selection.activeServerId ?? null,
         allKnownTagsSignature,
         attentionStandingEnabled,
@@ -2171,6 +2087,7 @@ export const SessionsListContent = React.memo(function SessionsListContent(props
         sessionListStatusColors: rowPresentationSettings.statusColors,
         sessionListSurfaceDataActive: surfaceOwnership.dataActive,
         sessionListWorkingIndicatorMode: rowPresentationSettings.workingIndicatorMode,
+        sessionListBackgroundWorkAttentionMode: rowPresentationSettings.backgroundWorkAttentionMode,
         sessionTagsEnabled: sessionTagsEnabled === true,
         sessionTagsSignature,
         showStructuralDragHandles,
@@ -2180,6 +2097,12 @@ export const SessionsListContent = React.memo(function SessionsListContent(props
         workspaceLabelsSignature,
         workspaceMachineSubtitlesEnabled,
     }), [
+        headerControlsAnchorKey,
+        activeSearchHeaderControlsAnchorKey,
+        searchQuery,
+        selectedHeaderTagsSignature,
+        memorySearch.isSearchingMemory,
+        rowStoreSubscriptionKeys,
         selection.activeServerId,
         allKnownTagsSignature,
         attentionStandingEnabled,
@@ -2203,6 +2126,7 @@ export const SessionsListContent = React.memo(function SessionsListContent(props
         rowPresentationSettings.identityDisplay,
         rowPresentationSettings.statusColors,
         rowPresentationSettings.workingIndicatorMode,
+        rowPresentationSettings.backgroundWorkAttentionMode,
         sessionListOrderingMode,
         sessionListSectionMode,
         surfaceOwnership.dataActive,
@@ -2362,49 +2286,8 @@ export const SessionsListContent = React.memo(function SessionsListContent(props
         maxWidth: layout.maxWidth,
     }), [safeArea.bottom]);
 
-    const webListDisableVirtualization = Platform.OS === 'web'
-        && renderedListItems.length <= WEB_LIST_NON_VIRTUALIZED_MAX_ITEMS;
-    const useWebFlatList = Platform.OS === 'web' && webListDisableVirtualization;
-    const webListInitialNumToRender = Platform.OS === 'web'
-        ? resolveWebListInitialNumToRender(renderedListItems)
-        : WEB_LIST_INITIAL_NUM_TO_RENDER;
-
-    const virtualizedListContent = useWebFlatList ? (
-        <FlatList
-            ref={virtualizedListRef as never}
-            {...({ onWheel: stopScrollEventPropagationOnWeb, onTouchMove: stopScrollEventPropagationOnWeb } as any)}
-            data={renderedListItems as any}
-            renderItem={renderVirtualizedItem as any}
-            extraData={virtualizedRowExtraData}
-            keyboardShouldPersistTaps="handled"
-            keyExtractor={listItemKeyExtractor as any}
-            contentContainerStyle={contentContainerStyle}
-            onLayout={handleVirtualizedListLayout}
-            onScroll={handleVirtualizedListScroll}
-            onScrollBeginDrag={handleNativeListScrollInteractionStart}
-            onScrollEndDrag={handleNativeListScrollInteractionEnd}
-            onMomentumScrollBegin={handleNativeListScrollInteractionStart}
-            onMomentumScrollEnd={handleNativeListScrollInteractionEnd}
-            onContentSizeChange={handleTreeContentSizeChange}
-            onEndReached={onEndReached}
-            onEndReachedThreshold={0.4}
-            onViewableItemsChanged={handleViewableItemsChangedRef.current}
-            viewabilityConfig={viewabilityConfigRef.current}
-            scrollEventThrottle={WEB_LIST_SCROLL_EVENT_THROTTLE_MS}
-            // Keep first-page-sized web lists non-virtualized to avoid React
-            // Native Web VirtualizedList's incremental cell update churn during
-            // live row data changes. Larger web lists use FlashListCompat below;
-            // live browser QA showed RNW FlatList still mounted every session
-            // row in production despite bounded virtualization props.
-            disableVirtualization={webListDisableVirtualization}
-            windowSize={WEB_LIST_WINDOW_SIZE}
-            initialNumToRender={webListInitialNumToRender}
-            maxToRenderPerBatch={WEB_LIST_MAX_TO_RENDER_PER_BATCH}
-            updateCellsBatchingPeriod={WEB_LIST_UPDATE_CELLS_BATCHING_PERIOD_MS}
-            ListHeaderComponent={renderVirtualizedHeader as any}
-            ListFooterComponent={renderVirtualizedFooter as any}
-        />
-    ) : (
+    // Keep one list type while filtering: changing engines here remounts the focused header.
+    const virtualizedListContent = (
         <SessionListVirtualizedList
             ref={virtualizedListRef as never}
             data={renderedListItems as any}

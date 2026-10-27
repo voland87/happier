@@ -8,6 +8,7 @@ import {
   ExecutionRunStartRequestSchema,
   ExecutionRunStartResponseSchema,
   ExecutionRunTransportErrorCodeSchema,
+  isExecutionRunActive,
 } from './executionRuns.js';
 import { EphemeralTaskKindSchema } from './ephemeralTasks.js';
 import { ReviewFindingSchema } from './reviews/ReviewFinding.js';
@@ -22,6 +23,14 @@ import { ParticipantMessageV1Schema } from './structuredMessages/participantMess
 import { KNOWN_CANONICAL_TOOL_NAMES_V2 } from './tools/v2/names.js';
 
 describe('executionRuns protocol', () => {
+  it('separates idle retained handles from bounded work and unobserved running turns', () => {
+    expect(isExecutionRunActive({ status: 'running', runClass: 'long_lived', turnInFlight: false })).toBe(false);
+    expect(isExecutionRunActive({ status: 'running', runClass: 'long_lived', turnInFlight: true })).toBe(true);
+    expect(isExecutionRunActive({ status: 'running', runClass: 'bounded', turnInFlight: false })).toBe(true);
+    expect(isExecutionRunActive({ status: 'running', runClass: 'long_lived' })).toBe(true);
+    expect(isExecutionRunActive({ status: 'running', turnInFlight: false })).toBe(true);
+    expect(isExecutionRunActive({ status: 'cancelled', runClass: 'long_lived', turnInFlight: true })).toBe(false);
+  });
   it('parses supported intents', () => {
     expect(ExecutionRunIntentSchema.parse('review')).toBe('review');
     expect(ExecutionRunIntentSchema.parse('voice_agent')).toBe('voice_agent');

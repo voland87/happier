@@ -72,6 +72,7 @@ export const RPC_METHODS = {
   DAEMON_SESSION_USAGE_LIMIT_WAIT_RESUME_ENABLE: 'daemon.sessionUsageLimit.waitResume.enable',
   DAEMON_SESSION_USAGE_LIMIT_WAIT_RESUME_CANCEL: 'daemon.sessionUsageLimit.waitResume.cancel',
   DAEMON_SESSION_USAGE_LIMIT_CHECK_NOW: 'daemon.sessionUsageLimit.checkNow',
+  DAEMON_CONNECTED_SERVICE_IMPORT: 'daemon.connectedService.import',
   DAEMON_CONNECTED_SERVICE_QUOTA_RECOVERY_CREDIT_CONSUME: 'daemon.connectedServiceQuota.recoveryCredit.consume',
   DAEMON_SESSION_CONNECTED_SERVICE_AUTH_SWITCH: 'daemon.sessionConnectedServiceAuth.switch',
   DAEMON_SESSION_RUNNER_STATUS_GET: 'daemon.sessionRunner.status.get',
@@ -106,6 +107,8 @@ export const RPC_METHODS = {
   SESSION_CONTINUATION_INSPECT: 'session.continuation.inspect',
   /** One source read/decrypt for every target shown by the Agent picker. */
   SESSION_CONTINUATION_INSPECT_BATCH: 'session.continuation.inspectBatch',
+  /** Exact configured targets; older daemons cannot safely parse these selections. */
+  SESSION_CONTINUATION_INSPECT_BACKEND_TARGETS: 'session.continuation.inspectBackendTargets',
   /**
    * Read-only rebuild of the activation brief one transition divider stands
    * for. Runs the same bounded context pass the transition ran, bounded by the

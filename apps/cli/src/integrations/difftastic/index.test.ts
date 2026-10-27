@@ -9,17 +9,20 @@ const { spawnMock } = vi.hoisted(() => ({
     spawnMock: vi.fn(),
 }));
 
-vi.mock('child_process', () => ({
+vi.mock('child_process', async (importOriginal) => ({
+    ...await importOriginal<typeof import('child_process')>(),
     spawn: spawnMock,
 }));
 
-vi.mock('node:fs', () => ({
-    existsSync: () => true,
-}));
-
-vi.mock('@/runtime/assets/resolveCliRuntimeAssetPath', () => ({
-    resolveCliRuntimeAssetPath: () => '/fixture/difft',
-}));
+vi.mock('node:fs', async (importOriginal) => {
+    const actual = await importOriginal<typeof import('node:fs')>();
+    return {
+        ...actual,
+        // Only synthesize the bundled executable; preserve neighboring filesystem operations.
+        existsSync: (path: import('node:fs').PathLike) =>
+            /[\\/]tools[\\/]unpacked[\\/]difft(?:\.exe)?$/.test(String(path)) || actual.existsSync(path),
+    };
+});
 
 describe('difftastic run', () => {
     afterEach(() => {

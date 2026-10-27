@@ -20,6 +20,7 @@ export const AGENTS_CORE = {
         cloudConnect: { vendorKey: 'anthropic', status: 'wired' },
         connectedServices: {
             supportedServiceIds: ['claude-subscription', 'anthropic'],
+            quotaResetServiceIds: ['claude-subscription'],
             sessionAuthSwitch: {
                 continuityMode: 'restart_same_home',
                 supportedTransitions: ['same_connected_group'],
@@ -59,7 +60,7 @@ export const AGENTS_CORE = {
             sessionRollback: { conversation: 'unsupported' },
             usageLimitRecovery: { checkNow: 'supported' },
         },
-        handoff: { vendorStateTransfer: 'supported' },
+        handoff: { vendorStateTransfer: 'supported', existingState: true },
         localControl: { supported: true, topology: 'exclusive', attachStrategy: 'tmux' },
         runtimeInput: {
             inFlightSteerSupported: true,
@@ -150,7 +151,7 @@ export const AGENTS_CORE = {
                 },
             },
         },
-        handoff: { vendorStateTransfer: 'experimental', requiresExplicitSessionId: true },
+        handoff: { vendorStateTransfer: 'experimental', requiresExplicitSessionId: true, existingState: true },
         localControl: { supported: true, topology: 'exclusive', attachStrategy: 'tmux' },
         tools: { delivery: 'native_mcp', support: 'supported' },
         media: {
@@ -227,7 +228,7 @@ export const AGENTS_CORE = {
             supportedServiceIds: ['gemini'],
             sessionAuthSwitch: {
                 continuityMode: 'restart_same_home',
-                supportedTransitions: ['native_to_connected', 'connected_to_connected'],
+                supportedTransitions: ['native_to_connected', 'connected_to_connected', 'same_connected_group'],
             },
             supportedKindsByServiceId: {
                 gemini: ['oauth'],
@@ -559,8 +560,31 @@ export const AGENTS_CORE = {
         cliSubcommand: 'agy',
         detectKey: providerDetectKey('agy'),
         flavorAliases: [],
-        cloudConnect: null,
-        connectedServices: null,
+        cloudConnect: { vendorKey: 'antigravity', status: 'wired' },
+        connectedServices: {
+            supportedServiceIds: ['antigravity'],
+            sessionAuthSwitch: {
+                continuityMode: 'restart_shared_state_required',
+                supportedTransitions: ['same_connected_group'],
+                providerStateSharingRequired: {
+                    supportedTransitions: ['native_to_connected', 'connected_to_native', 'connected_to_connected'],
+                },
+            },
+            providerStateSharing: {
+                config: {
+                    supported: true,
+                    modes: ['linked', 'copied', 'isolated'],
+                },
+                state: {
+                    supported: true,
+                    modes: ['isolated', 'shared'],
+                    sharedStatePrivacyRiskAcknowledgementRequired: true,
+                },
+            },
+            supportedKindsByServiceId: {
+                antigravity: ['oauth'],
+            },
+        },
         resume: { vendorResume: 'supported', vendorResumeIdField: 'agySessionId' },
         // The managed ACP server owns an opaque provider session id, but Happier does not
         // read an Agy-native transcript store directly.
@@ -569,6 +593,7 @@ export const AGENTS_CORE = {
             sessionListing: 'unsupported',
             sessionFork: { conversation: 'unsupported', fromMessage: 'unsupported' },
             sessionRollback: { conversation: 'unsupported' },
+            usageLimitRecovery: { checkNow: 'supported' },
         },
         handoff: { vendorStateTransfer: 'unsupported' },
         // Interactive `agy` stays the system-first terminal/local-control surface.
@@ -623,6 +648,30 @@ export const AGENTS_CORE = {
         handoff: { vendorStateTransfer: 'unsupported' },
         localControl: { supported: true, topology: 'exclusive', attachStrategy: 'tmux' },
         tools: { delivery: 'native_mcp', support: 'supported' },
+        media: {
+            acceptsImageInput: 'experimental',
+            emitsSessionMedia: GENERIC_SESSION_MEDIA_OUTPUT,
+            nativeImageGeneration: NO_NATIVE_IMAGE_GENERATION,
+        },
+    },
+    codebuddy: {
+        id: 'codebuddy',
+        cliSubcommand: 'codebuddy',
+        detectKey: providerDetectKey('codebuddy'),
+        flavorAliases: ['codebuddy-code'],
+        cloudConnect: null,
+        connectedServices: null,
+        resume: { vendorResume: 'supported', vendorResumeIdField: 'codebuddySessionId' },
+        sessionStorage: { direct: false, persisted: true },
+        // CodeBuddy Code 2.162.0 advertises `loadSession` but not ACP `sessionCapabilities.list`.
+        sessionCapabilities: {
+            sessionListing: 'unsupported',
+            sessionFork: { conversation: 'unsupported', fromMessage: 'unsupported' },
+            sessionRollback: { conversation: 'unsupported' },
+        },
+        handoff: { vendorStateTransfer: 'unsupported' },
+        localControl: { supported: true, topology: 'exclusive', attachStrategy: 'tmux' },
+        tools: { delivery: 'native_mcp', support: 'experimental' },
         media: {
             acceptsImageInput: 'experimental',
             emitsSessionMedia: GENERIC_SESSION_MEDIA_OUTPUT,

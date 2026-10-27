@@ -56,6 +56,7 @@ import {
   prepareAgentNativeReturnStrictResume,
 } from '@/session/agentTransition/agentNativeReturn';
 import { withCurrentHappierSessionId } from '@/agent/runtime/session/currentSessionIdEnv';
+import type { ProviderTurnCompletionResult } from './providerPromptSubmission';
 
 type RuntimeForLoop = {
   beginTurn: () => void;
@@ -77,11 +78,12 @@ type RuntimeForLoop = {
       onProviderPromptAccepted?: () => void;
     }>,
   ) => Promise<void>;
-  flushTurn: () => void | Promise<void>;
+  flushTurn: () => void | ProviderTurnCompletionResult | Promise<void | ProviderTurnCompletionResult>;
   reset: () => Promise<void>;
   getSessionId: () => string | null;
   cancel: () => Promise<void>;
   setSessionMode: (modeId: string) => Promise<void>;
+  clearSessionModeOverride?: () => Promise<void>;
   setSessionConfigOption: (configId: string, value: string | number | boolean | null) => Promise<void>;
   setSessionModel: (modelId: string) => Promise<void>;
 };
@@ -655,6 +657,7 @@ export async function runStandardAcpProvider(
         assistantPreviewText: resolveReadyNotificationAssistantText({
           includeMessageText: includeAssistantPreviewText,
           explicitAssistantText: turnAssistantPreviewTracker.getPreview(),
+          turnResult: context?.turnResult,
           session,
           turnToken: context?.turnToken ?? null,
           startSeqExclusive: context?.startSeqExclusive ?? null,
@@ -712,6 +715,7 @@ export async function runStandardAcpProvider(
       messageBuffer,
       shouldExit: () => shouldExit,
       getAbortSignal: () => abortController.signal,
+      waitForPendingAbort: () => explicitAbortPromise,
       keepAlive: sendKeepAlive,
       setThinking: setThinkingState,
       sendReady,

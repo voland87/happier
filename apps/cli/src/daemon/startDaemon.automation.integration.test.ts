@@ -174,6 +174,7 @@ const harness = vi.hoisted(() => {
     stop: connectedServiceQuotasStop,
     pause: connectedServiceQuotasPause,
     resume: connectedServiceQuotasResume,
+    wake: vi.fn(),
   }));
 
   const listConnectedServiceAuthGroups = vi.fn<ConnectedServiceAuthGroupApi['listConnectedServiceAuthGroups']>(async () => []);

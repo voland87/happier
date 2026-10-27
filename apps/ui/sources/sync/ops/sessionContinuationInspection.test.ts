@@ -154,3 +154,38 @@ describe('inspectSessionContinuationsOnMachine', () => {
         expect(machineRpcWithServerScope).toHaveBeenCalledTimes(3);
     });
 });
+
+
+describe('configured target inspection', () => {
+    beforeEach(() => { machineRpcWithServerScope.mockReset(); });
+
+    it('uses the configured operation for a single exact target without a legacy fallback', async () => {
+        const selection = { v: 1, agentId: 'customAcp', backendTarget: { kind: 'configuredAcpBackend', backendId: 'b' } } as const;
+        machineRpcWithServerScope.mockResolvedValue({ v: 1, inspections: [AVAILABLE] });
+        await expect(inspectSessionContinuationOnMachine({ machineId: 'machine-1', serverId: 'server-1', sessionId: 'session-1', selection }))
+            .resolves.toEqual({ status: 'answered', inspection: AVAILABLE });
+        expect(machineRpcWithServerScope).toHaveBeenCalledWith(expect.objectContaining({
+            method: 'session.continuation.inspectBackendTargets', payload: { v: 1, sourceSessionId: 'session-1', selections: [selection] },
+        }));
+    });
+
+    it('keeps configured identity off the released builtin batch and preserves builtin answers', async () => {
+        const configured = { v: 1, agentId: 'customAcp', backendTarget: { kind: 'configuredAcpBackend', backendId: 'backend-b' } } as const;
+        machineRpcWithServerScope.mockImplementation(async (request: { method: string; payload: { selections: unknown[] } }) => {
+            if (request.method === 'session.continuation.inspectBackendTargets') {
+                expect(request.payload.selections).toEqual([configured]);
+                throw Object.assign(new Error('method unavailable'), { rpcErrorCode: 'RPC_METHOD_NOT_AVAILABLE' });
+            }
+            expect(request.method).toBe('session.continuation.inspectBatch');
+            expect(request.payload.selections).toEqual([{ v: 1, agentId: 'codex' }]);
+            return { v: 1, inspections: [AVAILABLE] };
+        });
+        await expect(inspectSessionContinuationsOnMachine({
+            machineId: 'machine-1', serverId: 'server-1', sessionId: 'session-1',
+            selections: [configured, { v: 1, agentId: 'codex' }],
+        })).resolves.toEqual([
+            { status: 'answered', inspection: { type: 'unavailable', reason: 'operation_unavailable' } },
+            { status: 'answered', inspection: AVAILABLE },
+        ]);
+    });
+});

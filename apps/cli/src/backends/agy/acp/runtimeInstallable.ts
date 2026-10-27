@@ -39,7 +39,7 @@ export async function detectAgyAcpLaunchResolution(): Promise<RuntimeInstallable
 }
 
 export async function runAgyAcpBackgroundAutoUpdateCheck(): Promise<void> {
-  // Pinned v1.1.1 archive: no background auto-update. UI prewarm + launch-side
+  // Pinned archive: no background auto-update. UI prewarm + launch-side
   // authoritative ensure own installation; a new pin lands as a new catalog fact.
 }
 

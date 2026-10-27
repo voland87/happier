@@ -55,9 +55,9 @@ import { HAPPIER_CONNECTED_SERVICE_SELECTIONS_ENV_KEY } from '@/daemon/connected
 import { buildProfileEnvOverlay } from '@/settings/profiles/buildProfileEnvOverlay';
 import { readProfilesFromAccountSettings } from '@/settings/profiles/readProfilesFromAccountSettings';
 import { resolveProfileForAgent } from '@/settings/profiles/resolveProfileForAgent';
+import type { PreflightSessionControlsProbeMethod as CliProbeMethod } from '@/capabilities/probes/preflightSessionControlsProbeAdapterTypes';
 
 const DEFAULT_PROBE_MODELS_TIMEOUT_MS = 30_000;
-type CliProbeMethod = 'probeModels' | 'probeModes' | 'probeConfigOptions' | 'probeCatalogs';
 // Only share an active launch. The composer lifecycle owns its settled catalog snapshot.
 type CatalogProbeOperation = {
     controller: AbortController;
@@ -189,17 +189,14 @@ async function resolveProbeBackendContext(
     const shouldLoadAccountSettings =
         backendTarget?.kind === 'configuredAcpBackend'
         || needsAccountSettingsForProbes
-        || profileId !== null;
-    if (!shouldLoadAccountSettings && options.requireCredentials !== true) {
+        || profileId !== null
+        || options.requireCredentials === true;
+    if (!shouldLoadAccountSettings) {
       return { backendTarget, credentials: null, accountSettings: applyRuntimeOverride(null) };
     }
 
     const credentials = await readCredentials().catch(() => null);
     if (!credentials) return { backendTarget, credentials: null, accountSettings: applyRuntimeOverride(null) };
-
-    if (!shouldLoadAccountSettings) {
-      return { backendTarget, credentials, accountSettings: applyRuntimeOverride(null) };
-    }
 
     const accountSettingsContext = await bootstrapAccountSettingsContext({
         credentials,
@@ -289,6 +286,7 @@ async function resolveConnectedServiceProbeEnvironment(params: Readonly<{
     const materializationBaseDir = join(configuration.happyHomeDir, 'daemon', 'connected-services', 'materialized');
     const resolved = await resolveConnectedServiceAuthForSpawn({
         agentId: params.agentId,
+        materializationPurpose: 'probe',
         sessionDirectory: params.cwd,
         connectedServicesBindingsRaw: params.connectedServices,
         materializationKey: materializationIdentity.id,
@@ -391,7 +389,6 @@ async function invokeCliProbeMethod(
     params?: Record<string, unknown>,
     signal?: AbortSignal,
 ): Promise<CapabilitiesInvokeResponse> {
-    if (method !== 'probeCatalogs') return await prepareAndInvokeCliProbeMethod(agentId, method, params);
     if (params?.connectedServices !== undefined && params.connectedServices !== null
         && !ConnectedServiceBindingsV1Schema.safeParse(params.connectedServices).success) {
         return { ok: false, error: { code: 'invalid-request', message: 'Invalid selected connected-service bindings' } };
@@ -426,21 +423,22 @@ async function prepareAndInvokeCliProbeMethod(
     if (lifecycle) remainingCatalogProbeMs(lifecycle);
     const hasSelectedConnectedAccount = Boolean(connectedServices && Object.values(connectedServices.bindingsByServiceId)
         .some((binding) => binding.source === 'connected'));
-    const supportsMaterializedAuth = preflightAdapter?.connectedServiceAuth === 'materialized-env'
-        || (method === 'probeCatalogs' && preflightAdapter?.connectedServiceAuth === 'materialized-env-for-catalogs');
-    if (method === 'probeCatalogs' && hasSelectedConnectedAccount && !supportsMaterializedAuth) {
+    const connectedServiceAuthStrategy = preflightAdapter?.connectedServiceAuth === 'materialized-env'
+        ? 'materialized-env'
+        : preflightAdapter?.connectedServiceAuth?.[method];
+    if (hasSelectedConnectedAccount && !connectedServiceAuthStrategy) {
         return {
             ok: false,
             error: {
                 code: 'connected-service-preflight-failed',
-                message: 'This adapter cannot prepare the selected connected-service account for native catalog discovery.',
+                message: 'This adapter cannot prepare the selected connected-service account for discovery.',
             },
         };
     }
-    const requiresMaterializedAuth = supportsMaterializedAuth && hasSelectedConnectedAccount;
+    const requiresMaterializedAuth = connectedServiceAuthStrategy === 'materialized-env' && hasSelectedConnectedAccount;
     const probeContext = await resolveProbeBackendContext(
         { ...params, agentId },
-        { requireCredentials: requiresMaterializedAuth },
+        { requireCredentials: hasSelectedConnectedAccount && connectedServiceAuthStrategy !== 'not-required' },
     );
     if (lifecycle) remainingCatalogProbeMs(lifecycle);
     const timeoutMsRaw = (params ?? {}).timeoutMs;
@@ -568,6 +566,13 @@ async function prepareAndInvokeCliProbeMethod(
     return await shareCatalogProbe(scopeKey, lifecycle!, runProbe, registerCleanup);
 }
 
+async function getConnectedServiceAuthSupport(agentId: AgentCatalogEntry['id']): Promise<CapabilitiesInvokeResponse> {
+    const entry = AGENTS[agentId];
+    const materializer = await entry?.getConnectedServiceMaterializer?.();
+    const lifecycle = materializer ? await entry?.getConnectedServiceCredentialLifecycleDescriptor?.() : null;
+    return { ok: true, result: { supportedServiceIds: lifecycle?.serviceIds ?? [] } };
+}
+
 function createGenericCliCapability(agentId: AgentCatalogEntry['id']): Capability {
     return {
         descriptor: {
@@ -575,6 +580,7 @@ function createGenericCliCapability(agentId: AgentCatalogEntry['id']): Capabilit
             kind: 'cli',
             title: `${titleCase(agentId)} CLI`,
             methods: {
+                connectedServiceAuthSupport: { title: 'Connected-service launch support' },
                 install: { title: 'Install' },
                 probeModels: { title: 'Probe models' },
                 probeModes: { title: 'Probe modes' },
@@ -587,6 +593,7 @@ function createGenericCliCapability(agentId: AgentCatalogEntry['id']): Capabilit
             return buildCliCapabilityData({ request, entry });
         },
         invoke: async ({ method, params, signal }) => {
+            if (method === 'connectedServiceAuthSupport') return getConnectedServiceAuthSupport(agentId);
             if (method === 'install') {
                 return invokeProviderCliInstall(agentId, params);
             }
@@ -610,6 +617,7 @@ function augmentCliCapabilityWithProbeModels(cap: Capability, agentId: AgentCata
     const existingMethods = cap.descriptor.methods ?? {};
     const methods = {
         ...existingMethods,
+        connectedServiceAuthSupport: { title: 'Connected-service launch support' },
         ...(existingMethods.probeModels ? {} : { probeModels: { title: 'Probe models' } }),
         ...(existingMethods.probeModes ? {} : { probeModes: { title: 'Probe modes' } }),
         ...(existingMethods.probeConfigOptions ? {} : { probeConfigOptions: { title: 'Probe config options' } }),
@@ -620,6 +628,7 @@ function augmentCliCapabilityWithProbeModels(cap: Capability, agentId: AgentCata
     const baseInvoke = cap.invoke;
 
     const invoke: Capability['invoke'] = async ({ method, params, signal }) => {
+        if (method === 'connectedServiceAuthSupport') return getConnectedServiceAuthSupport(agentId);
         if (method === 'install') {
             return invokeProviderCliInstall(agentId, params);
         }

@@ -31,6 +31,7 @@ import type { ConnectedServiceRuntimeAuthSelectionMaterializer } from '@/daemon/
 import type { ConnectedServicesProviderMaterializer } from '@/daemon/connectedServices/materialize/providerMaterializerTypes';
 import type { ConnectedServiceCredentialLifecycleDescriptor } from '@/daemon/connectedServices/credentials/lifecycleTypes';
 import type { ConnectedServiceQuotaFetcherDescriptor } from '@/daemon/connectedServices/quotas/types';
+import type { ImportedSessionHandoffBundle } from '@/session/handoff/types';
 import type {
   VerifyResumeReachableInput,
   VerifyResumeReachableResult,
@@ -250,6 +251,14 @@ export type ConnectedServicePersistedSessionCandidateParams = Readonly<{
   metadata: unknown;
 }>;
 
+export type ExistingSessionHandoffStateResolver = (params: Readonly<{
+  metadata: Record<string, unknown>;
+  vendorResumeId: string;
+  targetPath: string;
+  env: NodeJS.ProcessEnv;
+  sessionStorageMode: 'direct' | 'persisted';
+}>) => Promise<ImportedSessionHandoffBundle>;
+
 export type AgentChecklistContributions = Partial<
   Record<ChecklistId, ReadonlyArray<Readonly<{ id: string; params?: Record<string, unknown> }>>>
 >;
@@ -466,6 +475,8 @@ export type AgentCatalogEntry = Readonly<{
   getAcpRuntimeBackendOptionsResolver?: () => Promise<CatalogAcpRuntimeBackendOptionsResolver>;
   /** Provider-owned projection for ACP model identifiers encoded in config options. */
   getAcpRuntimeSessionModelAdapter?: () => Promise<CatalogAcpRuntimeSessionModelAdapter>;
+  /** Provider diagnostics delivered as ordinary assistant chunks use the shared turn owner. */
+  getAcpRuntimeTurnHooks?: () => Promise<NonNullable<Parameters<typeof createAcpRuntime>[0]['hooks']>>;
   /**
    * Optional ACP fork-continuation shaper.
    *
@@ -487,6 +498,8 @@ export type AgentCatalogEntry = Readonly<{
    * provider-specific resume ids and direct-session source metadata.
    */
   buildRuntimeLocalHandoffMetadata?: ProviderRuntimeLocalHandoffMetadataBuilder;
+  /** Verifies native target resume state without exporting, importing, or repairing it. */
+  resolveExistingSessionHandoffState?: ExistingSessionHandoffStateResolver;
   /**
    * Whether probe RPC handlers should load account settings before invoking probe methods.
    *

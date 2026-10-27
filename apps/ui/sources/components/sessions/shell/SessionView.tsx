@@ -7,6 +7,11 @@ import { AgentContentView } from '@/components/sessions/transcript/AgentContentV
 import { AgentInput, type AgentInputSendOptions } from '@/components/sessions/agentInput';
 import { COMPOSER_CONTENT_HORIZONTAL_INSET } from '@/components/sessions/agentInput/composerContentInset';
 import {
+    useComposerTextStore,
+    useComposerTextValue,
+    type ComposerTextStore,
+} from '@/components/sessions/agentInput/composerTextStore';
+import {
     computeExistingSessionComposerInputMaxHeight,
     computeExistingSessionComposerPanelMaxHeight,
 } from '@/components/sessions/agentInput/inputMaxHeight';
@@ -252,7 +257,7 @@ import { usePathname, useRouter } from 'expo-router';
 import * as React from 'react';
 import { useMemo } from 'react';
 import { Keyboard, Platform, Pressable, View, type LayoutChangeEvent, useWindowDimensions } from 'react-native';
-import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
+import { ActivitySpinner, HERO_SPINNER_SIZE } from '@/components/ui/feedback/ActivitySpinner';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useUnistyles } from 'react-native-unistyles';
 import { sessionSwitch } from '@/sync/ops';
@@ -454,6 +459,7 @@ import { useSessionSurfaceActivation } from './view/useSessionSurfaceActivation'
 import { resolveSessionAuthSurfaceState, type SessionAuthSurfaceState } from './sessionAuthSurfaceState';
 import { useSessionRuntimeStatusSource } from './useSessionRuntimeStatusSource';
 import { deriveSessionRuntimePresentationState } from '@/sync/domains/session/attention/deriveSessionRuntimePresentationState';
+import { confirmRunnerRestartStopsBackgroundWork } from './confirmRunnerRestartStopsBackgroundWork';
 import { deriveSessionInputReadinessState } from '@/sync/domains/session/control/deriveSessionInputReadinessState';
 import {
     deriveLatestPendingRequestObservedAtFromSession,
@@ -486,7 +492,7 @@ import { ICON_SIZE, Icon } from '@/components/ui/icons/Icon';
 import {
     buildQuotaSnapshotScopeKey,
     consumeQuotaRecoveryCredit,
-} from '@/hooks/server/connectedServices/connectedServiceQuotaSnapshotStore';
+} from '@/sync/domains/connectedServices/connectedServiceQuotaSnapshotStore';
 
 const sessionSubmitPort = createSyncBackedSubmitPort(sync);
 const SESSION_COMPOSER_SUGGESTION_KINDS: readonly ComposerSuggestionKindId[] = [
@@ -1138,7 +1144,9 @@ const SessionHeaderRightElement = React.memo(function SessionHeaderRightElement(
     );
 });
 
-type SessionAgentInputWithUsageProps = Omit<React.ComponentProps<typeof AgentInput>, 'usageData'> & {
+type SessionAgentInputWithUsageProps = Omit<React.ComponentProps<typeof AgentInput>, 'usageData' | 'value'> & {
+    /** Live composer text; only this leaf subscribes to it, so typing renders nothing above it. */
+    composerTextStore: ComposerTextStore;
     sessionId: string;
     sessionLatestUsage: Session['latestUsage'] | null | undefined;
     inputComposerClearTransientStateRef: React.MutableRefObject<() => void>;
@@ -1245,6 +1253,7 @@ function useComposerKeyboardHeight(): number {
 }
 
 const SessionAgentInputWithUsage = React.memo(function SessionAgentInputWithUsage({
+    composerTextStore,
     sessionId,
     sessionLatestUsage,
     inputComposerClearTransientStateRef,
@@ -1252,6 +1261,7 @@ const SessionAgentInputWithUsage = React.memo(function SessionAgentInputWithUsag
     inputComposerRestoreTransientStateRef,
     ...agentInputProps
 }: SessionAgentInputWithUsageProps) {
+    const value = useComposerTextValue(composerTextStore);
     const sessionUsage = useSessionUsage(sessionId);
     const scaffoldAvailablePanelHeight = useComposerAvailablePanelHeight();
     const keyboardHeight = useComposerKeyboardHeight();
@@ -1260,8 +1270,8 @@ const SessionAgentInputWithUsage = React.memo(function SessionAgentInputWithUsag
     const uiFontScale = typeof rawUiFontScale === 'number' ? rawUiFontScale : undefined;
     const inputComposerPersistence = useSessionAgentInputComposerPersistence({
         sessionId,
-        text: agentInputProps.value,
-        textLength: agentInputProps.value.length,
+        text: value,
+        textLength: value.length,
         fontScale: uiFontScale,
     });
     React.useEffect(() => {
@@ -1334,6 +1344,7 @@ const SessionAgentInputWithUsage = React.memo(function SessionAgentInputWithUsag
     return (
         <AgentInput
             {...agentInputProps}
+            value={value}
             sessionId={sessionId}
             contentPaddingHorizontal={COMPOSER_CONTENT_HORIZONTAL_INSET}
             inputMaxHeight={inputMaxHeight}
@@ -1401,6 +1412,8 @@ const SessionAgentInputRuntimeStatusBoundary = React.memo(function SessionAgentI
             ? t('connectedServices.authSwitch.switchFailed')
             : sessionStatus.state === 'resuming'
             ? t('session.resuming')
+            : sessionStatus.state === 'archiving'
+            ? sessionStatus.statusText
             : (inactiveStatusText || sessionStatus.statusText),
         color: sessionStatus.statusColor,
         dotColor: sessionStatus.statusDotColor,
@@ -1933,7 +1946,7 @@ export const SessionView = React.memo((props: SessionViewProps) => {
                     <SessionAuthRecoveryFallback message={authSurfaceState.message} />
                 ) : routeHydrationRetrying ? (
                     <View testID="session-route-retrying" style={{ flex: 1, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 32 }}>
-                        <ActivitySpinner size="small" color={theme.colors.text.secondary} />
+                        <ActivitySpinner size={HERO_SPINNER_SIZE} color={theme.colors.text.secondary} />
                         {routeHydrationRetryStatusKey ? (
                             <Text style={{ color: theme.colors.text.secondary, marginTop: 10, textAlign: 'center' }}>
                                 {t(routeHydrationRetryStatusKey)}
@@ -1943,7 +1956,7 @@ export const SessionView = React.memo((props: SessionViewProps) => {
                 ) : ((!isDataReady && !session) || routeHydrationLoading) ? (
                     // Loading state
                     <View testID="session-route-loading" style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
-                        <ActivitySpinner size="small" color={theme.colors.text.secondary} />
+                        <ActivitySpinner size={HERO_SPINNER_SIZE} color={theme.colors.text.secondary} />
                     </View>
                 ) : !session && (routeHydrationTerminalMissing || !routeHydrationState) ? (
                     // Deleted state
@@ -2365,7 +2378,7 @@ const SessionTranscriptPlaceholder = React.memo(function SessionTranscriptPlaceh
     return isLoaded ? (
         <EmptyMessages session={session} />
     ) : (
-        <ActivitySpinner size="small" color={activityColor} />
+        <ActivitySpinner size={HERO_SPINNER_SIZE} color={activityColor} />
     );
 });
 
@@ -2560,7 +2573,7 @@ function SessionViewLoaded({
         paneUrlState?.rightTabId,
         sessionsRightPaneDefaultOpen,
     ]);
-    const [message, setMessage] = React.useState('');
+    const composerTextStore = useComposerTextStore(() => '');
     const realtimeStatus = useRealtimeStatus();
     const transcriptMessageSelectionEnabled = useSetting('transcriptMessageSelectionEnabled');
     const transcriptMessageSendToSessionEnabled = useSetting('transcriptMessageSendToSessionEnabled');
@@ -3143,6 +3156,7 @@ function SessionViewLoaded({
         }
         if (!staleSessionRunnerStatus) return;
         if (staleSessionRunnerOperationStatus?.status === 'pending') return;
+        if (!(await confirmRunnerRestartStopsBackgroundWork(staleSessionRunnerStatus.sessionId))) return;
 
         const fingerprint = staleSessionRunnerStatus.fingerprint;
         setStaleSessionRunnerOperationStatus({ fingerprint, status: 'pending' });
@@ -3245,6 +3259,7 @@ function SessionViewLoaded({
             Modal.alert(t('session.mcpRestartRequired.errorTitle'), t('session.mcpRestartRequired.errorBody'));
             return;
         }
+        if (!(await confirmRunnerRestartStopsBackgroundWork(sessionId))) return;
 
         setMcpSelectionRestartOperation({ fingerprint: presentation.fingerprint, status: 'pending' });
         const result = await restartSessionRunnerForConfigurationWithObserve({
@@ -3649,6 +3664,7 @@ function SessionViewLoaded({
         const facts: ArmedAgentContinuationCanonicalFacts | null = factsAreReadable
             ? {
                 currentAgentId: liveComposerState.agentId,
+                currentBackendTarget: sessionActionDefaultBackend?.backendTarget ?? { kind: 'builtInAgent', agentId: liveComposerState.agentId },
                 sessionActive: sessionRuntimeStatusSource.active === true,
                 input: armedContinuationInputCustody,
             }
@@ -3657,12 +3673,14 @@ function SessionViewLoaded({
             result: activeArmedContinuationOutcome.result,
             labels: activeArmedContinuationOutcome.labels,
             targetAgentId: activeArmedContinuationOutcome.intent.selection.agentId,
+            targetBackendTarget: activeArmedContinuationOutcome.intent.selection.backendTarget,
             facts,
         });
     }, [
         armedContinuationInputCustody,
         activeArmedContinuationOutcome,
         liveComposerState.agentId,
+        sessionActionDefaultBackend?.backendTarget,
         sessionRuntimeStatusSource.active,
     ]);
     // Memoized because it feeds the composer badge list: a fresh object every
@@ -4016,7 +4034,7 @@ function SessionViewLoaded({
         const intent = inSessionAgentPicker.armedContinuation;
         if (intent === null) return null;
         const entry = sessionAgentCatalogEntries.find((catalogEntry) => (
-            catalogEntry.providerAgentId === intent.selection.agentId
+            catalogEntry.targetKey === buildBackendTargetKey(intent.selection.backendTarget ?? { kind: 'builtInAgent', agentId: intent.selection.agentId })
         ));
         return {
             agentId: intent.selection.agentId,
@@ -4036,12 +4054,12 @@ function SessionViewLoaded({
     // nothing presentational has to be persisted and later read back in a
     // language the reader has since changed.
     const buildArmedContinuationLabels = React.useCallback((
-        targetAgentId: string,
+        selection: ComposerAgentContinuationIntentV1['selection'],
     ): ArmedAgentContinuationLabels => ({
         sourceAgentLabel: currentAgentLabel,
         targetAgentLabel: sessionAgentCatalogEntries.find((catalogEntry) => (
-            catalogEntry.providerAgentId === targetAgentId
-        ))?.title ?? targetAgentId,
+            catalogEntry.targetKey === buildBackendTargetKey(selection.backendTarget ?? { kind: 'builtInAgent', agentId: selection.agentId })
+        ))?.title ?? selection.agentId,
     }), [currentAgentLabel, sessionAgentCatalogEntries]);
     const restoredArmedContinuationOutcomeKeyRef = React.useRef<string | null>(null);
     React.useLayoutEffect(() => {
@@ -4077,7 +4095,7 @@ function SessionViewLoaded({
             scopeKey: activeServerAccountScopeKey,
             result: { type: 'outcome_unknown', localId: submission.localId },
             intent,
-            labels: buildArmedContinuationLabels(intent.selection.agentId),
+            labels: buildArmedContinuationLabels(intent.selection),
             localId: submission.localId,
             reconciled: false,
         });
@@ -4167,6 +4185,7 @@ function SessionViewLoaded({
         if (!gaugeSource) return null;
         return computeConnectedServiceQuotaGaugeViewModel({
             snapshot: gaugeSource.snapshot,
+            activeModelId: modelMode,
             windowMode: sessionProviderUsageGaugeWindowMode,
             windowModes: sessionProviderUsageGaugeWindowModesSetting,
             additionalMeterIds: connectedServiceQuotaProfileRef
@@ -4184,6 +4203,7 @@ function SessionViewLoaded({
         });
     }, [
         connectedServiceQuotaActiveAccountLabel,
+        modelMode,
         connectedServiceQuotaDisplaySnapshot,
         providerUsageDisplaySnapshotSource?.kind,
         providerUsageGaugeSource,
@@ -4394,18 +4414,15 @@ function SessionViewLoaded({
         restoreComposerSnapshot,
         captureDraftForOutboundHandoff,
         clearDraftCurrentness,
-        draftSnapshot,
+        draftConflict,
+        draftStatus,
         draftScope,
-    } = useDraft(sessionId, message, setMessage, { active: surfaceFocused });
-    const draftConflictBanner = useSessionDraftConflictComposerBanner(draftSnapshot?.conflict ?? null);
+    } = useDraft(sessionId, composerTextStore, { active: surfaceFocused });
+    const draftConflictBanner = useSessionDraftConflictComposerBanner(draftConflict);
     const draftSyncStatusBadge = React.useMemo(
-        () => buildSessionDraftSyncStatusBadge(draftSnapshot?.status ?? 'clean'),
-        [draftSnapshot?.status],
+        () => buildSessionDraftSyncStatusBadge(draftStatus ?? 'clean'),
+        [draftStatus],
     );
-    const messageRef = React.useRef(message);
-    React.useEffect(() => {
-        messageRef.current = message;
-    }, [message]);
     const [pendingMessageEdit, setPendingMessageEdit] = React.useState<PendingMessageComposerEditState | null>(null);
     const pendingMessageEditRef = React.useRef(pendingMessageEdit);
     React.useEffect(() => {
@@ -4537,8 +4554,8 @@ function SessionViewLoaded({
         sessionId,
     ]);
     const captureComposerSemanticDraftSnapshot = React.useCallback((): ComposerSemanticDraftSnapshot => (
-        readPendingMessageComposerSemanticDraftSnapshot(draftSnapshot?.document ?? null)
-    ), [draftSnapshot]);
+        readPendingMessageComposerSemanticDraftSnapshot(existingSessionDraftSemanticValues, draftScope, sessionId)
+    ), [draftScope, sessionId]);
     const restoreSemanticDraftValuesFromSnapshot = React.useCallback((snapshot: ComposerSemanticDraftSnapshot) => {
         if (!draftScope) return;
         for (const [fieldId, value] of [
@@ -4611,7 +4628,7 @@ function SessionViewLoaded({
         // kept the typed sentence in `displayText`, and editing the expansion is
         // editing something the user never wrote.
         const editText = readMessageDisplayText(request);
-        const previousDraftText = pendingMessageEditRef.current?.previousDraftText ?? messageRef.current;
+        const previousDraftText = pendingMessageEditRef.current?.previousDraftText ?? composerTextStore.getPrompt();
         const previousAttachmentDrafts = pendingMessageEditRef.current?.previousAttachmentDrafts ?? attachmentDraftsSnapshotRef.current;
         const previousSemanticDraftSnapshot = pendingMessageEditRef.current?.previousSemanticDraftSnapshot
             ?? captureComposerSemanticDraftSnapshot();
@@ -4635,6 +4652,7 @@ function SessionViewLoaded({
         captureComposerSemanticDraftSnapshot,
         captureDraftForOutboundHandoff,
         clearDraftCurrentness,
+        composerTextStore,
         clearMountedArmedContinuationAfterAcceptedComposerClear,
         replaceSessionAttachmentDrafts,
         setDraftValue,
@@ -4648,16 +4666,16 @@ function SessionViewLoaded({
         if (stillQueued) return;
 
         setPendingMessageEdit(null);
-        if (messageRef.current === edit.loadedText) {
+        if (composerTextStore.getPrompt() === edit.loadedText) {
             restorePendingEditComposerSnapshotIfSafe(edit);
         } else {
             restorePendingEditNonTextComposerSnapshotIfSafe(edit);
         }
-    }, [pendingMessages, restorePendingEditComposerSnapshotIfSafe, restorePendingEditNonTextComposerSnapshotIfSafe]);
+    }, [composerTextStore, pendingMessages, restorePendingEditComposerSnapshotIfSafe, restorePendingEditNonTextComposerSnapshotIfSafe]);
     React.useEffect(() => () => {
         const edit = pendingMessageEditRef.current;
         if (!edit) return;
-        if (messageRef.current === edit.loadedText) {
+        if (composerTextStore.getPrompt() === edit.loadedText) {
             restorePendingEditComposerSnapshotIfSafeRef.current(edit);
         } else {
             restorePendingEditNonTextComposerSnapshotIfSafeRef.current(edit);
@@ -5220,7 +5238,7 @@ function SessionViewLoaded({
             reviewCommentDrafts,
             defaultBackendTarget: sessionActionDefaultBackend?.backendTarget ?? null,
             defaultBackendId: sessionActionDefaultBackend?.defaultBackendId ?? null,
-            instructionsText: message,
+            getInstructionsText: composerTextStore.getPrompt,
         });
         const sessionMcpChip = useExistingSessionMcpSelection({
             sessionId,
@@ -5284,6 +5302,7 @@ function SessionViewLoaded({
                 connectedServicesDefaultProfileByServiceId: settings.connectedServicesDefaultProfileByServiceId,
                 connectedServicesProviderStateSharingSettingsV1: settings.connectedServicesProviderStateSharingSettingsV1,
                 connectedServicesDefaultAuthByAgentIdV1: settings.connectedServicesDefaultAuthByAgentIdV1,
+                connectedServicesAdditionalDefaultAuthByAgentIdV1: settings.connectedServicesAdditionalDefaultAuthByAgentIdV1,
             },
             switchingDisabledReason: connectedServicesAuthSwitchDisabledReason,
             sessionActive: session.active === true,
@@ -5344,13 +5363,23 @@ function SessionViewLoaded({
         }),
         [sessionId],
     );
+    const composerProfileId = liveComposerState.profileId;
+    const handleProfileClick = React.useCallback(() => {
+        const profileInfo = (composerProfileId === null || (typeof composerProfileId === 'string' && composerProfileId.trim() === ''))
+            ? t('profiles.noProfile')
+            : (typeof composerProfileId === 'string' ? composerProfileId : t('status.unknown'));
+        Modal.alert(
+            t('profiles.title'),
+            `${t('profiles.sessionUses', { profile: profileInfo })}\n\n${t('profiles.profilesFixedPerSession')}`,
+        );
+    }, [composerProfileId]);
     const handleAgentInputSend = useStableAgentInputOnSend((sendOptions) => {
         if (!hasWriteAccess) {
             Modal.alert(t('common.error'), t('session.sharing.noEditPermission'));
             return;
         }
 
-        const composerMessage = sendOptions?.inputTextOverride ?? message;
+        const composerMessage = sendOptions?.inputTextOverride ?? composerTextStore.getPrompt();
         const activePendingEdit = pendingMessageEditRef.current;
         if (activePendingEdit) {
             const nextText = composerMessage;
@@ -5692,7 +5721,7 @@ function SessionViewLoaded({
                     scopeKey: activeServerAccountScopeKey,
                     result,
                     intent: destination.intent,
-                    labels: buildArmedContinuationLabels(destination.intent.selection.agentId),
+                    labels: buildArmedContinuationLabels(destination.intent.selection),
                     localId: destination.localId,
                     reconciled: false,
                 });
@@ -6390,12 +6419,12 @@ function SessionViewLoaded({
                     />
                 </ComposerAuxiliaryFrame>
             ) : null}
-            {draftScope && draftSnapshot?.conflict && !draftConflictBanner.collapsed ? (
+            {draftScope && draftConflict && !draftConflictBanner.collapsed ? (
                 <ComposerAuxiliaryFrame>
                     <SessionDraftConflictResolution
                         scope={draftScope}
                         address={{ kind: 'session', sessionId }}
-                        conflict={draftSnapshot.conflict}
+                        conflict={draftConflict}
                     />
                 </ComposerAuxiliaryFrame>
             ) : null}
@@ -6403,7 +6432,7 @@ function SessionViewLoaded({
                 session={session}
                 sessionLatestUsage={session.latestUsage}
                 placeholder={isReadOnly ? t('session.sharing.viewOnlyMode') : t('session.inputPlaceholder')}
-                value={message}
+                composerTextStore={composerTextStore}
                 onChangeText={setDraftValue}
                 sessionId={sessionId}
                 inputComposerClearTransientStateRef={inputComposerClearTransientStateRef}
@@ -6431,16 +6460,7 @@ function SessionViewLoaded({
                 modelDiscoveryContext={resolveSessionModelDiscoveryContext}
                 metadata={session.metadata}
                 profileId={liveComposerState.profileId ?? undefined}
-                onProfileClick={liveComposerState.profileId !== null ? () => {
-                    const profileId = liveComposerState.profileId;
-                    const profileInfo = (profileId === null || (typeof profileId === 'string' && profileId.trim() === ''))
-                        ? t('profiles.noProfile')
-                        : (typeof profileId === 'string' ? profileId : t('status.unknown'));
-                    Modal.alert(
-                        t('profiles.title'),
-                        `${t('profiles.sessionUses', { profile: profileInfo })}\n\n${t('profiles.profilesFixedPerSession')}`,
-                    );
-                } : undefined}
+                onProfileClick={liveComposerState.profileId !== null ? handleProfileClick : undefined}
                 statusBadges={agentInputStatusBadges}
                 providerUsageGauge={providerUsageGauge}
                 onProviderUsageRecoveryCreditPress={providerUsageRecoveryCreditAction}

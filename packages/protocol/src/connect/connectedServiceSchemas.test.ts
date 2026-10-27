@@ -91,6 +91,7 @@ describe('connectedServiceSchemas', () => {
         expect(ConnectedServiceIdSchema.parse('anthropic')).toBe('anthropic');
         expect(ConnectedServiceIdSchema.parse('claude-subscription')).toBe('claude-subscription');
         expect(ConnectedServiceIdSchema.parse('gemini')).toBe('gemini');
+        expect(ConnectedServiceIdSchema.parse('antigravity')).toBe('antigravity');
         expect(ConnectedServiceIdSchema.parse('github')).toBe('github');
     });
 
@@ -140,6 +141,23 @@ describe('connectedServiceSchemas', () => {
         });
         expect(rec.kind).toBe('token');
         expect(rec.serviceId).toBe('github');
+    });
+
+    it.each(['oauth', 'token'] as const)('preserves omitted raw metadata in %s credential records', (kind) => {
+        const payload = kind === 'oauth'
+            ? { accessToken: 'at', refreshToken: 'rt', idToken: null, scope: null, tokenType: null, providerAccountId: null, providerEmail: null }
+            : { token: 'setup-token', providerAccountId: null, providerEmail: null };
+        const record = {
+            v: 1, serviceId: 'github', profileId: 'default', kind,
+            createdAt: 1, updatedAt: 1, expiresAt: null,
+            oauth: kind === 'oauth' ? payload : null,
+            token: kind === 'token' ? payload : null,
+        };
+        expect(ConnectedServiceCredentialRecordV1Schema.parse(record)).toEqual(record);
+        for (const raw of [null, { providerMetadata: 'retained' }]) {
+            const withRaw = { ...record, [kind]: { ...payload, raw } };
+            expect(ConnectedServiceCredentialRecordV1Schema.parse(withRaw)).toEqual(withRaw);
+        }
     });
 
     it('parses sealed credential payloads', () => {

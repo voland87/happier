@@ -32,6 +32,7 @@ import {
 import type { ThemeProfileMode, ThemeProfilesLocalStateV1 } from '@/theme/profiles/themeProfileTypes';
 import type { LocalSettings } from '@/sync/domains/settings/localSettings';
 import { Icon } from '@/components/ui/icons/Icon';
+import { isNativeBlurAvailable } from '@/components/ui/glass/blurMaterial';
 import {
     LOADING_INDICATOR_STYLE_LABEL_KEYS,
     LoadingIndicatorStylePreview,
@@ -95,6 +96,8 @@ export default React.memo(function AppearanceSettingsScreen() {
     const panelsSupported = Platform.OS === 'web' || deviceType === 'tablet';
     const [avatarStyle, setAvatarStyle] = useSettingMutable('avatarStyle');
     const [showFlavorIcons, setShowFlavorIcons] = useSettingMutable('showFlavorIcons');
+    const [showChatCodeBlockWrapControls, setShowChatCodeBlockWrapControls] = useSettingMutable('showChatCodeBlockWrapControls');
+    const [wrapChatCodeBlocks, setWrapChatCodeBlocks] = useSettingMutable('wrapChatCodeBlocks');
     const [themePreference, setThemePreference] = useLocalSettingMutable('themePreference');
     const [themeProfiles, setThemeProfiles] = useLocalSettingMutable('themeProfiles');
     const [uiFontScale, setUiFontScale] = useLocalSettingMutable('uiFontScale');
@@ -105,6 +108,7 @@ export default React.memo(function AppearanceSettingsScreen() {
     const [uiContentWidthMode, setUiContentWidthMode] = useLocalSettingMutable('uiContentWidthMode');
     const [uiMultiPanePanelsEnabled, setUiMultiPanePanelsEnabled] = useLocalSettingMutable('uiMultiPanePanelsEnabled');
     const [uiBackdropBlurEnabled, setUiBackdropBlurEnabled] = useLocalSettingMutable('uiBackdropBlurEnabled');
+    const [hapticsEnabled, setHapticsEnabled] = useLocalSettingMutable('hapticsEnabled');
     const [detailsPaneTabsBehavior, setDetailsPaneTabsBehavior] = useLocalSettingMutable('detailsPaneTabsBehavior');
     const [tabBarGitBadgeMode, setTabBarGitBadgeMode] = useSettingMutable('tabBarGitBadgeMode');
     const [tabBarFriendsBadgeEnabled, setTabBarFriendsBadgeEnabled] = useSettingMutable('tabBarFriendsBadgeEnabled');
@@ -433,6 +437,35 @@ export default React.memo(function AppearanceSettingsScreen() {
                 />
             </ItemGroup>
 
+            <ItemGroup title={t('settingsAppearance.chatCodeBlocks.title')}>
+                <Item
+                    title={t('settingsAppearance.chatCodeBlocks.showWrapControls')}
+                    subtitle={t('settingsAppearance.chatCodeBlocks.showWrapControlsDescription')}
+                    rightElement={
+                        <Switch
+                            testID="settings-appearance-showChatCodeBlockWrapControls-switch"
+                            accessibilityLabel={t('settingsAppearance.chatCodeBlocks.showWrapControls')}
+                            value={showChatCodeBlockWrapControls}
+                            onValueChange={setShowChatCodeBlockWrapControls}
+                        />
+                    }
+                    showChevron={false}
+                />
+                <Item
+                    title={t('settingsAppearance.chatCodeBlocks.wrapByDefault')}
+                    subtitle={t('settingsAppearance.chatCodeBlocks.wrapByDefaultDescription')}
+                    rightElement={
+                        <Switch
+                            testID="settings-appearance-wrapChatCodeBlocks-switch"
+                            accessibilityLabel={t('settingsAppearance.chatCodeBlocks.wrapByDefault')}
+                            value={wrapChatCodeBlocks}
+                            onValueChange={setWrapChatCodeBlocks}
+                        />
+                    }
+                    showChevron={false}
+                />
+            </ItemGroup>
+
             {/* Layout */}
             <ItemGroup title={t('settingsAppearance.display')} footer={t('settingsAppearance.displayDescription')}>
                 <DropdownMenu
@@ -507,6 +540,25 @@ export default React.memo(function AppearanceSettingsScreen() {
                     }}
                 />
             </ItemGroup>
+
+            {(Platform.OS === 'ios' || Platform.OS === 'android') && (
+                <ItemGroup title={t('settingsAppearance.feedback')}>
+                    <Item
+                        testID="settings-appearance-haptics"
+                        title={t('settingsAppearance.haptics')}
+                        subtitle={t('settingsAppearance.hapticsDescription')}
+                        icon={<Icon name="device-mobile" size={29} color={theme.colors.accent.blue} />}
+                        rightElement={
+                            <Switch
+                                testID="settings-appearance-haptics-switch"
+                                value={hapticsEnabled !== false}
+                                onValueChange={setHapticsEnabled}
+                            />
+                        }
+                        showChevron={false}
+                    />
+                </ItemGroup>
+            )}
 
             {/* Style */}
             <ItemGroup title={t('settingsAppearance.avatarStyle')}>
@@ -669,7 +721,8 @@ export default React.memo(function AppearanceSettingsScreen() {
                     }
                     showChevron={false}
                 />
-                {glassBlurEnabled ? (
+                {/* Intensity only tunes a real blur; Android glass is an unblurred tint. */}
+                {glassBlurEnabled && (Platform.OS === 'web' || isNativeBlurAvailable()) ? (
                     <DropdownMenu
                         open={openGlassBlurMenu}
                         onOpenChange={setOpenGlassBlurMenu}

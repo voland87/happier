@@ -32,7 +32,12 @@ function toProbeRawModel(
  * effort tiers.
  */
 export const claudePreflightModelsProbeAdapter: PreflightSessionControlsProbeAdapter = {
-  connectedServiceAuth: 'materialized-env-for-catalogs',
+  connectedServiceAuth: {
+    probeModels: 'provider-owned',
+    probeModes: 'not-required',
+    probeConfigOptions: 'not-required',
+    probeCatalogs: 'materialized-env',
+  },
   probeCatalogsRaw: probeClaudeCatalogs,
   modelProbeCachePolicy: 'provider-owned',
   failureCacheStrategy: 'cooldown',

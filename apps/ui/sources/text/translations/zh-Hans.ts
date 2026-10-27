@@ -298,6 +298,7 @@ const zhHansAcpCatalogSettingsExtension = {
     acpCatalogAuthParser: '状态解析器',
     acpCatalogCapabilities: '能力',
     acpCatalogTransportProfile: '传输配置',
+    acpCatalogSupportsLoadSession: '支持恢复会话',
     acpCatalogSupportsModes: '支持模式',
     acpCatalogSupportsModels: '支持模型',
     acpCatalogSupportsConfigOptions: '支持配置选项',
@@ -484,6 +485,15 @@ const promptLibraryUxRefinementTranslationExtension = {
 
 const sessionHandoffTranslationExtensions = {
   'zh-Hans': {
+    transferSessionData: {
+      title: "传输会话数据",
+      subtitle: "将此会话的对话历史复制到另一台机器。如果那里已有记录，请关闭此选项。",
+      checking: "正在检查两台机器是否支持…",
+      agentRequiresTransfer: "此智能体需要在机器之间传输会话数据。",
+      updateRequired: "请更新两台机器上的 Happier 以关闭此选项。",
+      sessionMissing: "目标机器上没有此会话的对话历史。请开启“传输会话数据”后重试。",
+      workspaceRequiresTransfer: "请开启“传输会话数据”以复制或同步工作区文件。",
+    },
     activeWarning: {
       title: '此会话仍在此设备上运行',
       message: '开始移交前，Happier 会先在这台设备上停止此会话，然后再将其转移到所选设备。',
@@ -1288,6 +1298,7 @@ export const zhHans: TranslationStructure = {
     working: "正在工作...",
     workingRetained: "工作中，等待更新…",
     keptInAttention: "已保留在需要注意",
+    archiving: "正在归档…",
     backgroundActive: ({ count }: { count: number }) => `后台运行 ${count} 项`,
     activityUnknown: "活动状态不可用",
     readyForReview: "已可审核",
@@ -2413,6 +2424,19 @@ export const zhHans: TranslationStructure = {
   },
 
   connectedServices: {
+    importAccounts: {
+        unknownResult: "导入结果未知。请刷新账户列表并检查此配置后再重试。",
+        title: "导入已有登录",
+        failed: "无法导入登录。请确认已在所选机器上登录，然后重试。",
+        actionDescription: "从你的某台机器复制登录",
+        description: "将登录复制到加密配置。共享的刷新令牌可能轮换，本机应用可能要求重新登录。",
+        unsupported: "无法导入。请选择其他机器或更新其CLI。",
+        credentialsUnavailable: "没有可用的登录。请在本机应用中登录后重试。",
+        profileConflict: "配置属于其他账户，或在导入期间发生了变化。请选择新名称。",
+        reauthorizationRequired: "请在本机应用中重新登录后重试。",
+        imported: "登录已导入",
+        refreshFailed: "登录已导入，但账户列表未刷新。请重新打开已连接服务。",
+    },
       subscription: {
           title: "订阅",
           currentPeriod: "当前周期",
@@ -2442,6 +2466,7 @@ export const zhHans: TranslationStructure = {
       openai: "OpenAI API 密钥",
       anthropic: "Anthropic API 密钥",
       gemini: "Google Gemini（谷歌）",
+      antigravity: 'Google Antigravity',
       github: "GitHub",
     },
     title: "已连接服务",
@@ -2462,6 +2487,7 @@ export const zhHans: TranslationStructure = {
                 profileMissing: '所选已连接账号不再可用。刷新账号列表并选择其他账号。',
                 groupMissing: '所选账号池不再可用。刷新账号列表并选择其他账号池。',
                 metadataUpdateFailed: '会话无法保存新的认证选择。请在会话完成同步后重试。',
+                restartDisallowedByExecutionPolicy: '此认证更改需要重启，但会话运行期间不允许重启。请先停止会话，再更改其认证。',
                 restartFailed: '无法使用新的认证选择重启会话。停止会话后重试。',
                 hotApplyFailed: '正在运行的会话拒绝了新的认证选择。重启会话后重试。',
                 agentMismatch: '此认证选择与会话后端不匹配。',
@@ -2539,6 +2565,7 @@ export const zhHans: TranslationStructure = {
       },
     },
     quota: {
+      refreshing: "正在刷新用量…",
       loading: "加载中…",
       error: ({ message }: { message: string }) => `错误：${message}`,
       lastUpdated: ({ time }: { time: string }) => `最后更新：${time}`,
@@ -2585,6 +2612,21 @@ export const zhHans: TranslationStructure = {
       resets: {
         use: "使用",
         available: "可用重置",
+        remainingCount: ({ count }: { count: number }) => `已保存的重置：${count}`,
+        appliesTo: ({ limits }: { limits: string }) => `适用于：${limits}`,
+        fiveHourLimit: "5 小时限制",
+        weeklyLimit: "每周限制",
+        unavailableReasons: {
+          paused: "已暂停",
+          cooldown: "等待冷却结束",
+          ineligible: "不符合条件",
+          not_selected: "未选择",
+          provider_unavailable: "提供商不可用",
+          not_started: "尚未开始",
+          expired: "已过期",
+          consumed: "已使用",
+          unknown: "当前不可用",
+        },
         rowLabel: ({ date, countdown }: { date: string; countdown: string }) => `${date} 到期 · ${countdown}`,
         now: "现在",
         inDays: ({ days }: { days: number }) => `${days} 天后`,
@@ -2606,6 +2648,12 @@ export const zhHans: TranslationStructure = {
       pasteRedirectUrlPromptBody:
         "完成 OAuth 后，从浏览器地址栏复制最终重定向的 URL 并粘贴到这里。",
       providerOverrides: {
+        antigravity: {
+          connectWebDescription: "下一步：使用 Google 登录。Antigravity 会显示可复制的授权码。",
+          pasteRedirectUrlPromptBody: "1) 使用 Google 登录。2) 复制 antigravity.google 显示的授权码。3) 保持此登录页面打开，并粘贴到下方。",
+          pasteRedirectUrlPlaceholder: "粘贴 Antigravity 授权码",
+          pasteRedirectUrlTitle: "粘贴授权码",
+        },
         claudeSubscription: {
           connectWebDescription:
             "下一步：在打开的页面中登录。Claude 可能会显示一段代码字符串，而不是自动重定向。",
@@ -2786,6 +2834,7 @@ export const zhHans: TranslationStructure = {
       addOauthProfileDeviceTitle: "通过设备认证添加",
       addOauthProfileDeviceSubtitle: "推荐用于 Web/远程环境",
       addOauthProfilePasteTitle: "通过粘贴重定向添加",
+      signInWithGoogle: '使用 Google 登录',
       addOauthProfilePasteSubtitle: "手动复制/粘贴重定向 URL 流程",
       addOauthProfileBrowserTitle: "通过应用内浏览器添加",
       addOauthProfileBrowserSubtitle: "在支持的环境中使用内嵌浏览器",
@@ -2829,6 +2878,7 @@ export const zhHans: TranslationStructure = {
       errors: {
         credentialReferencedByGroup: "此账号仍被账号池使用。请先从池中移除，然后重试。",
         credentialNotFound: "此已连接账号已被移除。",
+        serviceUnsupportedServer: '此中继不支持此连接服务。请更新中继以连接该服务。',
         credentialRequestFailed: "已连接账号请求失败。请刷新已连接服务后重试。",
         groupRequestFailed: "账号池请求失败。请刷新已连接服务后重试。",
         generationConflict: "此账号池在操作完成前已更改。请刷新已连接服务后重试。",
@@ -3991,6 +4041,10 @@ export const zhHans: TranslationStructure = {
                             }
                         }
                     },
+                    claudeCodeIncludeInNativeHistory: {
+                        title: "在 Claude Code 中显示会话",
+                        subtitle: "将新的 Claude 会话标记为 Happier 来源，包括 Agent SDK 会话。关闭时保留运行时默认值。"
+                    },
                     claudeCodeExperimentalAgentTeamsEnabled: {
                         title: "强制启用 Agent Teams",
                         subtitle: "在所有由 Happier 启动的 Claude 会话中启用 Claude Code 的实验性 Agent Teams（代理群）功能。"
@@ -4179,6 +4233,7 @@ export const zhHans: TranslationStructure = {
             agy: { title: 'Antigravity' },
             fx: { title: "FX" },
             droid: { title: "Factory Droid" },
+            codebuddy: { title: "CodeBuddy" },
             grok: {
                 title: "Grok Build"
             },
@@ -4290,6 +4345,9 @@ export const zhHans: TranslationStructure = {
       full: "全宽",
       fullDescription: "使用可用窗口宽度",
     },
+    feedback: "反馈",
+    haptics: "触感反馈",
+    hapticsDescription: "在此设备上为操作和重新排序提供触感反馈。",
     backdropBlur: "背景模糊",
     backdropBlurDescription: "在弹窗和菜单后使用背景模糊。关闭后可提升浏览器性能。",
     multiPanePanels: "右侧面板",
@@ -4310,6 +4368,13 @@ export const zhHans: TranslationStructure = {
     showLineNumbersInDiffsDescription: "在代码差异中显示行号",
     showLineNumbersInToolViews: "在工具视图中显示行号",
     showLineNumbersInToolViewsDescription: "在工具视图差异中显示行号",
+    chatCodeBlocks: {
+        title: '聊天代码块',
+        showWrapControls: '显示换行开关',
+        showWrapControlsDescription: '在每个聊天代码块上显示自动换行开关',
+        wrapByDefault: '默认自动换行',
+        wrapByDefaultDescription: '自动换行聊天代码块中的长行，除非单独更改该代码块的设置',
+    },
     wrapLinesInDiffs: "在代码视图中自动换行",
     wrapLinesInDiffsDescription: "在代码预览和编辑器中自动换行显示长行，而不是水平滚动",
     alwaysShowContextSize: "始终显示上下文大小",
@@ -4577,6 +4642,8 @@ export const zhHans: TranslationStructure = {
   },
 
   errors: {
+    machineRpcDecryptionFailed: "无法解密此机器的数据。请使用匹配的账户密钥登录后重试。",
+    machineRpcContextUnavailable: "此机器的连接不可用。请刷新机器列表后重试。",
     networkError: "发生网络错误",
     serverError: "发生服务器错误",
     unknownError: "发生未知错误",
@@ -5315,6 +5382,11 @@ export const zhHans: TranslationStructure = {
             showBannerAction: '显示横幅',
             hideBannerAction: '隐藏横幅',
 	    },
+	    runnerRestartBackgroundWork: {
+	        title: '后台任务正在运行',
+	        body: ({ count }: { count: number }) => `${count} 个后台任务正在运行。重启将停止它们。`,
+	        confirmAction: '停止并重启',
+	    },
 	    staleRunner: {
 	      title: "会话仍在旧版 CLI 上运行",
 	      body: "重启此会话运行器，以继续使用已更新的守护进程 CLI。Happier 会话本身保持不变。",
@@ -5712,7 +5784,7 @@ export const zhHans: TranslationStructure = {
         },
         discarded: {
           title: "已丢弃消息",
-          subtitle: "这些消息未发送给代理（例如从远程切换到本地时）。",
+          subtitle: "这些消息已不在队列中。投递结果可能不确定；重新发送前请检查对话记录。",
           label: "已丢弃",
           removeConfirm: {
             title: "移除已丢弃消息？",
@@ -5908,6 +5980,28 @@ export const zhHans: TranslationStructure = {
     targetSession: "目标会话",
     noTarget: "未选择会话",
     clearTarget: "清除目标",
+    errors: {
+        sendFailed: "无法将你的消息发送到会话。",
+        sttFailed: "无法转写你说的内容。请重试。",
+        sttTimeout: "语音识别超时。请检查网络连接后重试。",
+        sttAuthFailed: "语音识别拒绝了 API 密钥。请在 设置 → 语音 中检查密钥及其限制。",
+        sttRateLimited: "语音识别已达到速率限制。请稍等片刻后重试。",
+        missingSttBaseUrl: "请在 设置 → 语音 中设置语音识别服务器 URL。",
+        missingSttApiKey: "请在 设置 → 语音 中添加语音识别 API 密钥。",
+        recordingStartFailed: "无法启动麦克风。请确认没有其他应用正在使用它。",
+        recordingStopFailed: "无法完成录音。请重试。",
+        deviceSttUnavailable: "此设备不支持语音识别。请在 设置 → 语音 中选择其他语音识别提供方。",
+        speechPermissionDenied: "麦克风或语音识别权限被拒绝。请在设备设置中允许。",
+        deviceSttStartFailed: "无法启动语音识别。请重试。",
+        localNeuralSttUnavailable: "此版本不支持设备端语音识别。请在 设置 → 语音 中选择其他语音识别提供方。",
+        localNeuralPackNotInstalled: "请在 设置 → 语音 中下载语音模型。",
+        localNeuralSttStartFailed: "无法启动设备端语音识别。请重试。",
+        localNeuralAudioCaptureFailed: "麦克风意外停止。请重试。",
+        ttsFailed: "无法播放语音回复。请在 设置 → 语音 中检查语音合成。",
+        voiceAgentRequiresFeature: ({ feature }: { feature: string }) => `智能体模式需要在 设置 → 功能 中开启“${feature}”。`,
+        voiceAgentUnavailable: "此服务器不支持语音智能体。",
+        generic: "语音出现问题。",
+    },
     a11y: {
       teleport: "传送语音代理",
       toggleActivity: "切换语音活动",
@@ -6344,7 +6438,9 @@ export const zhHans: TranslationStructure = {
     fxSessionId: "FX 会话 ID",
     fxSessionIdCopied: "FX 会话 ID 已复制到剪贴板",
     droidSessionId: "Factory Droid 会话 ID",
+    codebuddySessionId: "CodeBuddy 会话 ID",
     droidSessionIdCopied: "Factory Droid 会话 ID 已复制到剪贴板",
+    codebuddySessionIdCopied: "CodeBuddy 会话 ID 已复制到剪贴板",
     customAcpSessionId: "自定义 ACP 会话 ID",
     grokSessionId: "Grok 会话 ID",
     grokSessionIdCopied: "Grok 会话 ID 已复制到剪贴板",
@@ -6578,6 +6674,8 @@ export const zhHans: TranslationStructure = {
     permissionMode: {
       title: "权限模式",
       effectiveLabel: ({ label }: { label: string }) => `生效：${label}`,
+      nativeModeOverrides: ({ mode }: { mode: string }) => `智能体模式 ${mode} 优先于此权限设置。清除模式覆盖后即可使用权限设置。`,
+            usePermissionSetting: '使用权限设置',
       default: "默认",
       readOnly: "只读",
       acceptEdits: "接受编辑",
@@ -6608,6 +6706,7 @@ export const zhHans: TranslationStructure = {
       agy: 'Antigravity',
       fx: "FX",
       droid: "Factory Droid",
+      codebuddy: "CodeBuddy",
       customAcp: "Custom ACP",
       pi: "Pi",
       copilot: "Copilot",
@@ -7692,7 +7791,7 @@ export const zhHans: TranslationStructure = {
         invalidActionSubtitle: "此操作在此版本中不再可用。",
         configureActionAccessibilityLabel: "配置操作",
         approvalHelpTitle: "批准模式",
-        approvalHelpBody: "“先询问”会在此操作从该界面运行前创建批准请求。对于 AI 会话，该请求会排入现有批准界面，而不会在模态窗口中等待。“允许”则让此操作从该界面运行，而无需批准请求。",
+        approvalHelpBody: "“先询问”要求在此操作从该界面运行前获得批准。应用内控件可能显示确认对话框。对于 AI 会话，批准请求会排入现有批准界面，而不会在模态窗口中等待。“允许”则让此操作无需批准请求即可运行。",
         toolExposure: {
             title: "工具公开",
             footer: "控制符合条件的操作是显示为直接工具，还是仅可通过操作发现使用。",
@@ -7865,6 +7964,14 @@ settingsSession: {
 	        workingStatusAnimatedTextTitle: '动态工作文本',
 	        workingStatusAnimatedTextEnabledSubtitle: '会话运行时轮换工作动词',
 	        workingStatusAnimatedTextDisabledSubtitle: '会话运行时显示固定的“正在工作...”标签',
+	        backgroundWorkAttentionModeTitle: "后台工作期间的未读回复",
+	        backgroundWorkAttentionModeSubtitle: "选择后台工作继续进行时未读回复的显示位置。需要你处理的请求仍会标记为需要注意。",
+	        backgroundWorkAttentionKeepWorkingTitle: "保留工作状态",
+	        backgroundWorkAttentionKeepWorkingSubtitle: "保持工作状态，并在有未读回复时显示蓝色中心圆点",
+	        backgroundWorkAttentionKeepWorkingUnreadTitle: "在“正在工作”中显示未读状态",
+	        backgroundWorkAttentionKeepWorkingUnreadSubtitle: "将会话保留在“正在工作”，在你阅读回复前显示未读状态",
+	        backgroundWorkAttentionShowUnreadTitle: "将未读会话移至“需要注意”",
+	        backgroundWorkAttentionShowUnreadSubtitle: "后台工作继续进行时，将有未读回复的会话移至“需要注意”",
 	        attentionPromotionModeTitle: '需要注意的会话',
 	        attentionPromotionModeSubtitle: '选择等待你处理或可供查看的会话出现的位置',
 	        attentionPromotionModeOffTitle: '保留在常规位置',
@@ -8981,6 +9088,26 @@ settingsSession: {
           },
         },
       },
+      modelPackDownload: {
+        progress: ({ loaded, total }: { loaded: string; total: string }) => `${loaded} / ${total}`,
+        progressWithFiles: ({ loaded, total, filesDone, filesTotal }: { loaded: string; total: string; filesDone: number; filesTotal: number }) =>
+          `${loaded} / ${total} · ${filesDone} / ${filesTotal} 个文件`,
+        progressAccessibilityLabel: "下载进度",
+        verifyingDetail: "正在校验",
+        verifyingProgress: ({ verified, total, filesDone, filesTotal }: { verified: string; total: string; filesDone: number; filesTotal: number }) =>
+          `已校验 ${verified} / ${total} · ${filesDone} / ${filesTotal} 个文件`,
+        verifyingAccessibilityLabel: "校验进度",
+        failedDetail: "失败",
+        failedSubtitle: "无法准备模型。轻点以重试。",
+        failedResumableSubtitle: ({ size }: { size: string }) => `下载未完成。已保留 ${size}，轻点即可继续。`,
+        incompleteDetail: "未完成",
+        incompleteSubtitle: ({ size }: { size: string }) => `目前已下载 ${size}。轻点以继续。`,
+        discardSubtitle: "删除未完成的下载以释放空间。",
+        discardConfirmTitle: "放弃未完成的下载？",
+        discardConfirmBody: ({ size }: { size: string }) => `这将删除目前已下载的 ${size}。之后可以重新下载模型。`,
+        insufficientStorage: ({ required, available }: { required: string; available: string }) =>
+            `可用空间不足。此下载需要 ${required}，但仅剩 ${available} 可用。`,
+      },
       localNeuralStt: {
         modelPack: {
           title: "模型包",
@@ -9001,12 +9128,6 @@ settingsSession: {
           installedWithBuild: ({ build }: { build: string }) =>
             `已安装 • ${build}`,
           notInstalled: "未安装",
-        },
-        language: {
-          title: "语言",
-          subtitle: "可选的 BCP-47 语言标签。",
-          promptTitle: "语言",
-          promptBody: "输入 BCP-47 语言标签（例如：en, en-US）。",
         },
         alerts: {
           downloadFailedTitle: "下载失败",
@@ -9037,6 +9158,8 @@ settingsSession: {
           enableTitle: "启用免提",
           silenceTitle: "静默超时（毫秒）",
           minSpeechTitle: "最短语音（毫秒）",
+          pushToTalkTitle: "按键说话",
+          pushToTalkSubtitle: "此提供商会转写完成的录音，再次点按麦克风即可发送。如需免提，请选择设备或本地神经语音识别。",
         },
         customBackendIdSubtitle: "输入自定义后端 ID。",
         searchBackendsPlaceholder: "搜索后端",
@@ -9253,8 +9376,7 @@ settingsSession: {
       sttProvider: "STT 提供方",
       neuralStt: {
         title: "设备端 STT",
-        webNotAvailableSubtitle:
-          "Web 不可用。请使用设备、OpenAI 兼容或 Gemini STT。",
+        webFallbackSubtitle: "仅在移动应用中可用。在浏览器中，语音将改用浏览器的语音识别。",
       },
       ttsBaseUrl: "TTS 基础 URL",
       ttsBaseUrlTitle: "TTS 基础 URL",
@@ -9514,6 +9636,7 @@ settingsSession: {
       checking: "正在检查…",
       failedGeneric: "更新未完成，请重试。",
       remoteUnsupported: "这台机器无法远程更新其命令行工具。请在该机器上直接更新。",
+      archiveExpandedByteLimit: "下载的运行时超过了解压大小限制。请更新 Happier 后重试。",
       updateNotVerified: "更新已运行，但版本没有变化。",
       rolledBackLocal: "更新未能启动，因此这台电脑已恢复到之前的版本。",
       smokeFailed: "新版本无法在这台电脑上运行，因此没有任何更改。",
@@ -10049,6 +10172,7 @@ settingsSession: {
     blockedTitle: '设置已停止',
     blockedStatusFallback: '设置未能完成。你的账户和会话没有受到影响。',
     blockedServiceConflictStatus: '需要先处理这台电脑上的另一个后台服务。它保持原样——打开“详情”可以查看是哪一个。',
+    blockedServiceManagerUnavailableStatus: 'Happier 无法在这台电脑上设置后台服务。打开“详情”查看帮助，或继续使用其他机器。',
     blockedConsentDeclinedStatus: '设置已停止。这台电脑上原有的后台服务保持原样。',
     blockedAccountKeptStatus: '设置已停止。这台电脑仍连接到它当前登录的账号。',
     blockedAccountChangedStatus: '设置期间这台电脑登录了另一个账号，因此设置在配对前已停止。请重试。',
@@ -10338,6 +10462,7 @@ settingsSession: {
     providerStateSharingDegraded: "提供商状态共享已部分应用",
     connectedServiceRuntimeAuthRecoveryRecovered: "提供商身份验证已恢复",
     connectedServiceRuntimeAuthRecoveryCancelled: "提供商身份验证恢复已取消",
+        connectedServiceRuntimeAuthRecoveryStopped: "提供商恢复已停止；不会自动重试",
     runtimeConfigOutcomeAppliesBeforeNextMessage: "将在你下一条消息前生效",
     runtimeConfigOutcomeQueuedUntilReady: "已排队，等待就绪",
     runtimeConfigOutcomeAlreadySet: "已设置",
@@ -10654,8 +10779,8 @@ settingsSession: {
       anthropic: "Anthropic（默认）",
       deepseek: "DeepSeek（推理）",
       zai: "Z.AI (GLM-4.6)",
-      minimax: "MiniMax (M3)",
-      minimaxCn: "MiniMax (M3, CN)",
+      minimax: "MiniMax (M3.1 Flash)",
+      minimaxCn: "MiniMax (M3.1 Flash, CN)",
       codex: "Codex（默认）",
       openai: "OpenAI (GPT-5)",
       azureOpenai: "Azure OpenAI",
@@ -10818,6 +10943,7 @@ settingsSession: {
       agySubtitleExperimental: "Antigravity 命令行（实验）",
       fxSubtitleExperimental: "FX 命令行（实验）",
       droidSubtitleExperimental: "Factory Droid 命令行（实验）",
+      codebuddySubtitleExperimental: "CodeBuddy Code 命令行（实验）",
       customAcpSubtitleExperimental: "自定义 ACP 命令行（实验）",
       grokSubtitleExperimental: "Grok Build 命令行（实验）",
       piSubtitleExperimental: "Pi 命令行（实验）",

@@ -27,6 +27,7 @@ import {
 import { createNotAuthenticatedError } from '@/sync/runtime/connectivity/authErrors';
 import { isSocketIoAckTimeoutError, raceSocketIoAckTimeout } from '@/sync/runtime/socketIoAckTimeout';
 import type { SocketRpcAuthorizationContext } from '@happier-dev/protocol/rpc';
+import { t } from '@/text';
 
 const STATIC_EXPO_PUBLIC_HAPPIER_SOCKET_ACK_AUTH_SETTLE_TIMEOUT_MS =
     process.env.EXPO_PUBLIC_HAPPIER_SOCKET_ACK_AUTH_SETTLE_TIMEOUT_MS;
@@ -416,16 +417,16 @@ class ApiSocket {
             onIssued?: () => void;
         },
     ): Promise<R> {
-        const machineEncryption = this.encryption!.getMachineEncryption(machineId);
+        const machineEncryption = this.encryption?.getMachineEncryption(machineId);
         if (!machineEncryption) {
-            throw new Error(`Machine encryption not found for ${machineId}`);
+            throw createRpcCallError({ error: t('errors.machineRpcDecryptionFailed'), errorCode: 'machine_rpc_context_unavailable' });
         }
 
         const result: any = await this.emitWithAck(
             SOCKET_RPC_EVENTS.CALL,
             buildSocketRpcCallPayload({
                 method: `${machineId}:${method}`,
-                payload: await machineEncryption.encryptRaw(params),
+                payload: await machineEncryption.encodeRpcPayload(params),
                 timeoutMs: options?.timeoutMs,
                 authorization: options?.authorization,
             }),
@@ -433,7 +434,7 @@ class ApiSocket {
         );
 
         if (result.ok) {
-            return await machineEncryption.decryptRaw(result.result) as R;
+            return await machineEncryption.decodeRpcResult(result.result) as R;
         }
         throw createRpcCallError({
             error: typeof result.error === 'string' ? result.error : 'RPC call failed',
@@ -474,7 +475,10 @@ class ApiSocket {
     // HTTP Requests
     //
 
-    async request(path: string, options?: RequestInit): Promise<Response> {
+    request(path: string, options?: RequestInit): Promise<Response>;
+    /** Consume the response body while HTTP cancellation and the initiating Home scope remain enforced. */
+    request<T>(path: string, options: RequestInit | undefined, consumeResponse: (response: Response) => Promise<T>): Promise<T>;
+    async request<T>(path: string, options?: RequestInit, consumeResponse?: (response: Response) => Promise<T>): Promise<Response | T> {
         if (!this.config) {
             throw new Error('SyncSocket not initialized');
         }
@@ -500,6 +504,34 @@ class ApiSocket {
         const hasSignal = Boolean(options?.signal);
         const headers = new Headers(options?.headers);
         headers.set('Authorization', `Bearer ${credentials.token}`);
+
+        const validateResponseScope = () => {
+            const current = getActiveServerSnapshot();
+            if (current.generation !== snapshot.generation || current.serverId !== snapshot.serverId) {
+                throw new StaleServerGenerationError();
+            }
+        };
+        const observeResponse = (response: Response) => {
+            validateResponseScope();
+            // Best-effort server time calibration using the HTTP Date header.
+            try {
+                const dateHeader = response.headers.get('date');
+                const serverNow = dateHeader ? Date.parse(dateHeader) : Number.NaN;
+                if (!Number.isNaN(serverNow)) observeServerTimestamp(serverNow);
+            } catch {
+                // Best-effort only
+            }
+        };
+
+        if (consumeResponse) {
+            // Body consumers own their complete read; they cannot share an in-flight Response.
+            return await serverFetch(url, { ...options, headers }, { includeAuth: false }, async (response) => {
+                observeResponse(response);
+                const result = await consumeResponse(response);
+                validateResponseScope();
+                return result;
+            });
+        }
 
         const canDedupe =
             (method === 'GET' || method === 'HEAD')
@@ -547,24 +579,7 @@ class ApiSocket {
             );
         }
 
-        const current = getActiveServerSnapshot();
-        if (current.generation !== snapshot.generation || current.serverId !== snapshot.serverId) {
-            throw new StaleServerGenerationError();
-        }
-
-        // Best-effort server time calibration using the HTTP Date header ("server now").
-        // This avoids deriving "now" from potentially stale resource timestamps (e.g. session.updatedAt).
-        try {
-            const dateHeader = response.headers.get('date');
-            if (dateHeader) {
-                const serverNow = Date.parse(dateHeader);
-                if (!Number.isNaN(serverNow)) {
-                    observeServerTimestamp(serverNow);
-                }
-            }
-        } catch {
-            // Best-effort only
-        }
+        observeResponse(response);
 
         return response;
     }

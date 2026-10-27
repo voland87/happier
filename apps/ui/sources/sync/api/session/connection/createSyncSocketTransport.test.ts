@@ -1,4 +1,5 @@
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
+import { ConnectedServiceIdSchema } from '@happier-dev/protocol';
 
 type SocketHandler = (...args: any[]) => void;
 
@@ -80,6 +81,7 @@ describe('createSyncSocketTransport', () => {
             expect.objectContaining({
                 path: '/v1/updates/',
                 auth: {
+                    connectedServiceIds: ConnectedServiceIdSchema.options,
                     token: 'token-a',
                     clientType: 'user-scoped',
                     clientPurpose: 'sync',

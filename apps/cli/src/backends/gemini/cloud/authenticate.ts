@@ -11,22 +11,15 @@ import {
     GEMINI_CLI_OAUTH_SCOPES,
 } from '@happier-dev/agents';
 import { generatePkceCodes } from '@/cloud/pkce';
-import { buildSafeOauthProviderFailureMessage } from '@/cloud/safeOauthProviderError';
+import { exchangeGoogleOauthAuthorizationCodeForTokens, type GoogleOauthTokens } from '@/cloud/googleOauthTokenExchange';
 import { openBrowser } from '@/ui/openBrowser';
 import type { CloudConnectAuthenticateOptions } from '@/cloud/connectTypes';
 import { startOauthPkceWithPasteFallback } from '@/cloud/oauthPkceWithPasteFallback';
 import { promptInput } from '@/terminal/prompts/promptInput';
-import { resolveGeminiOauthClientId, resolveGeminiOauthClientSecret, resolveGeminiOauthTokenUrl } from '@/daemon/connectedServices/shared/oauthConfig';
+import { resolveGeminiOauthClientId } from '@/daemon/connectedServices/shared/oauthConfig';
 import { dim, fail, info, ok } from '@happier-dev/cli-common/output';
 
-export interface GeminiAuthTokens {
-    access_token: string;
-    refresh_token?: string;
-    token_type: string;
-    expires_in: number;
-    scope: string;
-    id_token?: string;
-}
+export type GeminiAuthTokens = GoogleOauthTokens;
 
 // Google OAuth Configuration for Gemini
 const DEFAULT_PORT = 54545;
@@ -37,36 +30,7 @@ export async function exchangeGeminiAuthorizationCodeForTokens(params: Readonly<
     verifier: string;
     redirectUri: string;
 }>): Promise<GeminiAuthTokens> {
-    const clientId = resolveGeminiOauthClientId(process.env);
-    const clientSecret = resolveGeminiOauthClientSecret(process.env);
-    const tokenUrl = resolveGeminiOauthTokenUrl(process.env);
-    const response = await fetch(tokenUrl, {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/x-www-form-urlencoded',
-        },
-        body: new URLSearchParams({
-            grant_type: 'authorization_code',
-            client_id: clientId,
-            client_secret: clientSecret,
-            code: params.code,
-            code_verifier: params.verifier,
-            redirect_uri: params.redirectUri,
-        }),
-    });
-
-    if (!response.ok) {
-        const body = await response.text().catch(() => '');
-        throw new Error(buildSafeOauthProviderFailureMessage({
-            operation: 'Token exchange',
-            status: response.status,
-            statusText: response.statusText,
-            body,
-        }));
-    }
-
-    const data = (await response.json()) as GeminiAuthTokens;
-    return data;
+    return exchangeGoogleOauthAuthorizationCodeForTokens({ serviceId: 'gemini', ...params });
 }
 
 /**

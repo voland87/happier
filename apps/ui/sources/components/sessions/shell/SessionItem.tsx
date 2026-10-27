@@ -180,6 +180,7 @@ type SessionItemRenderProps = Omit<SessionItemBaseProps, 'activityTimeMode' | 's
     sessionSubtitle: string;
     workContextPreview: SessionListRowModel['workContextPreview'];
     pendingCount: number;
+    hasUnreadMessages: boolean;
     draft: SessionListRowModel['draft'];
     reminder: SessionListRowModel['reminder'];
     /** Live agent work in this session, already named. `null` unless the person opted in (R-8). */
@@ -900,6 +901,7 @@ const SessionItemContent = React.memo(
         sessionSubtitle,
         workContextPreview,
         pendingCount,
+        hasUnreadMessages,
         draft,
         reminder,
         agentActivityLabel,
@@ -1321,6 +1323,7 @@ const SessionItemContent = React.memo(
                 setTagMenuOpen(true);
             },
             reminder,
+            archiving: sessionStatus.state === 'archiving',
         });
 
         const handleSwipeAction = React.useCallback(async () => {
@@ -1373,9 +1376,11 @@ const SessionItemContent = React.memo(
         const rowStatusColor = rowPresentation.backgroundActivityStatusLine === true
             ? theme.colors.text.secondary
             : resolveSessionRowAttentionStateColor(rowAttentionState, theme);
-        const rowAttentionAccessibilityLabel =
+        const primaryAttentionAccessibilityLabel =
             rowAttentionState === 'failed'
                 ? t('status.error')
+                : rowPresentation.attentionIndicator === 'unread'
+                ? t('settingsNotifications.badges.unreadTitle')
                 : rowPresentation.attentionIndicator === 'working'
                 || rowPresentation.attentionIndicator === 'permission'
                 || rowPresentation.attentionIndicator === 'action'
@@ -1383,6 +1388,11 @@ const SessionItemContent = React.memo(
                 : rowPresentation.statusTextKey
                     ? statusLineText
                     : undefined;
+        const announcesUnreadAndWork = (rowPresentation.attentionIndicator === 'working' && hasUnreadMessages)
+            || (rowPresentation.attentionIndicator === 'unread' && sessionStatus.state === 'background_active');
+        const rowAttentionAccessibilityLabel = announcesUnreadAndWork
+            ? `${statusLineText}, ${t('settingsNotifications.badges.unreadTitle')}`
+            : primaryAttentionAccessibilityLabel;
         const shouldShowStatusSecondaryLine = rowPresentation.secondaryLine === 'status' && statusLineText.trim().length > 0;
         const shouldShowPathSecondaryLine = rowPresentation.secondaryLine === 'path' && Boolean(sessionSubtitle);
         const shouldUsePathSubtitleStartEllipsis = shouldShowPathSecondaryLine && effectiveSubtitleEllipsizeMode === 'head';
@@ -1423,7 +1433,7 @@ const SessionItemContent = React.memo(
         const showInlineTagChips = showTagChips && tagDisplayPlan.placement === 'inline';
         const showBelowTagChips = showTagChips && tagDisplayPlan.placement === 'below';
         const enableLongPressContextMenu =
-            Platform.OS === 'ios'
+            isNativeMobile
             && nativeInlineDragEnabled !== true
             && contextMenuItems.length > 0;
         const openContextMenuFromLongPress = React.useCallback(() => {
@@ -1501,6 +1511,177 @@ const SessionItemContent = React.memo(
                         </Text>
                     </View>
                 ))}
+            </View>
+        );
+
+        const sessionRightArea = (
+            <View
+                testID="session-item-right-area"
+                style={styles.rightArea}
+                onPointerEnter={isWeb ? handleActionsHoverIn : undefined}
+                onPointerLeave={isWeb ? handleActionsHoverOut : undefined}
+            >
+                {showInlineTagChips ? renderTagChipRow('inline') : null}
+                <CopiedPill
+                    visible={copyFeedback.isCopied(resolvedSession.id)}
+                    testID={`session-item-copy-debug-feedback:${resolvedSession.id}`}
+                />
+                {showRowActions ? (
+                    <View style={styles.rowActionsRow}>
+                        {showReorderHandle && reorderHandleGesture ? (
+                            <GestureDetector gesture={reorderHandleGesture}>
+                                <View
+                                    testID="session-item-reorder-handle"
+                                    style={styles.rowActionButton}
+                                    onPointerDown={isWeb ? suppressNextRowPressTemporarily : undefined}
+                                    onPointerUp={isWeb ? suppressNextRowPressTemporarily : undefined}
+                                    onPointerCancel={isWeb ? suppressNextRowPressTemporarily : undefined}
+                                >
+                                    <Icon name="list" size={16} color={rowActionIconColor} />
+                                </View>
+                            </GestureDetector>
+                        ) : null}
+                        {showTagAction ? (
+                            tagMenuEverOpened || Platform.OS === 'web' ? (
+                                <DropdownMenu
+                                    open={tagMenuOpen}
+                                    onOpenChange={(next) => {
+                                        setTagMenuOpen(next);
+                                        if (next) setTagMenuEverOpened(true);
+                                    }}
+                                    items={tagMenuItems}
+                                    onSelect={handleTagMenuSelect}
+                                    onCreateItem={handleTagMenuCreate}
+                                    createItemDisplay={(query) => ({
+                                        title: `${t('dropdown.createItem.prefix')} ${query}`,
+                                        leftGap: 8,
+                                        rowContainerStyle: { paddingVertical: 6 },
+                                        titleStyle: { fontSize: 14, lineHeight: 20 },
+                                        titleNode: (
+                                            <>
+                                                {t('dropdown.createItem.prefix')}
+                                                <RNText style={styles.tagChipInlineText} numberOfLines={1}>
+                                                    {query}
+                                                </RNText>
+                                            </>
+                                        ),
+                                        icon: <Icon name="plus" size={16} color={rowActionIconColor} />,
+                                    })}
+                                    placement="left"
+                                    variant="slim"
+                                    search={true}
+                                    searchPlaceholder={t('sessionTags.searchOrAddPlaceholder')}
+                                    emptyLabel={null}
+                                    showCategoryTitles={false}
+                                    matchTriggerWidth={false}
+                                    maxWidthCap={220}
+                                    popoverPortalWebTarget="body"
+                                    trigger={({ toggle }) => (
+                                        <Pressable
+                                            testID="session-item-tag-action"
+                                            style={styles.rowActionButton}
+                                            onPress={(e) => {
+                                                stopRowPressPropagation(e);
+                                                setTagMenuEverOpened(true);
+                                                toggle();
+                                            }}
+                                            accessibilityRole="button"
+                                            accessibilityLabel={t('sessionTags.editTagsLabel')}
+                                            hitSlop={8}
+                                        >
+                                            <TagIcon size={14} color={rowActionIconColor} />
+                                        </Pressable>
+                                    )}
+                                />
+                            ) : (
+                                <Pressable
+                                    testID="session-item-tag-action"
+                                    style={styles.rowActionButton}
+                                    onPress={(e) => {
+                                        stopRowPressPropagation(e);
+                                        setTagMenuEverOpened(true);
+                                        setTagMenuOpen(true);
+                                    }}
+                                    accessibilityRole="button"
+                                    accessibilityLabel={t('sessionTags.editTagsLabel')}
+                                    hitSlop={8}
+                                >
+                                    <TagIcon size={14} color={rowActionIconColor} />
+                                </Pressable>
+                            )
+                        ) : null}
+                        {supportsPin ? (
+                            <Pressable
+                                style={styles.rowActionButton}
+                                onPress={(e) => {
+                                    stopRowPressPropagation(e);
+                                    handleTogglePinnedAction();
+                                }}
+                                accessibilityRole="button"
+                                accessibilityLabel={pinned ? t('sessionInfo.unpinSession') : t('sessionInfo.pinSession')}
+                                hitSlop={8}
+                            >
+                                {pinned ? (
+                                    <PinSlashIcon size={14} color={rowActionIconColor} />
+                                ) : (
+                                    <PinIcon size={14} color={rowActionIconColor} />
+                                )}
+                            </Pressable>
+                        ) : null}
+                        {moreMenuItems.length > 0 ? (
+                            <DropdownMenu
+                                open={moreMenuOpen}
+                                onOpenChange={setMoreMenuOpen}
+                                items={moreMenuItems}
+                                onSelect={handleMoreMenuSelect}
+                                placement="left"
+                                variant="slim"
+                                matchTriggerWidth={false}
+                                maxWidthCap={220}
+                                showCategoryTitles={false}
+                                popoverPortalWebTarget="body"
+                                trigger={({ toggle }) => (
+                                    <Pressable
+                                        testID="session-item-more-menu"
+                                        style={styles.rowActionButton}
+                                        onPress={(e) => {
+                                            stopRowPressPropagation(e);
+                                            toggle();
+                                        }}
+                                        accessibilityRole="button"
+                                        accessibilityLabel={t('common.moreActions')}
+                                        hitSlop={8}
+                                    >
+                                        <Icon name="dots-three" size={14} color={rowActionIconColor} />
+                                    </Pressable>
+                                )}
+                            />
+                        ) : null}
+                    </View>
+                ) : showTrailingAttentionIndicator || showTrailingActivityTime ? (
+                    <View style={styles.trailingMetaRow}>
+                        {showTrailingAttentionIndicator ? (
+                            <SessionRowAttentionIndicator
+                                indicator={trailingAttentionIndicator}
+                                sessionId={`${resolvedSession.id}-trailing`}
+                                attentionState={rowAttentionState}
+                                accessibilityLabel={rowAttentionAccessibilityLabel}
+                                hasUnreadMessages={hasUnreadMessages}
+                                workingMode={workingIndicatorMode}
+                                workingSpinnerTone="neutral"
+                                animationEnabled={attentionIndicatorAnimationEnabled}
+                            />
+                        ) : null}
+                        {showTrailingActivityTime ? (
+                            <Text
+                                style={[styles.activityTime, isMinimal ? styles.activityTimeMinimal : null]}
+                                numberOfLines={1}
+                            >
+                                {activityTimeLabel}
+                            </Text>
+                        ) : null}
+                    </View>
+                ) : null}
             </View>
         );
 
@@ -1668,254 +1849,89 @@ const SessionItemContent = React.memo(
                                     </View>
                                 ) : null}
                             </View>
-
-                            {draft && !compact && draft.preview ? (
-                                <Text
-                                    testID={`session-list-draft-preview:${resolvedSession.id}`}
-                                    style={styles.draftPreviewText}
-                                    numberOfLines={1}
-                                >
-                                    {`${t('sessionDrafts.badge')} · ${draft.preview}`}
-                                </Text>
-                            ) : showStandardSecondaryLine ? (
-                                shouldShowIdentitySubtitleSkeleton ? (
-                                    <Animated.View
-                                        testID={`session-list-subtitle-loading-${resolvedSession.id}`}
-                                        style={[
-                                            compact ? styles.sessionSubtitleLoadingCompact : styles.sessionSubtitleLoading,
-                                            { opacity: identitySkeletonOpacity },
-                                        ]}
-                                    />
-                                ) : effectiveSecondaryLineMode === 'status' ? (
-                                    <View
-                                        testID={`session-list-status-subtitle-${resolvedSession.id}-${rowAttentionState}`}
-                                        style={styles.secondaryLineRow}
-                                    >
-                                        <View style={styles.secondaryStatusDotContainer}>
-                                            {rowPresentation.attentionIndicator !== 'none' ? (
-                                                <SessionRowAttentionIndicator
-                                                    indicator={rowPresentation.attentionIndicator}
-                                                    sessionId={`${resolvedSession.id}-secondary`}
-                                                    attentionState={rowAttentionState}
-                                                    accessibilityLabel={rowAttentionAccessibilityLabel}
-                                                    workingMode={workingIndicatorMode}
-                                                    animationEnabled={attentionIndicatorAnimationEnabled}
-                                                />
-                                            ) : null}
-                                        </View>
-                                        <Text
-                                            testID={`session-list-status-subtitle-text-${resolvedSession.id}-${rowAttentionState}`}
-                                            style={[
-                                                styles.statusText,
-                                                compact ? styles.statusTextCompact : null,
-                                                { color: rowStatusColor },
-                                            ]}
-                                            numberOfLines={1}
-                                        >
-                                            {statusLineText}
-                                        </Text>
-                                        {agentActivityLabel !== null ? (
-                                            <Text
-                                                testID={`session-list-agent-activity-count-${resolvedSession.id}`}
-                                                style={[
-                                                    styles.statusText,
-                                                    compact ? styles.statusTextCompact : null,
-                                                    styles.agentActivityCountText,
-                                                ]}
-                                                numberOfLines={1}
-                                            >
-                                                {agentActivityLabel}
-                                            </Text>
-                                        ) : null}
-                                    </View>
-                                ) : (
-                                    <Text
-                                        style={[
-                                            styles.sessionSubtitle,
-                                            compact ? styles.sessionSubtitleCompact : null,
-                                            shouldUseWebPathSubtitleStartEllipsis ? styles.sessionPathSubtitleWeb : null,
-                                        ]}
-                                        numberOfLines={1}
-                                        ellipsizeMode={shouldUseWebPathSubtitleStartEllipsis ? undefined : effectiveSubtitleEllipsizeMode}
-                                    >
-                                        {shouldUseWebPathSubtitleStartEllipsis ? (
-                                            <Text style={styles.sessionPathSubtitleTextWeb}>
-                                                {sessionSubtitle}
-                                            </Text>
-                                        ) : sessionSubtitle}
-                                    </Text>
-                                )
-                            ) : null}
-
                         </View>
-                        <View
-                            testID="session-item-right-area"
-                            style={styles.rightArea}
-                            onPointerEnter={isWeb ? handleActionsHoverIn : undefined}
-                            onPointerLeave={isWeb ? handleActionsHoverOut : undefined}
+                        {sessionRightArea}
+                    </View>
+
+                    {draft && !compact && draft.preview ? (
+                        <Text
+                            testID={`session-list-draft-preview:${resolvedSession.id}`}
+                            style={styles.draftPreviewText}
+                            numberOfLines={1}
                         >
-                            {showInlineTagChips ? renderTagChipRow('inline') : null}
-                            <CopiedPill
-                                visible={copyFeedback.isCopied(resolvedSession.id)}
-                                testID={`session-item-copy-debug-feedback:${resolvedSession.id}`}
+                            {`${t('sessionDrafts.badge')} · ${draft.preview}`}
+                        </Text>
+                    ) : showStandardSecondaryLine ? (
+                        shouldShowIdentitySubtitleSkeleton ? (
+                            <Animated.View
+                                testID={`session-list-subtitle-loading-${resolvedSession.id}`}
+                                style={[
+                                    compact ? styles.sessionSubtitleLoadingCompact : styles.sessionSubtitleLoading,
+                                    { opacity: identitySkeletonOpacity },
+                                ]}
                             />
-                            {showRowActions ? (
-                                <View style={styles.rowActionsRow}>
-                                    {showReorderHandle && reorderHandleGesture ? (
-                                        <GestureDetector gesture={reorderHandleGesture}>
-                                            <View
-                                                testID="session-item-reorder-handle"
-                                                style={styles.rowActionButton}
-                                                onPointerDown={isWeb ? suppressNextRowPressTemporarily : undefined}
-                                                onPointerUp={isWeb ? suppressNextRowPressTemporarily : undefined}
-                                                onPointerCancel={isWeb ? suppressNextRowPressTemporarily : undefined}
-                                            >
-                                                <Icon name="list" size={16} color={rowActionIconColor} />
-                                            </View>
-                                        </GestureDetector>
-                                    ) : null}
-                                    {showTagAction ? (
-                                        tagMenuEverOpened || Platform.OS === 'web' ? (
-                                            <DropdownMenu
-                                                open={tagMenuOpen}
-                                                onOpenChange={(next) => {
-                                                    setTagMenuOpen(next);
-                                                    if (next) setTagMenuEverOpened(true);
-                                                }}
-                                                items={tagMenuItems}
-                                                onSelect={handleTagMenuSelect}
-                                                onCreateItem={handleTagMenuCreate}
-                                                createItemDisplay={(query) => ({
-                                                    title: `${t('dropdown.createItem.prefix')} ${query}`,
-                                                    leftGap: 8,
-                                                    rowContainerStyle: { paddingVertical: 6 },
-                                                    titleStyle: { fontSize: 14, lineHeight: 20 },
-                                                    titleNode: (
-                                                        <>
-                                                            {t('dropdown.createItem.prefix')}
-                                                            <RNText style={styles.tagChipInlineText} numberOfLines={1}>
-                                                                {query}
-                                                            </RNText>
-                                                        </>
-                                                    ),
-                                                    icon: <Icon name="plus" size={16} color={rowActionIconColor} />,
-                                                })}
-                                                placement="left"
-                                                variant="slim"
-                                                search={true}
-                                                searchPlaceholder={t('sessionTags.searchOrAddPlaceholder')}
-                                                emptyLabel={null}
-                                                showCategoryTitles={false}
-                                                matchTriggerWidth={false}
-                                                maxWidthCap={220}
-                                                popoverPortalWebTarget="body"
-                                                trigger={({ toggle }) => (
-                                                    <Pressable
-                                                        testID="session-item-tag-action"
-                                                        style={styles.rowActionButton}
-                                                        onPress={(e) => {
-                                                            stopRowPressPropagation(e);
-                                                            setTagMenuEverOpened(true);
-                                                            toggle();
-                                                        }}
-                                                        accessibilityRole="button"
-                                                        accessibilityLabel={t('sessionTags.editTagsLabel')}
-                                                        hitSlop={8}
-                                                    >
-                                                        <TagIcon size={14} color={rowActionIconColor} />
-                                                    </Pressable>
-                                                )}
-                                            />
-                                        ) : (
-                                            <Pressable
-                                                testID="session-item-tag-action"
-                                                style={styles.rowActionButton}
-                                                onPress={(e) => {
-                                                    stopRowPressPropagation(e);
-                                                    setTagMenuEverOpened(true);
-                                                    setTagMenuOpen(true);
-                                                }}
-                                                accessibilityRole="button"
-                                                accessibilityLabel={t('sessionTags.editTagsLabel')}
-                                                hitSlop={8}
-                                            >
-                                                <TagIcon size={14} color={rowActionIconColor} />
-                                            </Pressable>
-                                        )
-                                    ) : null}
-                                    {supportsPin ? (
-                                        <Pressable
-                                            style={styles.rowActionButton}
-                                            onPress={(e) => {
-                                                stopRowPressPropagation(e);
-                                                handleTogglePinnedAction();
-                                            }}
-                                            accessibilityRole="button"
-                                            accessibilityLabel={pinned ? t('sessionInfo.unpinSession') : t('sessionInfo.pinSession')}
-                                            hitSlop={8}
-                                        >
-                                            {pinned ? (
-                                                <PinSlashIcon size={14} color={rowActionIconColor} />
-                                            ) : (
-                                                <PinIcon size={14} color={rowActionIconColor} />
-                                            )}
-                                        </Pressable>
-                                    ) : null}
-                                    {moreMenuItems.length > 0 ? (
-                                        <DropdownMenu
-                                            open={moreMenuOpen}
-                                            onOpenChange={setMoreMenuOpen}
-                                            items={moreMenuItems}
-                                            onSelect={handleMoreMenuSelect}
-                                            placement="left"
-                                            variant="slim"
-                                            matchTriggerWidth={false}
-                                            maxWidthCap={220}
-                                            showCategoryTitles={false}
-                                            popoverPortalWebTarget="body"
-                                            trigger={({ toggle }) => (
-                                                <Pressable
-                                                    testID="session-item-more-menu"
-                                                    style={styles.rowActionButton}
-                                                    onPress={(e) => {
-                                                        stopRowPressPropagation(e);
-                                                        toggle();
-                                                    }}
-                                                    accessibilityRole="button"
-                                                    accessibilityLabel={t('common.moreActions')}
-                                                    hitSlop={8}
-                                                >
-                                                    <Icon name="dots-three" size={14} color={rowActionIconColor} />
-                                                </Pressable>
-                                            )}
-                                        />
-                                    ) : null}
-                                </View>
-                            ) : showTrailingAttentionIndicator || showTrailingActivityTime ? (
-                                <View style={styles.trailingMetaRow}>
-                                    {showTrailingAttentionIndicator ? (
+                        ) : effectiveSecondaryLineMode === 'status' ? (
+                            <View
+                                testID={`session-list-status-subtitle-${resolvedSession.id}-${rowAttentionState}`}
+                                style={styles.secondaryLineRow}
+                            >
+                                <View style={styles.secondaryStatusDotContainer}>
+                                    {rowPresentation.attentionIndicator !== 'none' ? (
                                         <SessionRowAttentionIndicator
-                                            indicator={trailingAttentionIndicator}
-                                            sessionId={`${resolvedSession.id}-trailing`}
+                                            indicator={rowPresentation.attentionIndicator}
+                                            sessionId={`${resolvedSession.id}-secondary`}
                                             attentionState={rowAttentionState}
                                             accessibilityLabel={rowAttentionAccessibilityLabel}
+                                            hasUnreadMessages={hasUnreadMessages}
                                             workingMode={workingIndicatorMode}
-                                            workingSpinnerTone="neutral"
                                             animationEnabled={attentionIndicatorAnimationEnabled}
                                         />
                                     ) : null}
-                                    {showTrailingActivityTime ? (
-                                        <Text
-                                            style={[styles.activityTime, isMinimal ? styles.activityTimeMinimal : null]}
-                                            numberOfLines={1}
-                                        >
-                                            {activityTimeLabel}
-                                        </Text>
-                                    ) : null}
                                 </View>
-                            ) : null}
-                        </View>
-                    </View>
+                                <Text
+                                    testID={`session-list-status-subtitle-text-${resolvedSession.id}-${rowAttentionState}`}
+                                    style={[
+                                        styles.statusText,
+                                        compact ? styles.statusTextCompact : null,
+                                        { color: rowStatusColor },
+                                    ]}
+                                    numberOfLines={1}
+                                >
+                                    {statusLineText}
+                                </Text>
+                                {agentActivityLabel !== null ? (
+                                    <Text
+                                        testID={`session-list-agent-activity-count-${resolvedSession.id}`}
+                                        style={[
+                                            styles.statusText,
+                                            compact ? styles.statusTextCompact : null,
+                                            styles.agentActivityCountText,
+                                        ]}
+                                        numberOfLines={1}
+                                    >
+                                        {agentActivityLabel}
+                                    </Text>
+                                ) : null}
+                            </View>
+                        ) : (
+                            <Text
+                                style={[
+                                    styles.sessionSubtitle,
+                                    compact ? styles.sessionSubtitleCompact : null,
+                                    shouldUseWebPathSubtitleStartEllipsis ? styles.sessionPathSubtitleWeb : null,
+                                ]}
+                                numberOfLines={1}
+                                ellipsizeMode={shouldUseWebPathSubtitleStartEllipsis ? undefined : effectiveSubtitleEllipsizeMode}
+                            >
+                                {shouldUseWebPathSubtitleStartEllipsis ? (
+                                    <Text style={styles.sessionPathSubtitleTextWeb}>
+                                        {sessionSubtitle}
+                                    </Text>
+                                ) : sessionSubtitle}
+                            </Text>
+                        )
+                    ) : null}
+
                     {workContextPreview ? (
                         <SessionListWorkContextPreview
                             sessionId={resolvedSession.id}
@@ -1924,9 +1940,9 @@ const SessionItemContent = React.memo(
                             onCopyTask={handleCopyTask}
                         />
                     ) : null}
-
                     {showBelowTagChips ? renderTagChipRow('below') : null}
                 </View>
+
             </Pressable>
         );
 
@@ -2081,6 +2097,7 @@ function SessionItemFromRowModel(props: SessionItemProps & { rowModel: SessionLi
             sessionSubtitle={itemProps.subtitleOverride ?? rowModel.subtitle}
             workContextPreview={rowModel.workContextPreview}
             pendingCount={rowModel.pendingCount}
+            hasUnreadMessages={rowModel.hasUnreadMessages}
             draft={rowModel.draft}
             reminder={rowModel.reminder}
             agentActivityLabel={rowModel.agentActivityLabel}

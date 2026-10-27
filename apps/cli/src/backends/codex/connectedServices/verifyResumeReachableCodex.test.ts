@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -86,6 +86,56 @@ describe('verifyResumeReachableCodex', () => {
     }
   });
 
+  it.each(['persisted candidate', 'manifest mapping'])('does not prove an empty target reachable from an old-home %s', async (hint) => {
+    const root = await mkdtemp(join(tmpdir(), 'happier-codex-reachable-old-home-'));
+    const vendorResumeId = '019f2339-9299-7e51-b192-9751a0a03586';
+    const targetRoot = join(root, 'target');
+    const targetHome = join(targetRoot, 'codex-home');
+    const oldSessions = join(root, 'old-home', 'sessions');
+    const candidatePath = join(oldSessions, `rollout-2026-10-11T10-00-00-${vendorResumeId}.jsonl`);
+    try {
+      await mkdir(oldSessions, { recursive: true });
+      await mkdir(join(targetHome, 'sessions'), { recursive: true });
+      await writeFile(candidatePath, '{}\n');
+      if (hint === 'manifest mapping') {
+        await writeFile(join(targetRoot, '.happier-state-sharing.json'), JSON.stringify({
+          v: 1, requestedStateMode: 'isolated', effectiveStateMode: 'isolated', lastSyncAtMs: 0,
+          configEntries: [], stateEntries: [], diagnostics: [],
+          sessionFileMappings: [{ vendorResumeId, sourcePath: null, destinationPath: candidatePath, importedAtMs: 0, verifiedAtMs: null }],
+        }));
+      }
+      await expect(verifyResumeReachableCodex({
+        targetMaterializedRoot: targetRoot,
+        targetMaterializedEnv: { CODEX_HOME: targetHome, CODEX_SQLITE_HOME: targetHome },
+        vendorResumeId, cwd: root,
+        ...(hint === 'persisted candidate' ? { candidatePersistedSessionFile: candidatePath } : {}),
+      })).resolves.toEqual({ ok: false, reason: 'codex_session_file_not_found' });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('accepts a native candidate that is visible through the target sessions symlink', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'happier-codex-reachable-linked-candidate-'));
+    const nativeSessions = join(root, 'native', 'sessions');
+    const targetHome = join(root, 'target', 'codex-home');
+    const vendorResumeId = '019f2339-9299-7e51-b192-9751a0a03586';
+    const candidatePath = join(nativeSessions, `rollout-2026-10-11T10-00-00-${vendorResumeId}.jsonl`);
+    try {
+      await mkdir(nativeSessions, { recursive: true });
+      await mkdir(targetHome, { recursive: true });
+      await writeFile(candidatePath, '{}\n');
+      await symlink(nativeSessions, join(targetHome, 'sessions'), 'junction');
+      await expect(verifyResumeReachableCodex({
+        targetMaterializedRoot: join(root, 'target'),
+        targetMaterializedEnv: { CODEX_HOME: targetHome },
+        vendorResumeId, cwd: root, candidatePersistedSessionFile: candidatePath,
+      })).resolves.toEqual({ ok: true, resolvedPath: candidatePath });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it('finds a continuation rollout whose filename appends a turn id', async () => {
     const root = await mkdtemp(join(tmpdir(), 'happier-codex-reachable-continuation-'));
     const vendorResumeId = '019d94f3-0a6f-7c41-bb18-d26425384658';
@@ -144,8 +194,8 @@ describe('verifyResumeReachableCodex', () => {
   it('returns ok=true from manifest sessionFileMappings when mapped file exists', async () => {
     const root = await mkdtemp(join(tmpdir(), 'happier-codex-reachable-manifest-'));
     try {
-      const mappedPath = join(root, 'mapped', 'resume-vendor-session-1.jsonl');
-      await mkdir(join(root, 'mapped'), { recursive: true });
+      const mappedPath = join(root, 'codex-home', 'sessions', 'rollout-2026-01-01T00-00-00-vendor-session-1.jsonl');
+      await mkdir(join(root, 'codex-home', 'sessions'), { recursive: true });
       await writeFile(mappedPath, '{}\n');
       await writeFile(join(root, '.happier-state-sharing.json'), JSON.stringify({
         v: 1,
@@ -158,7 +208,7 @@ describe('verifyResumeReachableCodex', () => {
           {
             vendorResumeId: 'vendor-session-1',
             sourcePath: null,
-            destinationPath: 'mapped/resume-vendor-session-1.jsonl',
+            destinationPath: 'codex-home/sessions/rollout-2026-01-01T00-00-00-vendor-session-1.jsonl',
             importedAtMs: 0,
             verifiedAtMs: null,
           },

@@ -120,6 +120,7 @@ function dedupeDiagnostics<T extends Readonly<{
 
 export async function materializeClaudeConnectedServiceSelection(params: Readonly<{
   activeServerDir: string;
+  probeConfigDir?: string;
   serviceId: ClaudeConnectedServiceMaterializationServiceId;
   record: ConnectedServiceCredentialRecordV1;
   fallbackProfileId: string;
@@ -129,9 +130,10 @@ export async function materializeClaudeConnectedServiceSelection(params: Readonl
   sessionDirectory?: string | null;
   vendorResumeId?: string | null;
   candidatePersistedSessionFile?: string | null;
+  sessionStateMode?: 'existing';
   validateGroupMutationCurrentness?: ConnectedServicesProviderMaterializerInput['validateGroupMutationCurrentness'];
 }>): Promise<ClaudeConnectedServiceSelectionMaterialization | null> {
-  const claudeConfigDir = resolveClaudeConnectedServiceStableConfigDir({
+  const claudeConfigDir = params.probeConfigDir ?? resolveClaudeConnectedServiceStableConfigDir({
     activeServerDir: params.activeServerDir,
     serviceId: params.serviceId,
     fallbackProfileId: params.fallbackProfileId,
@@ -146,7 +148,7 @@ export async function materializeClaudeConnectedServiceSelection(params: Readonl
     });
     let groupSourceEnv: NodeJS.ProcessEnv | null = null;
     let groupSourceDiagnostics: readonly ConnectedServicesMaterializationDiagnostic[] = [];
-    if (selectionDescriptor.kind === 'group') {
+    if (selectionDescriptor.kind === 'group' && !params.probeConfigDir) {
       const profileClaudeConfigDir = resolveClaudeConnectedServiceStableConfigDir({
         activeServerDir: params.activeServerDir,
         serviceId: params.serviceId,
@@ -176,6 +178,7 @@ export async function materializeClaudeConnectedServiceSelection(params: Readonl
           sessionDirectory: params.sessionDirectory ?? null,
           vendorResumeId: params.vendorResumeId ?? null,
           candidatePersistedSessionFile: params.candidatePersistedSessionFile ?? null,
+          sessionStateMode: params.sessionStateMode,
           selectionDescriptor: canonicalProfileSelectionDescriptor,
           validateGroupMutationCurrentness: params.validateGroupMutationCurrentness,
         });
@@ -210,6 +213,7 @@ export async function materializeClaudeConnectedServiceSelection(params: Readonl
       sessionDirectory: params.sessionDirectory ?? null,
       vendorResumeId: params.vendorResumeId ?? null,
       candidatePersistedSessionFile: params.candidatePersistedSessionFile ?? null,
+      sessionStateMode: params.sessionStateMode,
       selectionDescriptor,
       validateGroupMutationCurrentness: params.validateGroupMutationCurrentness,
     });
@@ -221,12 +225,12 @@ export async function materializeClaudeConnectedServiceSelection(params: Readonl
     };
   }
 
-  const syncResult = await syncClaudeConnectedServiceHome({
+  const diagnostics = params.sessionStateMode === 'existing' ? [] : (await syncClaudeConnectedServiceHome({
     sourceEnv: params.processEnv,
     targetDir: claudeConfigDir,
     accountSettings: params.accountSettings ?? null,
     sessionDirectory: params.sessionDirectory ?? null,
-  });
+  })).diagnostics;
   const materialized = materializeClaudeAnthropicApiKeyAuth({ record: params.record });
   return {
     env: {
@@ -234,6 +238,6 @@ export async function materializeClaudeConnectedServiceSelection(params: Readonl
       CLAUDE_CONFIG_DIR: claudeConfigDir,
     },
     targetMaterializedRoot: claudeConfigDir,
-    diagnostics: syncResult.diagnostics,
+    diagnostics,
   };
 }

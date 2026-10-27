@@ -9,10 +9,26 @@ import {
   getAgentSessionModesKind,
 } from './sessionModes.js';
 import { getAgentAdvancedModeCapabilities } from './advancedModes.js';
+import { BUILT_IN_ACP_CONFIG } from './acp.js';
+import { resolveAgentNativeSpawnDefinitiveRejection } from './nativeLaunchSelection.js';
 
 const cursorAgentId = 'cursor' as AgentId;
 
 describe('sessionModes', () => {
+  it('admits an advertised Antigravity mode as an initial launch selection', () => {
+    expect(resolveAgentNativeSpawnDefinitiveRejection({
+      agentId: 'agy',
+      selection: { acpSessionModeId: 'auto_edit' },
+    })).toEqual({ ok: true });
+  });
+
+  it('does not suppress negotiated modes for built-in ACP transports that allow them', () => {
+    for (const config of Object.values(BUILT_IN_ACP_CONFIG)) {
+      if (config.supportsModes === 'no') continue;
+      expect(getAgentSessionModeDescriptor(config.agentId).source, config.agentId).toBe('acp');
+      expect(getAgentSessionModesKind(config.agentId), config.agentId).not.toBe('none');
+    }
+  });
   it('exposes structured session mode descriptors for representative agents', () => {
     expect(getAgentSessionModeDescriptor('claude')).toEqual({
       source: 'provider-native',

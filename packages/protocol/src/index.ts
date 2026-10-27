@@ -2,6 +2,9 @@ export const HAPPY_PROTOCOL_PACKAGE = '@happier-dev/protocol';
 export { buildRecoveryCreditConsumeIdempotencyKey } from './connect/recoveryCreditConsumeIdempotencyKey.js';
 
 export { PROVIDER_ACCOUNT_SUBSCRIPTION_ACCEPT, ProviderAccountSubscriptionV1Schema, mergeProviderAccountSubscription, type ProviderAccountSubscriptionV1 } from './connect/accountSubscription.js';
+export { ConnectedServiceImportSourceV1Schema, ConnectedServiceImportRequestV1Schema, ConnectedServiceImportResponseV1Schema, ConnectedServiceImportErrorCodeV1Schema } from './connect/connectedServiceImport.js';
+export type { ConnectedServiceImportSourceV1, ConnectedServiceImportRequestV1, ConnectedServiceImportResponseV1 } from './connect/connectedServiceImport.js';
+
 export {
   compareConnectedServiceQuotaObservationRecency,
   isConnectedServiceQuotaObservationAtOrBeforeNow,
@@ -568,8 +571,10 @@ export {
   openProviderAccountUsageSnapshotCiphertext,
   projectProviderAccountUsageSnapshotToConnectedServiceQuotaSnapshotV1,
   projectProviderAccountUsageToConnectedServiceQuotaSnapshot,
+  isProviderAccountUsageOrganizationContextMatch,
   sealProviderAccountUsageSnapshotCiphertext,
   splitProviderAccountUsageSubscription,
+  splitProviderAccountUsageSupplementalFacets,
   sealProviderAccountUsageSnapshot,
   openSealedProviderAccountUsageSnapshot,
   type ProviderAccountSubjectRefV1,
@@ -578,6 +583,7 @@ export {
   type ProviderAccountUsageQuotaScopeV1,
   type ProviderAccountUsageRecordId,
   type ProviderAccountUsageRecordKeyV1,
+  type ProviderAccountUsageOrganizationContext,
   type ProviderAccountUsageSnapshotV1,
   type ProviderAccountUsageSourceV1,
   type ProviderAccountUsageStateV1,
@@ -587,6 +593,7 @@ export {
 
 export {
   CONNECTED_SERVICE_AUTO_QUOTA_RESET_HEADER,
+  CONNECTED_SERVICE_AUTH_GROUP_SWITCH_REASON_HEADER,
   CONNECTED_SERVICE_AUTO_QUOTA_RESET_HEADER_VALUE,
   CONNECTED_SERVICE_AUTO_DISABLE_PLAN_INVALID_QUERY_KEY,
   CONNECTED_SERVICE_POOL_QUOTA_LIMIT_SELECTION_QUERY_KEY,
@@ -641,6 +648,8 @@ export {
   ConnectedServiceQuotaRecoveryCreditStatusV1Schema,
   ConnectedServiceQuotaRecoveryCreditV1Schema,
   ConnectedServiceQuotaRecoveryCreditsV1Schema,
+  ConnectedServiceQuotaRecoveryCreditDetailsV1Schema,
+  ConnectedServiceQuotaRecoveryCreditDetailsByIdV1Schema,
   ConnectedServiceQuotaSnapshotV1Schema,
   ConnectedServiceQuotaSourceV1Schema,
   ConnectedServiceQuotaUnitV1Schema,
@@ -699,6 +708,8 @@ export {
   type ConnectedServiceQuotaRecoveryCreditStatusV1,
   type ConnectedServiceQuotaRecoveryCreditV1,
   type ConnectedServiceQuotaRecoveryCreditsV1,
+  type ConnectedServiceQuotaRecoveryCreditDetailsV1,
+  type ConnectedServiceQuotaRecoveryCreditDetailsByIdV1,
   type ConnectedServiceQuotaSnapshotV1,
   type ConnectedServiceQuotaSourceV1,
   type ConnectedServiceQuotaUnitV1,
@@ -741,9 +752,14 @@ export {
 
 export {
   buildConnectedServiceCredentialRecord,
+  buildConnectedServiceCredentialMetadata,
+  connectedServiceUsageRequiresOrganizationId,
+  readConnectedServiceCredentialOrganizationId,
+  type ConnectedServiceCredentialMetadata,
   normalizeConnectedServiceOauthCredentialRawMetadata,
   type ConnectedServiceOauthCredentialRawMetadata,
 } from './connect/buildConnectedServiceCredentialRecord.js';
+export { parseOauthAuthorizationResponse, type OauthAuthorizationResponse } from './connect/oauthAuthorizationResponse.js';
 
 export { parseBooleanEnv, parseOptionalBooleanEnv } from './env/parseBooleanEnv.js';
 export type { ServerRetentionCapabilities } from './features/payload/capabilities/serverRetentionCapabilities.js';
@@ -867,6 +883,11 @@ export {
   normalizeClaudeTaskToolRecordsToWorkStateItems,
   normalizeClaudeTaskToolUseToWorkStateItem,
   normalizeClaudeSdkInitSkills,
+  normalizeClaudeOauthProfileEntitlement,
+  readClaudeOauthCredentialMetadata,
+  readClaudeOauthCredentialOrganizationId,
+  type ClaudeOauthCredentialMetadata,
+  type ClaudeOauthEntitlementMetadata,
   normalizeClaudeTaskEventToWorkStateItem,
   normalizeClaudeTodoWriteTodosToWorkStateItems,
   readClaudeAgentSdkProviderTaskStatus,
@@ -1038,6 +1059,7 @@ export {
 export {
   TranscriptRawRecordV1Schema,
   ConnectedServiceRuntimeAuthRecoveryTranscriptStatusV1Schema,
+  isConnectedServiceRuntimeAuthRecoveryCancellation,
   ConnectedServiceSwitchAttemptedContinuityModeV1Schema,
   ConnectedServiceSwitchAttemptOutcomeActionV1Schema,
   ConnectedServiceSwitchAttemptOutcomeV1Schema,
@@ -1247,11 +1269,18 @@ export {
   TERMINAL_PROVISIONING_V2_CONTENT_PRIVATE_KEY_BYTES,
   TERMINAL_PROVISIONING_V2_PLAINTEXT_BYTES,
   TERMINAL_PROVISIONING_V2_VERSION_BYTE,
+  TERMINAL_PROVISIONING_V2_TOKEN_ONLY_TAG,
+  type TerminalProvisioningV2Response,
   isTerminalProvisioningV3Payload,
   openTerminalProvisioningV3Payload,
+  openTerminalProvisioningV3Response,
   openTerminalProvisioningV2Payload,
+  openTerminalProvisioningV2Response,
+  parseTerminalProvisioningV2Plaintext,
   sealTerminalProvisioningV3Payload,
+  sealTerminalProvisioningV3TokenOnlyPayload,
   sealTerminalProvisioningV2Payload,
+  sealTerminalProvisioningV2TokenOnlyPayload,
 } from './crypto/terminalProvisioningV2.js';
 
 export {
@@ -1767,6 +1796,9 @@ export {
   type SessionUsageLimitRecoveryOperationResultOkStatusV1,
   type SessionUsageLimitRecoveryOperationResultV1,
   type SessionUsageLimitRecoveryV1,
+  buildUsageLimitIssueFingerprint,
+  isSessionUsageLimitRecoveryForIssue,
+  readSessionUsageLimitRecoveryForIssue,
   type TurnTerminalStatusV1,
   type V2SessionByIdNotFound,
   type V2SessionByIdResponse,
@@ -2410,6 +2442,7 @@ export {
   ExecutionRunRequestedConfigurationSchema,
   projectExecutionRunRequestedConfiguration,
   ExecutionRunPublicStateSchema,
+  isExecutionRunActive,
   ExecutionRunReplaySeedRequestSchema,
   ExecutionRunStartRequestSchema,
   ExecutionRunStartResponseSchema,
@@ -2638,6 +2671,9 @@ export {
 
 export {
   SessionHandoffAbortRequestSchema,
+  SessionHandoffCapabilityV2Schema,
+  readSessionHandoffError,
+  type SessionHandoffCapabilityV2,
   SessionHandoffAbortRequestV2Schema,
   SessionHandoffAbortResponseSchema,
   SessionHandoffAbortResponseV2Schema,
@@ -3426,6 +3462,7 @@ export {
   AccountEncryptionMigrateKeyProofSchema,
   AccountEncryptionMigrateConnectedServicesDirectiveSchema,
   AccountEncryptionMigrateAutomationsDirectiveSchema,
+  AccountEncryptionMigrateMachinesDirectiveSchema,
   AccountEncryptionMigrateSessionDraftItemSchema,
   AccountEncryptionMigrateSessionDraftsDirectiveSchema,
   AccountEncryptionMigrateRequestSchema,
@@ -3441,6 +3478,7 @@ export {
   type AccountEncryptionMigrateKeyProof,
   type AccountEncryptionMigrateConnectedServicesDirective,
   type AccountEncryptionMigrateAutomationsDirective,
+  type AccountEncryptionMigrateMachinesDirective,
   type AccountEncryptionMigrateSessionDraftItem,
   type AccountEncryptionMigrateSessionDraftsDirective,
   type AccountEncryptionMigrateRequest,
@@ -3463,6 +3501,10 @@ export {
   AccountSettingsV2UpdateRequestSchema,
   AccountSettingsV2UpdateResponseSchema,
   ConnectedServicesDefaultAuthByAgentIdV1Schema,
+  ConnectedServicesAdditionalDefaultAuthByAgentIdV1Schema,
+  readConnectedServicesDefaultAuthSettings,
+  buildConnectedServicesDefaultAuthSettingsPatch,
+  type ConnectedServicesDefaultAuthSettings,
   ConnectedServicesProviderConfigSharingModeV1Schema,
   ConnectedServicesProviderStateSharingModeV1Schema,
   ConnectedServicesProviderStateSharingPolicyV1Schema,
@@ -3633,3 +3675,32 @@ export { formatPermissionRequestSummary } from './activity/agentRequestSummary.j
 export { summarizeToolInputForNotification, type RequestNotificationLabels } from './activity/agentRequestNotificationContent.js';
 export { extractShellCommand, stripShellCommandPreludeForDisplay } from './activity/shellCommand.js';
 export { maybeParseJson } from './activity/parseJson.js';
+export {
+  CONNECTED_SERVICE_READER_SUPPORT_QUERY_KEY,
+  CONNECTED_SERVICE_READER_SUPPORT_SOCKET_AUTH_FIELD,
+  RELEASED_CONNECTED_SERVICE_IDS,
+  readConnectedServiceReaderSupport,
+  projectConnectedServiceProfileForReader,
+  projectSessionRuntimeIssueForReader,
+  supportsConnectedServiceOperation,
+  withConnectedServiceReaderSupport,
+} from './connect/connectedServiceReaderSupport.js';
+export {
+  MACHINE_PLAIN_DATA_KEY_MARKER,
+  encodePlainMachineStoredContent,
+  decodePlainMachineStoredContent,
+  isPlainMachineDataKeyMarker,
+  machineStoredContentMatchesAccountMode,
+  machineUpdateMatchesStoredMode,
+} from './machines/machineStoredContent.js';
+export {
+  MachineKeyBasisV1Schema,
+  MachineContentKeyTransitionInputV1Schema,
+  MachineContentKeyTransitionRefusalV1Schema,
+  createMachineContentKeyTransitionResultV1Schema,
+  type MachineKeyBasisV1,
+  type MachineContentKeyTransitionInputV1,
+  type MachineContentKeyTransitionResultV1,
+} from './machines/machineContentKeyTransitionV1.js';
+
+export { assertAccountKeyProvisioningAllowed, AccountKeyProvisioningUnavailableError, verifyAccountContentPublicKeyBinding, createAccountContentPublicKeyBindingMessage } from './auth/accountKeyProvisioning.js';

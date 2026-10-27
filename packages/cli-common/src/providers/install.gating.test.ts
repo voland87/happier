@@ -36,6 +36,33 @@ const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, 'pla
 const originalArchDescriptor = Object.getOwnPropertyDescriptor(process, 'arch');
 
 describe('installProviderCli vendor_recipe execution gating', () => {
+  it.skipIf(process.platform === 'win32')('preserves a Windows Path-only environment when executing a vendor recipe', async () => {
+    const homeDir = await mkdtemp(join(tmpdir(), 'happier-vendor-windows-path-'));
+    if (!originalPlatformDescriptor) throw new Error('Expected configurable platform');
+    const previousPath = process.env.PATH;
+    try {
+      // A real harmless executable stands in for the vendor's OS process. The
+      // install owner, PATH resolution and child-process capture remain real.
+      const executable = join(homeDir, 'powershell.exe');
+      await writeFile(executable, '#!/bin/sh\nprintf vendor-process-started\n', 'utf8');
+      await chmod(executable, 0o755);
+      delete process.env.PATH;
+      Object.defineProperty(process, 'platform', { ...originalPlatformDescriptor, value: 'win32' });
+      const result = await installProviderCli({
+        providerId: 'droid', platform: 'win32',
+        env: { Path: homeDir, HAPPIER_HOME_DIR: homeDir },
+        logDir: homeDir, skipIfInstalled: false, allowVendorRecipeExecution: true,
+      });
+      expect(result.ok, result.ok ? undefined : result.errorMessage).toBe(true);
+      if (result.logPath) expect(await readFile(result.logPath, 'utf8')).toContain('vendor-process-started');
+    } finally {
+      Object.defineProperty(process, 'platform', originalPlatformDescriptor);
+      if (previousPath === undefined) delete process.env.PATH;
+      else process.env.PATH = previousPath;
+      await rm(homeDir, { recursive: true, force: true });
+    }
+  });
+
   it('denies vendor_recipe execution by default (but still returns the plan)', async () => {
     const logDir = await mkdtemp(join(tmpdir(), 'happier-cli-common-install-gating-log-'));
     try {

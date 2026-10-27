@@ -21,6 +21,18 @@ The protocol is designed to stay minimal, explicit, and resilient under intermit
 
 If a new protocol field or event is proposed, it should answer: does this create a durable sync primitive, or can it be encoded inside existing encrypted payloads without expanding the API surface?
 
+## Plaintext message storage (development)
+
+Before comparing or storing plaintext message envelopes, the server removes actual
+NUL characters (U+0000) from string values, including nested tool output. PostgreSQL
+JSONB cannot represent NUL. Literal text such as `\u0000` and other control
+characters remain unchanged. Transcript and pending-message ingress
+share `normalizeSessionMessageContentForStorage`; retries compare the normalized
+content. A fixed `nul-removed` warning records normalization without message data.
+NUL-bearing object keys and ciphertext are rejected as `invalid-params`: rewriting
+keys could merge distinct fields, and encrypted content is opaque. This correction
+is development source behavior; release availability is tracked separately.
+
 ## Authentication
 Most endpoints require `Authorization: Bearer <token>`. The same token is also used in the Socket.IO handshake. Full auth flows and endpoints are documented in `api.md`.
 
@@ -81,6 +93,11 @@ Field names below match on-wire payloads.
   - `body`: `{ t: "update-session", id, metadata?, agentState? }`
   - `metadata`: `{ value, version }` or null
   - `agentState`: `{ value, version }` or null
+  - Optional pending-request projections use `pendingPermissionRequestCount`, `pendingUserActionRequestCount`, and nullable `pendingRequestObservedAt`.
+  - Pending request counts describe the outstanding requests in Agent state, including independent execution runs. Foreground completion, cancellation, publisher close, and released-UI Stop preserve them; those lifecycle events do not own every request in the Session. The acknowledged Agent-state writer commits the request state and derived counts together, then publishes their committed projection.
+  - The development UI reconciles request content, counts and list flags together under `agentStateVersion` through the shared session projection owner. A delayed older version cannot restore a pending count after settlement clears `pendingRequestObservedAt` to null. Metadata keeps its independent version ordering; cache-only public request updates retain their envelope version without claiming that encrypted detail has been decrypted. Composer status subscribes to the existing pending-request summary so transcript-only settlement also reaches an already mounted composer.
+  - Development request-settlement delivery retains encrypted, request-specific completion intents in the existing CLI runtime mutation journal before releasing the provider waiter. Delivery merges each exact occurrence into current Agent state through the existing versioned writer; it preserves independent and newer requests. Normal delivery retries while the runtime is active, and a runtime reopening the same Session replays admitted intents after restart. Runtime journals remain runtime-owned; daemon terminal recovery does not take them over. This reliability improvement requires the updated CLI, uses the existing server wire contract, and is not a release availability claim.
+
 
 - `delete-session`
   - `body`: `{ t: "delete-session", sid }`
@@ -121,6 +138,16 @@ Field names below match on-wire payloads.
 - `usage`: `{ type: "usage", id: sessionId, key, tokens, cost, timestamp }`
 - `machine-status`: `{ type: "machine-status", machineId, online, timestamp }`
 
+In current development source, execution-run activity uses the existing public
+`status`, `runClass` and optional `turnInFlight` facts through
+`isExecutionRunActive`. A running long-lived handle with an observed
+`turnInFlight: false` remains available for follow-up without contributing
+background work. Bounded runs remain active until their outcome settles;
+provisioning and older producers without a turn observation remain conservatively
+active. The CLI publishes the same work transitions to runtime activity and its
+public run observers. Reachability and retained handle lifetime remain separate
+from this current-work projection.
+
 ### Client -> server WebSocket events
 - `ping` -> callback `{}`
 
@@ -144,6 +171,7 @@ Field names below match on-wire payloads.
 - `session-end`
   - `{ sid, time }`
   - Closes the authorized publisher and publishes its inactive state through the same lifecycle-update owner.
+  - The current development server also accepts the released UI v0.2.1 user-scoped Stop event. Its durable session update includes the initiating UI connection because the event has no authoritative response projection.
 
 - `usage-report`
   - `{ key, sessionId?, tokens, cost }`

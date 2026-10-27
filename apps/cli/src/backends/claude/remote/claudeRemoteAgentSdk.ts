@@ -27,7 +27,7 @@ import { getClaudeRemoteSystemPrompt } from '@/backends/claude/utils/remoteSyste
 import { parseClaudeSdkFlagOverridesFromArgs } from '@/backends/claude/remote/sdkFlagOverrides';
 import { resolveClaudeRemoteSessionStartPlan } from '@/backends/claude/remote/sessionStartPlan';
 import { resolveClaudeConfigDirOverride } from '@/backends/claude/utils/resolveClaudeConfigDirOverride';
-import { resolveClaudeCodeExperimentalEnvOverlay } from '@/backends/claude/spawn/resolveClaudeCodeExperimentalEnvOverlay';
+import { resolveClaudeSessionEnvOverlay } from '@/backends/claude/spawn/resolveClaudeSessionEnvOverlay';
 import { buildClaudeSubprocessEnv } from '@/backends/claude/spawn/buildClaudeSubprocessEnv';
 import { logClaudeRuntimeAuthEnvDiagnostic } from '@/backends/claude/spawn/logClaudeRuntimeAuthEnvDiagnostic';
 import { isCompactHookLocalCommandStdout } from '@/backends/claude/utils/isCompactHookLocalCommandStdout';
@@ -40,15 +40,15 @@ import {
     resolveClaudeEffortForModel,
     resolveClaudeUltracodeForModel,
 } from '@/backends/claude/utils/claudeEffort';
-import { resolveClaudeCodeXdgIsolation } from '@/backends/claude/utils/resolveClaudeCodeXdgIsolation';
 import { withCurrentHappierSessionId } from '@/agent/runtime/session/currentSessionIdEnv';
 
 import type { SDKMessage, SDKSystemMessage, SDKUserMessage } from '@/backends/claude/sdk';
-import type { PermissionResult } from '@/backends/claude/sdk/types';
+import { ClaudeNativeProviderExitUnverifiedError, type PermissionResult } from '@/backends/claude/sdk/types';
 import type { JsRuntime } from '@/backends/claude/runClaude';
 import { createSubprocessStderrAppender, resolveSubprocessArtifactsDir } from '@/agent/runtime/subprocessArtifacts';
 import { join } from 'node:path';
-import { spawn } from 'node:child_process';
+import { ChildProcess, spawn } from 'node:child_process';
+import { killProcessTree } from '@/agent/runtime/process/killProcessTree';
 import { createEventShapeLoggerForLog } from '@/diagnostics/eventShapeForLog';
 import { readTailTextFile } from '@/utils/fs/readTailTextFile';
 import { buildClaudeAgentSdkHooks } from './agentSdk/buildClaudeAgentSdkHooks';
@@ -72,7 +72,7 @@ import { parseCheckpointsCommand, parseRewindCommand } from './agentSdk/claudeAg
 import {
     mapClaudeRateLimitEventToQuotaEvidence,
     readClaudeRateLimitEventWindows,
-    mapClaudeRateLimitEventToUsageDetails,
+    mapClaudeProviderFailureToUsageDetails,
     type NormalizedProviderUsageLimitDetailsV1,
 } from '../connectedServices/mapClaudeRateLimitEventToUsageDetails';
 import { classifyClaudeConnectedServiceRuntimeAuthFailure } from '../connectedServices/classifyClaudeConnectedServiceRuntimeAuthFailure';
@@ -175,6 +175,8 @@ export async function claudeRemoteAgentSdk(opts: {
 
     // Callbacks
     onSessionFound: (id: string, data?: SessionHookData) => void;
+    /** Authenticated SDK hooks share the existing workflow observation channel without transcript output. */
+    onSessionHook?: (data: SessionHookData) => void;
     onThinkingChange?: (thinking: boolean) => void;
     onProviderPromptStarted?: () => void | Promise<void>;
     onMessage: (message: SDKMessage) => void;
@@ -369,7 +371,7 @@ export async function claudeRemoteAgentSdk(opts: {
 
         let mode = initial.mode;
         let response: any;
-        let handleClaudeRuntimeActivityLossForCurrentQuery: ((reason: string) => void) | null = null;
+        let runtimeFailure: { error: unknown } | null = null;
         let didSettleRuntimeActivityForCurrentTurn = false;
 		    let latestClaudeSessionId: string | null =
 		        typeof opts.sessionId === 'string' && opts.sessionId.trim().length > 0 ? opts.sessionId.trim() : startFrom ?? null;
@@ -489,10 +491,6 @@ export async function claudeRemoteAgentSdk(opts: {
         logPrefix: '[claudeRemoteAgentSdk]',
         runtimeActivityAdapter: opts.runtimeActivityAdapter,
     };
-    handleClaudeRuntimeActivityLossForCurrentQuery = (reason: string) => handleClaudeRuntimeActivityLoss({
-        ...runtimeActivityEffectParams,
-        reason,
-    });
     const runtimeExecutable = await ensureClaudeJsRuntimeExecutable(opts.jsRuntime);
 
     const stderrAppender = await createSubprocessStderrAppender({
@@ -605,6 +603,7 @@ export async function claudeRemoteAgentSdk(opts: {
 	        getMode: () => mode,
 	        onSessionFound: (sessionId, data) => recordSessionFound(sessionId, data as any),
 	        onSessionHook: (data) => {
+	            opts.onSessionHook?.(data);
 	            const activity = readClaudeSessionHookProviderTaskActivity(data);
 	            if (!activity) return;
 	            publishClaudeProviderTaskRuntimeActivity({
@@ -686,16 +685,9 @@ export async function claudeRemoteAgentSdk(opts: {
     };
 
         const mappedPermissionMode = resolveClaudeSdkPermissionModeFromEnhancedMode(mode);
-        const experimentalEnvOverlay = resolveClaudeCodeExperimentalEnvOverlay({
+        const sessionEnvOverlay = resolveClaudeSessionEnvOverlay({
             claudeCodeExperimentalAgentTeamsEnabled: mode.claudeCodeExperimentalAgentTeamsEnabled,
-        });
-        const xdgIsolationEnv = resolveClaudeCodeXdgIsolation({
-            backendId: 'claude',
-            scope: 'session',
-            isolationId:
-                typeof opts.sessionId === 'string' && opts.sessionId.trim().length > 0
-                    ? opts.sessionId.trim()
-                    : `pid_${process.pid}`,
+            claudeCodeIncludeInNativeHistory: mode.claudeCodeIncludeInNativeHistory,
         });
         const resumeSessionAt =
             typeof opts.resumeSessionAt === 'string' && opts.resumeSessionAt.trim().length > 0
@@ -718,16 +710,14 @@ export async function claudeRemoteAgentSdk(opts: {
         });
         const extraArgs = (() => {
             const out: Record<string, string | null> = Object.create(null);
-            if (enableFileCheckpointing) out['replay-user-messages'] = null;
+            out['replay-user-messages'] = null;
             if (debugEnabled) out.debug = debugCategories.length > 0 ? debugCategories.join(',') : null;
             if (verboseEnabled) out.verbose = null;
             if (resolvedUltracode) out.settings = buildClaudeUltracodeSettingsJson();
             return Object.keys(out).length > 0 ? out : undefined;
         })();
         const claudeSubprocessEnv = withCurrentHappierSessionId({
-            ...xdgIsolationEnv,
-            ...buildClaudeSubprocessEnv(),
-            ...experimentalEnvOverlay,
+            ...buildClaudeSubprocessEnv({ envOverlay: sessionEnvOverlay }),
         }, opts.happySessionId ?? '');
         logClaudeRuntimeAuthEnvDiagnostic({
             logPrefix: 'claudeRemoteAgentSdk',
@@ -835,6 +825,16 @@ export async function claudeRemoteAgentSdk(opts: {
 
     const messages = new PushableAsyncIterable<SDKUserMessage>();
 
+    const ownedProcess: {
+        child: ChildProcess | null;
+        exit: Promise<'exited' | 'spawn-failed'> | null;
+        providerIsChild: boolean;
+    } = { child: null, exit: null, providerIsChild: false };
+    const sameArgs = (left: readonly string[], right: readonly string[]): boolean =>
+        left.length === right.length && left.every((arg, index) => arg === right[index]);
+    const matchesInvocation = (child: ChildProcess, command: string, args: readonly string[]): boolean =>
+        child.spawnfile === command && sameArgs(child.spawnargs.slice(1), args);
+
     const defaultSpawnClaudeCodeProcess = (spawnOptions: AgentSdkSpawnOptions): AgentSdkSpawnedProcess => {
         const invocation = resolveWindowsCommandInvocation({
             command: spawnOptions.command,
@@ -860,6 +860,11 @@ export async function claudeRemoteAgentSdk(opts: {
             windowsHide: true,
             ...(invocation.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
         });
+        ownedProcess.child = child;
+        // Windows shell shims insert a ComSpec command and shell arguments. A direct SDK
+        // invocation keeps its provider/runtime arguments and belongs to this captured child.
+        ownedProcess.providerIsChild = sameArgs(invocation.args, spawnOptions.args)
+            && matchesInvocation(child, invocation.command, invocation.args);
         child.stderr?.on('data', (data: Buffer | string) => {
             const text = data.toString();
             if (debugEnabled) {
@@ -875,7 +880,30 @@ export async function claudeRemoteAgentSdk(opts: {
     };
 
     const spawnBaseProcess = opts.spawnClaudeCodeProcess ?? defaultSpawnClaudeCodeProcess;
-    queryOptions.spawnClaudeCodeProcess = spawnBaseProcess;
+    queryOptions.spawnClaudeCodeProcess = (spawnOptions: AgentSdkSpawnOptions): AgentSdkSpawnedProcess => {
+        const child = spawnBaseProcess(spawnOptions);
+        const providerIsChild = (ownedProcess.child === child && ownedProcess.providerIsChild)
+            || (child instanceof ChildProcess && matchesInvocation(child, spawnOptions.command, spawnOptions.args));
+        ownedProcess.child = child instanceof ChildProcess ? child : null;
+        ownedProcess.providerIsChild = providerIsChild;
+        ownedProcess.exit = new Promise((resolve) => {
+            const settle = (outcome: 'exited' | 'spawn-failed') => {
+                child.off('exit', onExit);
+                child.off('error', onError);
+                resolve(outcome);
+            };
+            const onExit = () => settle('exited');
+            const onError = () => {
+                // Node emits no exit after a failed spawn. Errors on a running child do not
+                // prove it stopped; its assigned pid keeps cleanup waiting for actual exit.
+                if ('pid' in child && child.pid === undefined) settle('spawn-failed');
+            };
+            child.once('exit', onExit);
+            child.on('error', onError);
+            if (child.exitCode !== null || ('signalCode' in child && child.signalCode != null)) onExit();
+        });
+        return child;
+    };
     let nextMessagePump: Promise<void> | null = null;
     let deferredUntilForegroundTurnEnds: ClaudeRemoteProviderAcceptedPrompt<EnhancedMode> | null = null;
     const swallowOptionalPromise = async (promise: Promise<void> | null): Promise<void> => {
@@ -1002,6 +1030,7 @@ export async function claudeRemoteAgentSdk(opts: {
         opts.setUserMessageSender?.((message: SDKUserMessage) => messages.push(message));
         messages.push({
             type: 'user',
+            uuid: promptSettlements.submit(initial),
             session_id: '',
             parent_tool_use_id: null,
             message: {
@@ -1009,7 +1038,6 @@ export async function claudeRemoteAgentSdk(opts: {
                 content: [{ type: 'text', text: initial.message }],
             },
         });
-        promptSettlements.accept(initial);
 
         let foregroundTaskInterruptId: string | null = null;
         let detachedTaskInterruptId: string | null = null;
@@ -1587,6 +1615,7 @@ export async function claudeRemoteAgentSdk(opts: {
                         foregroundTurnInterruptActive = true;
                         messages.push({
                             type: 'user',
+                            uuid: promptSettlements.submit(next),
                             session_id: '',
                             parent_tool_use_id: null,
                             message: {
@@ -1594,7 +1623,6 @@ export async function claudeRemoteAgentSdk(opts: {
                                 content: [{ type: 'text', text: next.message }],
                             },
                         });
-                        promptSettlements.accept(next);
 
                         updateThinking(true);
                         opts.onInFlightSteerAvailabilityChange?.(true);
@@ -1737,6 +1765,7 @@ export async function claudeRemoteAgentSdk(opts: {
         }
 
         for await (const message of response as any) {
+            const isAcceptedPromptEcho = promptSettlements.observeProviderMessage(message);
             const inboundType = (() => {
                 if (!message || typeof message !== 'object') return 'unknown';
                 const raw = (message as any).type;
@@ -1772,7 +1801,7 @@ export async function claudeRemoteAgentSdk(opts: {
                 if (quotaEvidence.length > 0) {
                     await opts.onQuotaEvidence?.(quotaEvidence);
                 }
-                const rateLimitDetails = mapClaudeRateLimitEventToUsageDetails(message);
+                const rateLimitDetails = mapClaudeProviderFailureToUsageDetails(message);
                 if (rateLimitDetails) {
                     await opts.onRateLimitEvent?.(rateLimitDetails, readClaudeRateLimitEventWindows(message));
                 }
@@ -2080,7 +2109,9 @@ export async function claudeRemoteAgentSdk(opts: {
                     );
                 }
 
-                emitMessage(messageToEmit);
+                // Pending owns the visible user message; the native acknowledgment can
+                // contain provider-only replay context and must not become another message.
+                if (!isAcceptedPromptEcho) emitMessage(messageToEmit);
                 recordSeenToolBlocks(messageToEmit, seen);
 
                 if (
@@ -2166,10 +2197,9 @@ export async function claudeRemoteAgentSdk(opts: {
                             }
                         }
                         if (system.session_id) {
-                            const transcriptPath = join(
-                                getProjectPath(opts.path, claudeConfigDir),
-                                `${system.session_id}.jsonl`,
-                            );
+                            const transcriptPath = latestClaudeSessionId === system.session_id && latestTranscriptPath
+                                ? latestTranscriptPath
+                                : join(getProjectPath(opts.path, claudeConfigDir), `${system.session_id}.jsonl`);
                             logger.debug(
                                 subtype === 'compact_boundary'
                                     ? '[claudeRemoteAgentSdk] Compact boundary'
@@ -2237,6 +2267,13 @@ export async function claudeRemoteAgentSdk(opts: {
             }
 
             if (message && message.type === 'result') {
+                // Init allocates the native identity before its JSONL exists.
+                // A completed turn can now prove it at the existing Session owner.
+                if (latestClaudeSessionId) {
+                    recordSessionFound(latestClaudeSessionId, latestTranscriptPath
+                        ? { transcript_path: latestTranscriptPath, transcriptPath: latestTranscriptPath }
+                        : undefined);
+                }
                 const didRequestThisResult = awaitingRequestedTurnInterruptResult;
                 awaitingRequestedTurnInterruptResult = false;
                 const failure = readAgentSdkResultFailure(message);
@@ -2310,6 +2347,7 @@ export async function claudeRemoteAgentSdk(opts: {
 	            logger.debug('[claudeRemoteAgentSdk] Aborted');
 	            return;
 	        }
+        runtimeFailure = { error: e };
         if (e && typeof e === 'object') {
             const err = e as any;
             const existing = err.happierClaudeCodeArtifacts;
@@ -2344,7 +2382,10 @@ export async function claudeRemoteAgentSdk(opts: {
         opts.setUserMessageSender?.(null);
         opts.setTurnInterrupt?.(null);
         if (!didSettleRuntimeActivityForCurrentTurn || providerActivityLedger.hasActiveProviderTasks()) {
-            handleClaudeRuntimeActivityLossForCurrentQuery?.('claude_agent_sdk_stream_finalized');
+            handleClaudeRuntimeActivityLoss({
+                ...runtimeActivityEffectParams,
+                reason: 'claude_agent_sdk_stream_finalized',
+            });
         }
         updateThinking(false);
         cleanupBufferedAssistantMessages?.(null);
@@ -2361,8 +2402,40 @@ export async function claudeRemoteAgentSdk(opts: {
             // ignore
         }
 
-        await repairTranscriptAfterAbort();
-        await stderrAppender?.close().catch(() => {});
+        try {
+            // Agent SDK 0.2.123 close() can return before process exit.
+            // Keep query cleanup authoritative until that owned process stops, so its late exit
+            // cannot abandon a replacement query's tasks in the shared provider ledger.
+            // Abort can set ChildProcess.killed while it is still alive, causing the SDK to skip
+            // its delayed termination. The canonical process-tree owner finishes owned cleanup.
+            const child = ownedProcess.child;
+            let processTreeStopped = false;
+            if (child && child.exitCode === null && child.signalCode === null) {
+                processTreeStopped = (await killProcessTree(child)).rootObservedAlive;
+            }
+            if (ownedProcess.exit && await ownedProcess.exit === 'exited') {
+                if (!ownedProcess.providerIsChild && !processTreeStopped) {
+                    throw new ClaudeNativeProviderExitUnverifiedError();
+                }
+                handleClaudeRuntimeActivityLoss({
+                    ...runtimeActivityEffectParams,
+                    reason: 'claude_agent_sdk_process_exit',
+                    providerStopped: true,
+                });
+            }
+        } catch (cleanupError) {
+            if (runtimeFailure) {
+                throw new AggregateError(
+                    [runtimeFailure.error, cleanupError],
+                    'Claude Agent SDK runtime failed and process cleanup failed',
+                    { cause: runtimeFailure.error },
+                );
+            }
+            throw cleanupError;
+        } finally {
+            await repairTranscriptAfterAbort();
+            await stderrAppender?.close().catch(() => {});
+        }
     }
     } finally {
         promptSettlements.settleUnresolved();

@@ -4,6 +4,8 @@ This document maps the current low-level OpenCode implementation across the CLI,
 
 In current development source, automatic server readiness and request dialect detection prefer authenticated V1 `/global/health` before the V2 surfaces. OpenCode 1.18.35 also answers `/api/health` with `{ healthy: true }`, so that marker alone cannot identify V2 when the V1 route exists. Preview V2 keeps its health-marker contract; released V2 keeps `/api/info`. Runtime clients re-detect the dialect instead of trusting a persisted V2 readiness hint from an older Happier client, while retaining the same live server and its credential. Explicit V2 executable selection remains authoritative. These corrections are not a claim about an already published Happier release.
 
+In current development source, the OpenCode ACP backend leaves log-level selection to the executable by default. `HAPPIER_OPENCODE_ACP_LOG_LEVEL` supplies an optional native value, trimmed without changing its case: OpenCode 1.2.27 accepts uppercase values such as `ERROR`, while OpenCode 2.0.26 accepts lowercase values such as `error`. An unset or blank override omits `--log-level`; OpenCode validates explicit values. `HAPPIER_OPENCODE_ACP_PRINT_LOGS` still controls stderr log printing independently. This correction is not a claim about an already published Happier release.
+
 ## Status legend
 
 - `supported`: primary current path
@@ -48,6 +50,12 @@ In current development source, automatic server readiness and request dialect de
 | Unit/integration test surface | `supported` | `apps/cli/src/backends/opencode/**/*.test.ts`, `apps/cli/src/backends/opencode/server/runtime.real.integration.test.ts`, `apps/cli/src/backends/opencode/cli/capability.loadSession.e2e.test.ts` | Coverage is strong for runtime, attach, direct-session, handoff, and transport parsing; most server-native tests are CLI-local rather than full UI flows. | Preserve current provider-local tests, but reorganize around unified provider capability contracts so server/ACP/direct tests share common fixtures. |
 | Provider baseline / contract tests | `supported` | `apps/cli/src/backends/opencode/e2e/providerSpec.json`, `apps/cli/src/backends/opencode/e2e/providerScenarios.json`, `packages/tests/src/testkit/providers/scenarios/scenarios.opencode.ts`, `packages/tests/suites/providers/opencode.server.sharedSession.realProbe.test.ts` | Provider baseline coverage is still ACP-heavy; server-native real probe exists separately. | Add server-native scenario coverage to the same provider contract harness so OpenCode does not look like two unrelated providers. |
 | UI e2e and manual QA surfaces | `partial` | `packages/tests/suites/ui-e2e/session.direct.opencode.browse.openTail.feat.sessions.direct.spec.ts`, `apps/docs/content/docs/providers/opencode.mdx`, `apps/docs/content/docs/features/direct-sessions.mdx`, `apps/docs/content/docs/features/session-forking.mdx`, `apps/docs/content/docs/features/attach-to-session.mdx` | UI e2e currently covers direct-session browse/tail; there is no dedicated OpenCode manual-QA tracker doc comparable to some other features. | Add unified architecture QA scripts that exercise server-native spawn, attach/detach, fork, resume, and direct takeover from one checklist. |
+
+## Native child lifecycle (development source)
+
+Server-mode child sessions keep their exact parent ownership across foreground turn completion and cancellation. Child transcript output and permission/question requests remain routed independently from the foreground turn. A background Task/SubAgent launch acknowledgement leaves the child running; terminal provider evidence closes the child tool result without completing another parent turn.
+
+The released OpenCode V2 2.0.20 contract distinguishes execution success, failure and interruption. Shutdown interruption preserves the execution for resume and is not child completion. Reconnect reconciliation uses settled child message/outcome evidence; text availability alone does not establish that a child has finished. These corrections describe current development source, not an already published Happier release. Native-provider live validation still requires an identified runtime and an authorized OpenCode account.
 
 ## Cross-cutting migration themes
 

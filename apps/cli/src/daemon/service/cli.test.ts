@@ -35,6 +35,10 @@ function doMockChildProcessSpawnSync(
   });
 }
 
+function isHappierTaskFolderListing(command: string, args: readonly string[]): boolean {
+  return command === 'powershell.exe' && args.some((arg) => arg.includes('.GetFolder("\\Happier")'));
+}
+
 const SCOPED_ENV_KEYS = [
   'HAPPIER_DAEMON_SERVICE_PLATFORM',
   'HAPPIER_DAEMON_SERVICE_USER_HOME_DIR',
@@ -1927,7 +1931,11 @@ describe('runDaemonServiceCliCommand', () => {
         HAPPIER_DAEMON_SERVICE_OWNERSHIP_STABLE_MS: '20',
       });
       vi.resetModules();
-      doMockChildProcessSpawnSync(() => ({ status: 0, stdout: Buffer.from(''), stderr: Buffer.from('') }));
+      doMockChildProcessSpawnSync((command, args = []) => ({
+        status: 0,
+        stdout: Buffer.from(isHappierTaskFolderListing(command, args) ? '[]' : ''),
+        stderr: Buffer.from(''),
+      }));
       vi.doMock('./commandExistsInPath', () => ({
         commandExistsInPath: vi.fn(() => true),
       }));
@@ -2036,6 +2044,12 @@ describe('runDaemonServiceCliCommand', () => {
         return {
           ...actual,
           spawnSync: vi.fn((command: string, args: readonly string[] = []) => {
+            if (isHappierTaskFolderListing(command, args)) {
+              return { status: 0, stdout: Buffer.from('[]'), stderr: Buffer.from('') };
+            }
+            if (command === 'powershell.exe' && args.some((arg) => arg.includes('.RegisterTask('))) {
+              lifecycleEvents.push('registerTask');
+            }
             if (command !== 'schtasks') {
               return { status: 0, stdout: Buffer.from(''), stderr: Buffer.from('') };
             }
@@ -2111,11 +2125,11 @@ describe('runDaemonServiceCliCommand', () => {
       }
 
       const stopIndex = lifecycleEvents.indexOf('stopDaemon');
-      const createIndex = lifecycleEvents.indexOf('/Create');
+      const registrationIndex = lifecycleEvents.indexOf('registerTask');
       const runIndex = lifecycleEvents.indexOf('/Run');
       expect(stopIndex).toBeGreaterThanOrEqual(0);
-      expect(createIndex).toBeGreaterThan(stopIndex);
-      expect(runIndex).toBeGreaterThan(createIndex);
+      expect(registrationIndex).toBeGreaterThan(stopIndex);
+      expect(runIndex).toBeGreaterThan(registrationIndex);
 
       const repeated = captureStdoutJsonOutput<{ ok: boolean }>();
       try {
@@ -2152,6 +2166,9 @@ describe('runDaemonServiceCliCommand', () => {
         return {
           ...actual,
           spawnSync: vi.fn((command: string, args: readonly string[] = []) => {
+            if (isHappierTaskFolderListing(command, args)) {
+              return { status: 0, stdout: Buffer.from('[]'), stderr: Buffer.from('') };
+            }
             if (command !== 'schtasks') {
               lifecycleEvents.push(command);
               return { status: 0, stdout: Buffer.from(''), stderr: Buffer.from('') };

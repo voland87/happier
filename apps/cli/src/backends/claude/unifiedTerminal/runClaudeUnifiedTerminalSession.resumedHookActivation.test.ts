@@ -6,6 +6,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { TerminalHostAdapter, TerminalHostHandle } from '@/integrations/terminalHost/_types';
 import type { TerminalControlPort } from '@/integrations/terminalHost/controlTypes';
+import { createSessionRuntimeActivity } from '@/session/runtimeActivity/createSessionRuntimeActivity';
+import type { SessionRuntimeActivitySnapshotPublisher } from '@/session/runtimeActivity/types';
 import type { RawJSONLines } from '../types';
 import { createPermissionHandlerSessionStub } from '../utils/permissionHandler.testkit';
 import { getProjectPath } from '../utils/path';
@@ -856,14 +858,14 @@ describe('runClaudeUnifiedTerminalSession resumed hook activation', () => {
     let runtimeOfferedBeforeInjection = false;
     let workflowArmedBeforeInjection = false;
     const onWorkflowActivityObserverReady = vi.fn();
-    const runtimeActivityReport = vi.fn(async () => {});
+    const runtimeActivity = createSessionRuntimeActivity('supported');
+    const runtimeActivityPublish = vi.fn<SessionRuntimeActivitySnapshotPublisher['publish']>(async () => {});
+    await runtimeActivity.bindPublisher({ publish: runtimeActivityPublish, close: async () => {} });
+    const contributionHandle = runtimeActivity.agentRuntimeContributionHandle;
+    if (!contributionHandle) throw new Error('Expected supported runtime Activity handle');
     const runtimeActivityAdapter = createClaudeProviderRuntimeActivityAdapter({
       providerActivityLedger: createClaudeProviderActivityLedger(),
-      contributionHandle: {
-        report: runtimeActivityReport,
-        markUnknown: vi.fn(async () => {}),
-        dispose: vi.fn(async () => {}),
-      },
+      contributionHandle,
     });
 
     const handle: TerminalHostHandle = {
@@ -881,7 +883,7 @@ describe('runClaudeUnifiedTerminalSession resumed hook activation', () => {
       kind: 'tmux',
       createOrAttachHost: vi.fn(async () => handle),
       injectUserPrompt: vi.fn(async (_handle, input) => {
-        runtimeOfferedBeforeInjection = runtimeActivityReport.mock.calls.length > 0;
+        runtimeOfferedBeforeInjection = runtimeActivityPublish.mock.calls.some(([snapshot]) => snapshot.state === 'idle');
         workflowArmedBeforeInjection = onWorkflowActivityObserverReady.mock.calls.length > 0;
         // The live failure happened long after the known-resume follower was established. Keep this
         // test on that same boundary instead of racing controller startup.
@@ -972,9 +974,8 @@ describe('runClaudeUnifiedTerminalSession resumed hook activation', () => {
       expect(runtimeOfferedBeforeInjection).toBe(true);
       expect(workflowArmedBeforeInjection).toBe(true);
       expect(onWorkflowActivityObserverReady).toHaveBeenCalledTimes(1);
-      expect(runtimeActivityReport).toHaveBeenCalledWith(
+      expect(runtimeActivityPublish).toHaveBeenCalledWith(
         { state: 'idle', activeCount: 0 },
-        'claude-unified-provider-observer-installed',
       );
       await waitUntil(() => onPromptAcceptedByProvider.mock.calls.length === 1 || sessionOutcome !== 'pending');
       if (!hooksActive) {
@@ -1032,6 +1033,7 @@ describe('runClaudeUnifiedTerminalSession resumed hook activation', () => {
     } finally {
       abortController.abort();
       await sessionPromise;
+      await runtimeActivity.dispose();
       if (previousClaudeConfigDir === undefined) {
         delete process.env.CLAUDE_CONFIG_DIR;
       } else {

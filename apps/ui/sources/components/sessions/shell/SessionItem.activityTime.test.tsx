@@ -19,7 +19,7 @@ const useProfileSpy = vi.hoisted(() => vi.fn(() => ({ id: 'u1' })));
 const useSessionSpy = vi.hoisted(() => vi.fn(() => null));
 const useSessionStatusSpy = vi.hoisted(() => vi.fn(() => mockSessionStatus));
 const useSettingSpy = vi.hoisted(() => vi.fn());
-const setClipboardStringAsyncSpy = vi.hoisted(() => vi.fn(async (_text: string) => {}));
+const setClipboardStringAsyncSpy = vi.hoisted(() => vi.fn(async (_text: string) => true));
 vi.mock('expo-clipboard', () => ({ setStringAsync: setClipboardStringAsyncSpy }));
 const formatPendingCountBadgeSpy = vi.hoisted(() => vi.fn((pendingCount: number) => {
     if (!Number.isFinite(pendingCount) || pendingCount <= 0) {
@@ -411,7 +411,7 @@ function findWorkingSpinner(screen: Awaited<ReturnType<typeof renderScreen>>, se
 
 describe('SessionItem activity time', () => {
     beforeEach(() => {
-        setClipboardStringAsyncSpy.mockReset().mockResolvedValue(undefined);
+        setClipboardStringAsyncSpy.mockReset().mockResolvedValue(true);
         mockSessionStatus = {
             ...defaultSessionStatus,
         };
@@ -529,37 +529,32 @@ describe('SessionItem activity time', () => {
         { compact: false, compactMinimal: false },
         { compact: true, compactMinimal: false },
         { compact: true, compactMinimal: true },
-    ])('shows all work-context fields directly in the row at density $compact/$compactMinimal', async (density) => {
+    ])('shows all work-context values in the row at density $compact/$compactMinimal', async (density) => {
         const { SessionItem } = await importSessionItemForTest();
         const rowModel = createSessionRowModel({
             ...density,
             workContextPreview: {
-                tasks: [{ value: 'TASK-42', label: 'TASK-42' }, { value: 'TASK-43', label: 'TASK-43' }],
+                tasks: [{ value: 'TASK-42', label: 'TASK-42' }, { value: 'https://tracker.example/TASK-43', label: 'TASK-43' }],
                 mergeRequests: [
                     { value: 'https://github.com/acme/app/pull/42', label: '!42' },
                     { value: 'https://gitlab.com/acme/app/-/merge_requests/43', label: '!43' },
                     { value: 'follow-up after release', label: 'follow-up after release' },
                 ],
                 branch: 'feature/context',
-                description: 'Keep the full description visible\nincluding the second line',
+                description: 'Keep the full description visible\nin both lines',
                 customFields: [{ name: 'Priority', value: 'High' }, { name: 'Owner', value: 'Platform team' }],
             },
         });
 
         const screen = await renderScreen(<SessionItem rowModel={rowModel} session={rowModel.session} />);
 
-        expect(screen.getTextContent()).toContain('TASK-42');
-        expect(screen.getTextContent()).toContain('TASK-43');
-        expect(screen.getTextContent()).toContain('!42');
-        expect(screen.getTextContent()).toContain('!43');
-        expect(screen.getTextContent()).toContain('follow-up after release');
-        expect(screen.getTextContent()).toContain('feature/context');
+        for (const value of [
+            'TASK-42', 'TASK-43', '!42', '!43', 'follow-up after release', 'feature/context',
+            'Keep the full description visible\nin both lines', 'Priority', 'High', 'Owner', 'Platform team',
+        ]) {
+            expect(screen.getTextContent()).toContain(value);
+        }
         expect(screen.findByTestId('session-list-work-context-preview-repository-sess_row_model')).toBeNull();
-        expect(screen.getTextContent()).toContain('Keep the full description visible\nincluding the second line');
-        expect(screen.getTextContent()).toContain('Priority');
-        expect(screen.getTextContent()).toContain('High');
-        expect(screen.getTextContent()).toContain('Owner');
-        expect(screen.getTextContent()).toContain('Platform team');
         expect(screen.findByTestId('session-list-work-context-preview-tasks-sess_row_model')).toBeTruthy();
         expect(screen.findByTestId('session-list-work-context-preview-merge-requests-sess_row_model')).toBeTruthy();
         expect(screen.findByTestId('session-list-work-context-preview-branch-sess_row_model')).toBeTruthy();
@@ -596,8 +591,11 @@ describe('SessionItem activity time', () => {
         const url = 'https://tracker.example/view.php?id=42&view=details#notes';
         const rowModel = createSessionRowModel({
             workContextPreview: {
-                tasks: [{ value: url, label: '42' }], mergeRequests: [], branch: null,
-                description: null, customFields: [],
+                tasks: [{ value: url, label: '42' }],
+                mergeRequests: [],
+                branch: null,
+                description: null,
+                customFields: [],
             },
         });
         const screen = await renderScreen(<SessionItem rowModel={rowModel} session={rowModel.session} />);
@@ -606,12 +604,13 @@ describe('SessionItem activity time', () => {
         const event = { stopPropagation: vi.fn(), preventDefault: vi.fn() };
         await act(async () => { await button!.props.onPress(event); });
         expect(event.stopPropagation).toHaveBeenCalled();
+        expect(event.preventDefault).toHaveBeenCalled();
         expect(setClipboardStringAsyncSpy).toHaveBeenCalledWith(url);
         expect(screen.findByTestId('session-item-copy-debug-feedback:sess_row_model')).toBeTruthy();
         expect(screen.getTextContent()).not.toContain(url);
     });
 
-    it('renders background activity with the normal working spinner while retaining pending and unread row facts', async () => {
+    it('keeps the pending indicator over background activity while still showing the background status line', async () => {
         const { SessionItem } = await importSessionItemForTest();
         const rowModel = createSessionRowModel({
             status: {
@@ -646,7 +645,8 @@ describe('SessionItem activity time', () => {
         expect(rowModel.attention).toEqual({ listState: 'pending', rowState: 'pending' });
         expect(rowModel.hasUnreadMessages).toBe(true);
         expect(screen.findByTestId('session-list-status-subtitle-sess_row_model-pending')).toBeTruthy();
-        expect(screen.findByTestId('session-row-attention-indicator-spinner-sess_row_model-secondary')).toBeTruthy();
+        expect(screen.findByTestId('session-row-attention-indicator-spinner-sess_row_model-secondary')).toBeNull();
+        expect(screen.findByTestId('session-row-attention-indicator-dot-sess_row_model-secondary')).toBeTruthy();
         // The background line now renders the SESSION's status text, which is where the count
         // lives, instead of a second key the row would have to re-interpolate.
         expect(screen.findByTestId('session-list-status-subtitle-text-sess_row_model-pending')?.props.children)

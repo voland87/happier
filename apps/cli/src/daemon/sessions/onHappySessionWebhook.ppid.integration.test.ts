@@ -34,9 +34,12 @@ describe('createOnHappySessionWebhook (PPID correlation)', () => {
     const awaiters = new Map<number, (session: TrackedSession) => void>();
     const resolvers = new Map<number, (result: SpawnSessionResult) => void>();
     const timeouts = new Map<number, ReturnType<typeof setTimeout>>();
+    let observePromotion!: (pid: number) => void;
+    const promotedPid = new Promise<number>(resolve => { observePromotion = resolve; });
     const exit = createOnChildExited({
       pidToTrackedSession: sessions, spawnResourceCleanupByPid: new Map(), sessionAttachCleanupByPid: new Map(),
       getApiMachineForSessions: () => null, removeSessionMarkerFn: async () => {},
+      onPidPromoted: ({ toPid }) => observePromotion(toPid),
     });
     const completion = waitForVisibleConsoleSessionWebhook({
       pid: wrapperPid, pollMs: 10, pidToAwaiter: awaiters, pidToSpawnResultResolver: resolvers,
@@ -56,7 +59,8 @@ describe('createOnHappySessionWebhook (PPID correlation)', () => {
       expect(sessions.get(wrapperPid)?.sessionRunnerPid).toBe(childPid);
       wrapper.kill('SIGKILL');
       await waitForProcessExit(wrapperPid, { timeoutMs: 2_000 });
-      await vi.waitFor(() => expect(sessions.has(childPid)).toBe(true));
+      expect(await promotedPid).toBe(childPid);
+      expect(sessions.has(childPid)).toBe(true);
       expect(awaiters.has(childPid)).toBe(true);
       await report('session-promoted-runner', createMetadata(childPid, 'daemon'));
       await expect(completion).resolves.toEqual({ type: 'success', sessionId: 'session-promoted-runner' });

@@ -124,6 +124,8 @@ async function sha256File(filePath: string): Promise<string> {
  * Binding the installed payload into state lets the asynchronous installable owner
  * reject post-install corruption. Unchanged metadata avoids re-hashing the large
  * server on each launch; changed metadata is checked against the stored digest.
+ * Version admission also belongs here: an intact older payload must go through
+ * the same launch ensure/install path as a missing managed prerequisite.
  * The synchronous resolver intentionally remains a path/runnability lookup for
  * spawn after an authoritative ensure succeeds.
  */
@@ -131,7 +133,7 @@ export async function verifyExistingAgyAcpManagedBinPath(): Promise<string | nul
   const candidate = resolveExistingAgyAcpManagedBinPath();
   if (!candidate) return null;
   const state = await readAgyAcpState();
-  if (!state.executableSha256) return null;
+  if (state.installedVersion !== AGY_ACP_SERVER_VERSION || !state.executableSha256) return null;
   try {
     const metadata = await stat(candidate);
     if (metadata.size === state.executableSize && metadata.mtimeMs === state.executableMtimeMs) {

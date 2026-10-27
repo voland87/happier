@@ -1,4 +1,5 @@
 import { io, type Socket } from 'socket.io-client';
+import { ConnectedServiceIdSchema, CONNECTED_SERVICE_READER_SUPPORT_SOCKET_AUTH_FIELD } from '@happier-dev/protocol';
 
 import type { ManagedConnectionTransport, TransportDisconnectEvent } from '@happier-dev/connection-supervisor';
 import { readComputerUiFocusState, subscribeToRuntimeActiveChange } from '@/utils/runtime/isRuntimeActive';
@@ -30,6 +31,7 @@ export function createSyncSocketTransport(params: Readonly<{
         // a generic `xhr poll error` during bootstrap even when the server is healthy.
         path: '/v1/updates/',
         auth: {
+            [CONNECTED_SERVICE_READER_SUPPORT_SOCKET_AUTH_FIELD]: ConnectedServiceIdSchema.options,
             token: params.token,
             clientType: 'user-scoped' as const,
             clientPurpose: 'sync' as const,

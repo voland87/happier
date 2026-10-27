@@ -114,6 +114,7 @@ const AVAILABLE = {
 
 type HookProps = Readonly<{
     sessionId?: string;
+    currentAgentId?: string;
     accountScope?: ServerAccountScope | null;
     entries?: readonly ResolvedBackendCatalogEntry[];
     source?: SessionAgentContinuationSourceState;
@@ -126,7 +127,7 @@ async function renderControls(props: HookProps = {}) {
     return renderHook((hookProps: HookProps) => useInSessionAgentPickerControls({
         sessionId: hookProps.sessionId ?? 'session-1',
         accountScope: hookProps.accountScope ?? null,
-        currentAgentId: 'claude',
+        currentAgentId: hookProps.currentAgentId ?? 'claude',
         currentAgentLabel: 'Claude Code',
         currentAgentSessionActive: hookProps.sessionActive ?? true,
         entries: hookProps.entries ?? [entry('claude'), entry('codex')],
@@ -164,7 +165,7 @@ describe('useInSessionAgentPickerControls', () => {
             method: string;
             payload: { selections?: readonly unknown[] };
         }) => Promise.resolve(
-            params.method === 'session.continuation.inspectBatch'
+            ['session.continuation.inspectBatch', 'session.continuation.inspectBackendTargets'].includes(params.method)
                 ? { v: 1, inspections: (params.payload.selections ?? []).map(() => AVAILABLE) }
                 : AVAILABLE,
         ));
@@ -373,6 +374,25 @@ describe('useInSessionAgentPickerControls', () => {
         expect(detailModelSummaryRef.current).toBe(t('session.agentContinuation.detailDescriptionEmpty'));
         expect(detailModelSummaryRef.current).not.toContain('carries over');
         expect(detailModelSummaryRef.current).toContain('Nothing is sent');
+    });
+
+    it('arms configured B with exact identity after configured A is excluded as current', async () => {
+        const configured = (id: string) => entry('customAcp', {
+            target: { kind: 'configuredAcpBackend', backendId: id }, targetKey: `acpBackend:${id}`,
+            family: 'configuredAcpBackend', builtInAgentId: null, title: id,
+        });
+        const hook = await renderControls({
+            currentAgentId: 'customAcp',
+            entries: [configured('a'), configured('b'), entry('codex')],
+            source: { ...supportedSource, currentBackendTargetKey: 'acpBackend:a' },
+        });
+        await openPicker(hook);
+        await act(async () => optionsOf(hook.getCurrent()).find((option) => option.id === 'acpBackend:b')?.onSelectImmediate?.());
+        expect(hook.getCurrent().armedContinuation).toMatchObject({
+            sourceBackendTarget: { kind: 'configuredAcpBackend', backendId: 'a' },
+            selection: { agentId: 'customAcp', backendTarget: { kind: 'configuredAcpBackend', backendId: 'b' } },
+        });
+        expect(optionsOf(hook.getCurrent()).some((option) => option.id === 'acpBackend:a')).toBe(false);
     });
 
     it('arms nothing until a row is deliberately selected', async () => {

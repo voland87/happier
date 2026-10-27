@@ -41,6 +41,8 @@ function writeCloseAgentScript(params: { dir: string; advertiseClose: boolean })
                 sessionCapabilities: ${params.advertiseClose ? '{ close: {} }' : '{}'},
               },
             });
+          } else if (request.method === 'session/cancel') {
+            appendFileSync(join(evidenceDir, 'cancel-requests.log'), String(request.params?.sessionId) + '\\n');
           } else if (request.method === 'session/close') {
             appendFileSync(join(evidenceDir, 'close-requests.log'), String(request.params?.sessionId) + '\\n');
             ok(request.id, {});
@@ -54,6 +56,24 @@ function writeCloseAgentScript(params: { dir: string; advertiseClose: boolean })
 }
 
 describe('AcpBackend session/close on dispose', () => {
+  it('disposes a replay attachment without cancelling or closing the provider child', async () => {
+    await withTempDir('happier-acp-replay-detach-', async (dir) => {
+      const backend = new AcpBackend({
+        agentName: 'test',
+        cwd: dir,
+        command: process.execPath,
+        args: [writeCloseAgentScript({ dir, advertiseClose: true })],
+        declaredSessionLoadSupport: true,
+      });
+
+      await backend.loadSession('child-session');
+      await backend.dispose({ preserveProviderSession: true });
+
+      expect(existsSync(join(dir, 'cancel-requests.log'))).toBe(false);
+      expect(existsSync(join(dir, 'close-requests.log'))).toBe(false);
+    });
+  }, 30_000);
+
   it('releases the agent-owned session when the handshake advertised session/close', async () => {
     await withTempDir('happier-acp-close-', async (dir) => {
       const backend = new AcpBackend({

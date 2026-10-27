@@ -2440,21 +2440,23 @@ diff --git a/node_modules/@legendapp/list/react-native.web.d.ts b/node_modules/@
 diff --git a/node_modules/@legendapp/list/react-native.web.js b/node_modules/@legendapp/list/react-native.web.js
 --- a/node_modules/@legendapp/list/react-native.web.js
 +++ b/node_modules/@legendapp/list/react-native.web.js
-@@ -773,8 +773,14 @@
+@@ -772,10 +772,16 @@
+ // src/core/recalculateSettledScroll.ts
  function recalculateSettledScroll(ctx) {
    var _a3, _b;
    const state = ctx.state;
 +  const previousContentSize = getContentSize(ctx);
    if ((_a3 = state.props) == null ? void 0 : _a3.data) {
      (_b = state.triggerCalculateItemsInView) == null ? void 0 : _b.call(state, { forceFullItemPositions: true });
-   }
++  }
 +  // Settling can invalidate offscreen size versions after the last measured-row
 +  // maintenance pass. Hand the new geometry back to the existing tail owner.
 +  if (getContentSize(ctx) !== previousContentSize) {
 +    doMaintainScrollAtEnd(ctx);
-+  }
+   }
    checkThresholds(ctx);
  }
+ var DEFAULT_WEB_ADAPTIVE_RENDER_ENTER_VELOCITY = 6;
 @@ -872,9 +878,11 @@
 
  // src/utils/setInitialRenderState.ts
@@ -2520,7 +2522,8 @@ diff --git a/node_modules/@legendapp/list/react-native.web.js b/node_modules/@le
    var _a3, _b, _c;
    const state = ctx.state;
    if ((options == null ? void 0 : options.resolvedOffset) !== void 0) {
-@@ -950,6 +990,9 @@
+@@ -949,8 +989,11 @@
+   }
    const complete = () => {
      var _a4, _b2, _c2, _d, _e;
      const shouldReleaseDeferredPublicOnScroll = ((_a4 = state.initialScrollSession) == null ? void 0 : _a4.kind) === "bootstrap";
@@ -2530,6 +2533,7 @@ diff --git a/node_modules/@legendapp/list/react-native.web.js b/node_modules/@le
      const finalScrollOffset = (_d = (_c2 = (_b2 = options == null ? void 0 : options.resolvedOffset) != null ? _b2 : state.scrollPending) != null ? _c2 : state.scroll) != null ? _d : 0;
      initialScrollWatchdog.clear(state);
      if ((options == null ? void 0 : options.preserveTarget) && state.initialScroll) {
+       state.clearPreservedInitialScrollOnNextFinish = void 0;
 @@ -972,8 +1015,11 @@
      if (options == null ? void 0 : options.recalculateItems) {
        recalculateSettledScroll(ctx);
@@ -2836,7 +2840,52 @@ diff --git a/node_modules/@legendapp/list/react-native.web.js b/node_modules/@le
            if (state.props.horizontal && isHorizontalRTL(state)) {
              const currentContentSize = getContentSize(ctx);
              const logicalEndOffset = getLogicalHorizontalMaxOffset(state, currentContentSize);
-@@ -1718,8 +1898,19 @@
+@@ -1594,9 +1774,10 @@
+   return false;
+ }
+ function prepareMVCP(ctx, dataChanged) {
+   const state = ctx.state;
+-  const { idsInView, positions, props } = state;
++  const { positions, props } = state;
++  let idsInView = state.idsInView;
+   const {
+     maintainVisibleContentPosition: { data: mvcpData, size: mvcpScroll, shouldRestorePosition }
+   } = props;
+   const now = Date.now();
+@@ -1605,16 +1786,31 @@
+   if (dataChanged && state.pendingScrollToEnd && scrollingTo === void 0) {
+     state.mvcpAnchorLock = void 0;
+     return void 0;
+   }
++  const shouldMVCP = dataChanged ? mvcpData : mvcpScroll;
++  // HAPPIER-MVCP-PHYSICAL-BASELINE: a browser gesture can advance before onScroll.
++  // Reconcile its offset and visible anchor before geometry changes, preserving explicit targets.
++  if (shouldMVCP && scrollingTo === void 0 && !hasActiveInitialScroll(state)) {
++    const scroller = state.refScroller.current;
++    const observedScroll = scroller && typeof scroller.getCurrentScrollOffset === "function" ? scroller.getCurrentScrollOffset() : void 0;
++    if (typeof observedScroll === "number" && Number.isFinite(observedScroll) && Math.abs(observedScroll - state.scroll) > MVCP_POSITION_EPSILON) {
++      state.scroll = observedScroll;
++      state.mvcpAnchorLock = void 0;
++      const topPad = peek$(ctx, "stylePaddingTop") + peek$(ctx, "alignItemsAtEndPadding") + peek$(ctx, "headerSize");
++      const scroll = Math.max(0, observedScroll - topPad);
++      const visibleRange = getCachedVisibleRange(ctx, scroll, scroll + state.scrollLength);
++      idsInView = visibleRange ? getIdsInVisibleRange(state, visibleRange) : [];
++      state.idsInView = idsInView;
++    }
++  }
+   const anchorLock = resolveAnchorLock(state, enableMVCPAnchorLock, mvcpData, now) ;
+   let prevPosition;
+   let targetId;
+   const idsInViewWithPositions = [];
+   const scrollTarget = scrollingTo == null ? void 0 : scrollingTo.index;
+   const scrollingToViewPosition = scrollingTo == null ? void 0 : scrollingTo.viewPosition;
+   const isEndAnchoredScrollTarget = scrollTarget !== void 0 && state.props.data.length > 0 && scrollTarget >= state.props.data.length - 1 && (scrollingToViewPosition != null ? scrollingToViewPosition : 0) > 0;
+-  const shouldMVCP = dataChanged ? mvcpData : mvcpScroll;
+   const indexByKey = state.indexByKey;
+   const prevScroll = state.scroll;
+   getContentSize(ctx);
+   if (shouldMVCP) {
+@@ -1718,8 +1914,19 @@
              scrollingTo.itemSize = newSize;
            }
          }
@@ -2856,7 +2905,7 @@ diff --git a/node_modules/@legendapp/list/react-native.web.js b/node_modules/@le
          anchorId: anchorIdForLock,
          anchorPosition: anchorPositionForLock,
          dataChanged,
-@@ -1735,13 +1926,10 @@
+@@ -1735,13 +1942,10 @@
          };
          maybeApplyPredictedNativeMVCPAdjust(ctx);
          return;
@@ -2872,7 +2921,7 @@ diff --git a/node_modules/@legendapp/list/react-native.web.js b/node_modules/@le
      };
    }
  }
-@@ -1808,9 +1996,8 @@
+@@ -1808,9 +2012,8 @@
  }
 
  // src/core/updateScroll.ts
@@ -2882,7 +2931,7 @@ diff --git a/node_modules/@legendapp/list/react-native.web.js b/node_modules/@le
    const { ignoreScrollFromMVCP, lastScrollAdjustForHistory, scrollAdjustHandler, scrollHistory, scrollingTo } = state;
    const prevScroll = state.scroll;
    if ((options == null ? void 0 : options.markHasScrolled) !== false) {
-@@ -1882,9 +2069,9 @@
+@@ -1882,9 +2085,9 @@
        scheduleFullDrawDistancePrewarm(ctx);
      } else {
        runCalculateItems();
@@ -2893,7 +2942,7 @@ diff --git a/node_modules/@legendapp/list/react-native.web.js b/node_modules/@le
        state.pendingMaintainScrollAtEnd = false;
        doMaintainScrollAtEnd(ctx);
      }
-@@ -2233,9 +2420,10 @@
+@@ -2233,9 +2436,10 @@
    });
  }
 
@@ -2905,7 +2954,7 @@ diff --git a/node_modules/@legendapp/list/react-native.web.js b/node_modules/@le
      return false;
    }
    let hasMountedIndex = false;
-@@ -2243,9 +2431,9 @@
+@@ -2243,9 +2447,9 @@
      const index = state.indexByKey.get(key);
      if (index !== void 0 && index >= start && index <= end) {
        hasMountedIndex = true;
@@ -2916,7 +2965,7 @@ diff --git a/node_modules/@legendapp/list/react-native.web.js b/node_modules/@le
        }
      }
    }
-@@ -2623,13 +2811,15 @@
+@@ -2623,13 +2827,15 @@
      if (!areEquivalentBootstrapInitialScrollTargets(initialScroll, updatedInitialScroll) || !!bootstrapInitialScroll || shouldResetDidFinish || didDataChange) {
        setInitialScrollTarget(ctx, updatedInitialScroll, {
          resetDidFinish: shouldResetDidFinish
@@ -2937,7 +2986,7 @@ diff --git a/node_modules/@legendapp/list/react-native.web.js b/node_modules/@le
      }
    }
    if (!didDataChange) {
-@@ -2748,9 +2938,9 @@
+@@ -2748,9 +2954,9 @@
    if (initialScroll.index !== void 0 && state.startBuffered >= 0 && state.endBuffered >= 0 && initialScroll.index >= state.startBuffered && initialScroll.index <= state.endBuffered) {
      bootstrapInitialScroll.targetIndexSeed = void 0;
    }
@@ -2948,7 +2997,7 @@ diff --git a/node_modules/@legendapp/list/react-native.web.js b/node_modules/@le
    const { data } = state.props;
    const visibleIndices = getBootstrapRevealVisibleIndices({
      dataLength: data.length,
-@@ -2766,9 +2956,9 @@
+@@ -2766,9 +2972,9 @@
    });
    const areVisibleIndicesMeasured = visibleIndices.length > 0 && visibleIndices.every((index) => {
      var _a4;
@@ -2959,7 +3008,7 @@ diff --git a/node_modules/@legendapp/list/react-native.web.js b/node_modules/@le
    const previousResolvedOffset = bootstrapInitialScroll.previousResolvedOffset;
    const previousVisibleIndices = bootstrapInitialScroll.visibleIndices;
    bootstrapInitialScroll.previousResolvedOffset = resolvedOffset;
-@@ -3345,11 +3535,29 @@
+@@ -3345,11 +3551,29 @@
    const {
      positions,
      props: { data }
@@ -2990,7 +3039,7 @@ diff --git a/node_modules/@legendapp/list/react-native.web.js b/node_modules/@le
      const lastIndex = data.length - 1;
      const lastId = getId(state, lastIndex);
      const lastPosition = positions[lastIndex];
-@@ -3370,14 +3578,14 @@
+@@ -3370,14 +3594,14 @@
            if (size > maxSize) {
              maxSize = size;
            }
@@ -3007,7 +3056,7 @@ diff --git a/node_modules/@legendapp/list/react-native.web.js b/node_modules/@le
        }
      }
    }
-@@ -3438,9 +3646,9 @@
+@@ -3438,9 +3662,9 @@
    const velocity = scrollVelocity != null ? scrollVelocity : getScrollVelocity(state);
    const shouldOptimize = !forceFullUpdate && !dataChanged && (optimizeForVisibleWindow || Math.abs(velocity) > 0 || state.scrollLength > 0 && lastScrollDelta > state.scrollLength);
    const maxVisibleArea = scrollBottomBuffered + 1e3;
@@ -3018,7 +3067,7 @@ diff --git a/node_modules/@legendapp/list/react-native.web.js b/node_modules/@le
    let currentRowTop = 0;
    let column = 1;
    let maxSizeInRow = 0;
-@@ -3467,9 +3675,9 @@
+@@ -3467,9 +3691,9 @@
      } else if (startIndex < dataLength) {
        const prevIndex = startIndex - 1;
        const prevId = getId(state, prevIndex);
@@ -3029,7 +3078,7 @@ diff --git a/node_modules/@legendapp/list/react-native.web.js b/node_modules/@le
          prevId,
          prevIndex,
          data[prevIndex],
-@@ -3485,9 +3693,27 @@
+@@ -3485,9 +3709,27 @@
    let didBreakEarly = false;
    let breakAt;
    for (let i = startIndex; i < dataLength; i++) {
@@ -3058,7 +3107,7 @@ diff --git a/node_modules/@legendapp/list/react-native.web.js b/node_modules/@le
      }
      if (shouldOptimize && breakAt === void 0 && !scrollingTo && !dataChanged && currentRowTop > maxVisibleArea) {
        const itemsPerRow = hasColumns ? numColumns : 1;
-@@ -3507,10 +3733,9 @@
+@@ -3507,10 +3749,9 @@
        currentRowTop += maxSizeInRow;
        column = 1;
        maxSizeInRow = 0;
@@ -3070,11 +3119,60 @@ diff --git a/node_modules/@legendapp/list/react-native.web.js b/node_modules/@le
        if (indexByKeyForChecking.has(id)) {
          console.error(
            `[legend-list] Error: Detected overlapping key (${id}) which causes missing items and gaps and other terrrible things. Check that keyExtractor returns unique values.`
-@@ -4400,8 +4625,19 @@
-           }
+@@ -4118,9 +4359,9 @@
+     }
+   }
+   return null;
+ }
+-function updateViewabilityForCachedRange(ctx, viewabilityConfigCallbackPairs, scrollLength, scroll, scrollBottom) {
++function getCachedVisibleRange(ctx, scroll, scrollBottom) {
+   var _a3, _b;
+   const state = ctx.state;
+   const {
+     endBuffered,
+@@ -4146,8 +4387,15 @@
+     if (didPassVisibleEnd) {
+       break;
+     }
+   }
++  return visibleRange;
++}
++function updateViewabilityForCachedRange(ctx, viewabilityConfigCallbackPairs, scrollLength, scroll, scrollBottom) {
++  const state = ctx.state;
++  const { startBuffered, endBuffered } = state;
++  const visibleRange = getCachedVisibleRange(ctx, scroll, scrollBottom);
++  if (!visibleRange) return;
+   Object.assign(state, {
+     endNoBuffer: visibleRange.endNoBuffer,
+     firstFullyOnScreenIndex: visibleRange.firstFullyOnScreenIndex,
+     idsInView: getIdsInVisibleRange(state, visibleRange),
+@@ -4290,8 +4538,9 @@
+           return;
          }
        }
      }
++    const scrollBeforeMVCP = state.scroll;
+     const checkMVCP = doMVCP && !suppressInitialScrollSideEffects ? prepareMVCP(ctx, dataChanged) : void 0;
+     if (dataChanged) {
+       resetLayoutCachesForDataChange(state);
+     }
+@@ -4319,9 +4568,8 @@
+         if (shouldRestorePosition && !shouldRestorePosition(data[index], index, data)) continue;
+         protectedContainerKeys.add(id);
+       }
+     }
+-    const scrollBeforeMVCP = state.scroll;
+     const scrollAdjustPendingBeforeMVCP = (_f = peek$(ctx, "scrollAdjustPending")) != null ? _f : 0;
+     checkMVCP == null ? void 0 : checkMVCP();
+     const didMVCPAdjustScroll = !!checkMVCP && (state.scroll !== scrollBeforeMVCP || ((_g = peek$(ctx, "scrollAdjustPending")) != null ? _g : 0) !== scrollAdjustPendingBeforeMVCP);
+     if (didMVCPAdjustScroll) {
+@@ -4398,8 +4646,19 @@
+           } else {
+             foundEnd = true;
+           }
+         }
++      }
++    }
 +    if (startBuffered === null && endBuffered === null && dataLength > 0) {
 +      const lastIndexInData = dataLength - 1;
 +      const lastIdInData = idCache[lastIndexInData] != null ? idCache[lastIndexInData] : getId(state, lastIndexInData);
@@ -3084,13 +3182,11 @@ diff --git a/node_modules/@legendapp/list/react-native.web.js b/node_modules/@le
 +        startBuffered = lastIndexInData;
 +        startBufferedId = lastIdInData;
 +        endBuffered = lastIndexInData;
-+      }
-+    }
+       }
+     }
      Object.assign(state, {
        endBuffered,
-       endNoBuffer: visibleRange.endNoBuffer,
-       firstFullyOnScreenIndex: visibleRange.firstFullyOnScreenIndex,
-@@ -4603,9 +4839,9 @@
+@@ -4603,9 +4862,9 @@
        return;
      }
      maybeEmitFirstVisibleItemChanged(state, visibleRange.startNoBuffer);
@@ -3101,7 +3197,7 @@ diff --git a/node_modules/@legendapp/list/react-native.web.js b/node_modules/@le
          setDidLayout(ctx);
          handleInitialScrollLayoutReady(ctx);
        }
-@@ -4761,16 +4997,28 @@
+@@ -4761,16 +5020,28 @@
    } else {
      updateItemSizesBatch(ctx, [measurement]);
    }
@@ -3131,7 +3227,7 @@ diff --git a/node_modules/@legendapp/list/react-native.web.js b/node_modules/@le
        const metadata = measurement.containerId !== void 0 && index !== void 0 && itemData !== void 0 ? resolveContainerItemMetadata(state, measurement.containerId, index, itemData) : void 0;
        const nextResult = applyItemSize(ctx, measurement.itemKey, measurement.size, metadata);
        mergeItemSizeUpdateResult(result, nextResult);
-@@ -4788,14 +5036,19 @@
+@@ -4788,14 +5059,19 @@
      sizesKnown,
      props: { getFixedItemSize, getItemType, horizontal, onItemSizeChanged, data, maintainScrollAtEnd }
    } = state;
@@ -3153,7 +3249,7 @@ diff --git a/node_modules/@legendapp/list/react-native.web.js b/node_modules/@le
        return { didMeasureUserScrollAnchorResetItem };
      }
      if (!(resolvedMeasurementItem == null ? void 0 : resolvedMeasurementItem.didResolveFixedItemSize)) {
-@@ -4806,27 +5059,27 @@
+@@ -4806,27 +5082,27 @@
          itemType: type
        };
      }
@@ -3185,7 +3281,7 @@ diff --git a/node_modules/@legendapp/list/react-native.web.js b/node_modules/@le
      }
      onItemSizeChanged == null ? void 0 : onItemSizeChanged({
        index,
-@@ -4840,9 +5093,9 @@
+@@ -4840,9 +5116,9 @@
    if (minIndexSizeChanged !== void 0) {
      state.minIndexSizeChanged = state.minIndexSizeChanged !== void 0 ? Math.min(state.minIndexSizeChanged, minIndexSizeChanged) : minIndexSizeChanged;
    }
@@ -3196,7 +3292,7 @@ diff --git a/node_modules/@legendapp/list/react-native.web.js b/node_modules/@le
      return {
        didChange: diff !== 0,
        didMeasureUserScrollAnchorResetItem,
-@@ -4854,19 +5107,18 @@
+@@ -4854,19 +5130,18 @@
      didChange: diff !== 0,
      didMeasureUserScrollAnchorResetItem
    };
@@ -3218,7 +3314,7 @@ diff --git a/node_modules/@legendapp/list/react-native.web.js b/node_modules/@le
    let itemType = resolvedMeasurementItem == null ? void 0 : resolvedMeasurementItem.itemType;
    let fixedItemSize = resolvedMeasurementItem == null ? void 0 : resolvedMeasurementItem.fixedItemSize;
    if (getFixedItemSize && !(resolvedMeasurementItem == null ? void 0 : resolvedMeasurementItem.didResolveFixedItemSize)) {
-@@ -4877,9 +5129,9 @@
+@@ -4877,9 +5152,9 @@
      didResolveFixedItemSize: resolvedMeasurementItem == null ? void 0 : resolvedMeasurementItem.didResolveFixedItemSize,
      fixedItemSize,
      itemType
@@ -3229,7 +3325,7 @@ diff --git a/node_modules/@legendapp/list/react-native.web.js b/node_modules/@le
    const prevSizeKnown = sizesKnown.get(itemKey);
    const size = Math.round(rawSize) ;
    sizesKnown.set(itemKey, size);
-@@ -4897,8 +5149,9 @@
+@@ -4897,8 +5172,9 @@
      } else {
        averages.avg = (averages.avg * averages.num + size) / (averages.num + 1);
        averages.num++;
@@ -3239,7 +3335,7 @@ diff --git a/node_modules/@legendapp/list/react-native.web.js b/node_modules/@le
    if (!prevSize || Math.abs(prevSize - size) > 0.1) {
      setSize(ctx, itemKey, size);
      return size - prevSize;
-@@ -5358,9 +5611,10 @@
+@@ -5358,9 +5634,10 @@
    let layout = rectangle;
    const axis = state.horizontal ? "width" : "height";
    const size = roundSize(rectangle[axis]);
@@ -3251,7 +3347,7 @@ diff --git a/node_modules/@legendapp/list/react-native.web.js b/node_modules/@le
    const applyLayout = () => {
      state.lastSize = layout;
      updateItemSizes(ctx, {
-@@ -6690,8 +6944,10 @@
+@@ -6690,8 +6967,10 @@
    const { maintainScrollAtEnd } = state.props;
    if (didColumnsChange) {
      state.sizes.clear();
@@ -3262,7 +3358,7 @@ diff --git a/node_modules/@legendapp/list/react-native.web.js b/node_modules/@le
      for (const key in state.averageSizes) {
        delete state.averageSizes[key];
      }
-@@ -7109,8 +7365,15 @@
+@@ -7109,8 +7388,15 @@
    const state = ctx.state;
    const IMPERATIVE_SCROLL_SETTLE_MAX_WAIT_MS = 800;
    const IMPERATIVE_SCROLL_SETTLE_STABLE_FRAMES = 2;
@@ -3278,7 +3374,7 @@ diff --git a/node_modules/@legendapp/list/react-native.web.js b/node_modules/@le
    const isScrollToIndexReady = (targetIndex, allowEmpty = false) => {
      var _a3;
      const props = state.props;
-@@ -7130,8 +7393,9 @@
+@@ -7130,8 +7416,9 @@
    const runWhenReady = (token, run, isReady) => {
      const startedAt = Date.now();
      let stableFrames = 0;
@@ -3288,7 +3384,7 @@ diff --git a/node_modules/@legendapp/list/react-native.web.js b/node_modules/@le
          return;
        }
        if (isSettlingAfterDataChange() || !isReady()) {
-@@ -7143,11 +7407,12 @@
+@@ -7143,11 +7430,12 @@
        if (stableFrames >= IMPERATIVE_SCROLL_SETTLE_STABLE_FRAMES || timedOut) {
          run();
          return;
@@ -3303,7 +3399,7 @@ diff --git a/node_modules/@legendapp/list/react-native.web.js b/node_modules/@le
    const runScrollRequest = (token, resolve, run, isReady = () => true) => {
      const runNow = () => {
        if (token !== imperativeScrollToken) {
-@@ -7168,14 +7433,25 @@
+@@ -7168,14 +7456,25 @@
      }
    };
    const startImperativeScroll = (resolve) => {
@@ -3329,7 +3425,7 @@ diff --git a/node_modules/@legendapp/list/react-native.web.js b/node_modules/@le
      const token = startImperativeScroll(resolve);
      runScrollRequest(token, resolve, run, isReady);
    });
-@@ -7214,8 +7490,10 @@
+@@ -7214,8 +7513,10 @@
      var _a3, _b;
      const mode = (_a3 = options == null ? void 0 : options.mode) != null ? _a3 : "sizes";
      state.sizes.clear();
@@ -3340,7 +3436,7 @@ diff --git a/node_modules/@legendapp/list/react-native.web.js b/node_modules/@le
      for (const key in state.averageSizes) {
        delete state.averageSizes[key];
      }
-@@ -7234,8 +7512,13 @@
+@@ -7234,8 +7535,13 @@
      triggerMountedContainerLayouts(ctx);
      (_b = state.triggerCalculateItemsInView) == null ? void 0 : _b.call(state, { forceFullItemPositions: true });
    };
@@ -3354,7 +3450,7 @@ diff --git a/node_modules/@legendapp/list/react-native.web.js b/node_modules/@le
      flashScrollIndicators: () => refScroller.current.flashScrollIndicators(),
      getAnimatableRef: () => {
        var _a3, _b, _c;
-@@ -7271,9 +7554,12 @@
+@@ -7271,9 +7577,12 @@
        },
        scroll: state.scroll,
        scrollLength: state.scrollLength,
@@ -3368,7 +3464,7 @@ diff --git a/node_modules/@legendapp/list/react-native.web.js b/node_modules/@le
        start: state.startNoBuffer,
        startBuffered: state.startBuffered
      }),
-@@ -7452,9 +7738,10 @@
+@@ -7452,9 +7761,10 @@
    }
    const normalizedTriggers = normalizeMaintainScrollAtEndOn(value.on, "on" in value);
    return {
@@ -3380,7 +3476,7 @@ diff --git a/node_modules/@legendapp/list/react-native.web.js b/node_modules/@le
  }
 
  // src/utils/normalizeMaintainVisibleContentPosition.ts
-@@ -7582,8 +7869,10 @@
+@@ -7582,8 +7892,10 @@
      estimatedItemSize = 100,
      estimatedListSize,
      extraData,
@@ -3391,7 +3487,7 @@ diff --git a/node_modules/@legendapp/list/react-native.web.js b/node_modules/@le
      horizontal,
      rtl,
      estimatedHeaderSize,
-@@ -7774,8 +8063,10 @@
+@@ -7774,8 +8086,10 @@
          scrollProcessingEnabled: true,
          scrollTime: 0,
          sizes: /* @__PURE__ */ new Map(),
@@ -3402,7 +3498,7 @@ diff --git a/node_modules/@legendapp/list/react-native.web.js b/node_modules/@le
          startNoBuffer: -1,
          startReachedSnapshot: void 0,
          stickyContainerPool: /* @__PURE__ */ new Set(),
-@@ -7839,8 +8130,10 @@
+@@ -7839,8 +8153,10 @@
      dataVersion,
      drawDistance,
      estimatedItemSize,
@@ -3413,7 +3509,7 @@ diff --git a/node_modules/@legendapp/list/react-native.web.js b/node_modules/@le
      horizontal: !!horizontal,
      itemsAreEqual,
      keyExtractor: useWrapIfItem(keyExtractor),
-@@ -7880,9 +8173,12 @@
+@@ -7880,9 +8196,12 @@
    }
    if (shouldResetFreshDataLayout) {
      resetInitialRenderState(ctx, {
@@ -3427,7 +3523,7 @@ diff --git a/node_modules/@legendapp/list/react-native.web.js b/node_modules/@le
    }
    const memoizedLastItemKeys = React3.useMemo(() => {
      if (!dataProp.length) return [];
-@@ -8108,12 +8404,22 @@
+@@ -8108,12 +8427,22 @@
        if (state.queuedFullDrawDistancePrewarm !== void 0) {
          cancelAnimationFrame(state.queuedFullDrawDistancePrewarm);
          state.queuedFullDrawDistancePrewarm = void 0;
@@ -3453,21 +3549,23 @@ diff --git a/node_modules/@legendapp/list/react-native.web.js b/node_modules/@le
 diff --git a/node_modules/@legendapp/list/react-native.web.mjs b/node_modules/@legendapp/list/react-native.web.mjs
 --- a/node_modules/@legendapp/list/react-native.web.mjs
 +++ b/node_modules/@legendapp/list/react-native.web.mjs
-@@ -752,8 +752,14 @@
+@@ -751,10 +751,16 @@
+ // src/core/recalculateSettledScroll.ts
  function recalculateSettledScroll(ctx) {
    var _a3, _b;
    const state = ctx.state;
 +  const previousContentSize = getContentSize(ctx);
    if ((_a3 = state.props) == null ? void 0 : _a3.data) {
      (_b = state.triggerCalculateItemsInView) == null ? void 0 : _b.call(state, { forceFullItemPositions: true });
-   }
++  }
 +  // Settling can invalidate offscreen size versions after the last measured-row
 +  // maintenance pass. Hand the new geometry back to the existing tail owner.
 +  if (getContentSize(ctx) !== previousContentSize) {
 +    doMaintainScrollAtEnd(ctx);
-+  }
+   }
    checkThresholds(ctx);
  }
+ var DEFAULT_WEB_ADAPTIVE_RENDER_ENTER_VELOCITY = 6;
 @@ -851,9 +857,11 @@
 
  // src/utils/setInitialRenderState.ts
@@ -3533,7 +3631,8 @@ diff --git a/node_modules/@legendapp/list/react-native.web.mjs b/node_modules/@l
    var _a3, _b, _c;
    const state = ctx.state;
    if ((options == null ? void 0 : options.resolvedOffset) !== void 0) {
-@@ -929,6 +969,9 @@
+@@ -928,8 +968,11 @@
+   }
    const complete = () => {
      var _a4, _b2, _c2, _d, _e;
      const shouldReleaseDeferredPublicOnScroll = ((_a4 = state.initialScrollSession) == null ? void 0 : _a4.kind) === "bootstrap";
@@ -3543,6 +3642,7 @@ diff --git a/node_modules/@legendapp/list/react-native.web.mjs b/node_modules/@l
      const finalScrollOffset = (_d = (_c2 = (_b2 = options == null ? void 0 : options.resolvedOffset) != null ? _b2 : state.scrollPending) != null ? _c2 : state.scroll) != null ? _d : 0;
      initialScrollWatchdog.clear(state);
      if ((options == null ? void 0 : options.preserveTarget) && state.initialScroll) {
+       state.clearPreservedInitialScrollOnNextFinish = void 0;
 @@ -951,8 +994,11 @@
      if (options == null ? void 0 : options.recalculateItems) {
        recalculateSettledScroll(ctx);
@@ -3849,7 +3949,52 @@ diff --git a/node_modules/@legendapp/list/react-native.web.mjs b/node_modules/@l
            if (state.props.horizontal && isHorizontalRTL(state)) {
              const currentContentSize = getContentSize(ctx);
              const logicalEndOffset = getLogicalHorizontalMaxOffset(state, currentContentSize);
-@@ -1697,8 +1877,19 @@
+@@ -1573,9 +1753,10 @@
+   return false;
+ }
+ function prepareMVCP(ctx, dataChanged) {
+   const state = ctx.state;
+-  const { idsInView, positions, props } = state;
++  const { positions, props } = state;
++  let idsInView = state.idsInView;
+   const {
+     maintainVisibleContentPosition: { data: mvcpData, size: mvcpScroll, shouldRestorePosition }
+   } = props;
+   const now = Date.now();
+@@ -1584,16 +1765,31 @@
+   if (dataChanged && state.pendingScrollToEnd && scrollingTo === void 0) {
+     state.mvcpAnchorLock = void 0;
+     return void 0;
+   }
++  const shouldMVCP = dataChanged ? mvcpData : mvcpScroll;
++  // HAPPIER-MVCP-PHYSICAL-BASELINE: a browser gesture can advance before onScroll.
++  // Reconcile its offset and visible anchor before geometry changes, preserving explicit targets.
++  if (shouldMVCP && scrollingTo === void 0 && !hasActiveInitialScroll(state)) {
++    const scroller = state.refScroller.current;
++    const observedScroll = scroller && typeof scroller.getCurrentScrollOffset === "function" ? scroller.getCurrentScrollOffset() : void 0;
++    if (typeof observedScroll === "number" && Number.isFinite(observedScroll) && Math.abs(observedScroll - state.scroll) > MVCP_POSITION_EPSILON) {
++      state.scroll = observedScroll;
++      state.mvcpAnchorLock = void 0;
++      const topPad = peek$(ctx, "stylePaddingTop") + peek$(ctx, "alignItemsAtEndPadding") + peek$(ctx, "headerSize");
++      const scroll = Math.max(0, observedScroll - topPad);
++      const visibleRange = getCachedVisibleRange(ctx, scroll, scroll + state.scrollLength);
++      idsInView = visibleRange ? getIdsInVisibleRange(state, visibleRange) : [];
++      state.idsInView = idsInView;
++    }
++  }
+   const anchorLock = resolveAnchorLock(state, enableMVCPAnchorLock, mvcpData, now) ;
+   let prevPosition;
+   let targetId;
+   const idsInViewWithPositions = [];
+   const scrollTarget = scrollingTo == null ? void 0 : scrollingTo.index;
+   const scrollingToViewPosition = scrollingTo == null ? void 0 : scrollingTo.viewPosition;
+   const isEndAnchoredScrollTarget = scrollTarget !== void 0 && state.props.data.length > 0 && scrollTarget >= state.props.data.length - 1 && (scrollingToViewPosition != null ? scrollingToViewPosition : 0) > 0;
+-  const shouldMVCP = dataChanged ? mvcpData : mvcpScroll;
+   const indexByKey = state.indexByKey;
+   const prevScroll = state.scroll;
+   getContentSize(ctx);
+   if (shouldMVCP) {
+@@ -1697,8 +1893,19 @@
              scrollingTo.itemSize = newSize;
            }
          }
@@ -3869,7 +4014,7 @@ diff --git a/node_modules/@legendapp/list/react-native.web.mjs b/node_modules/@l
          anchorId: anchorIdForLock,
          anchorPosition: anchorPositionForLock,
          dataChanged,
-@@ -1714,13 +1905,10 @@
+@@ -1714,13 +1921,10 @@
          };
          maybeApplyPredictedNativeMVCPAdjust(ctx);
          return;
@@ -3885,7 +4030,7 @@ diff --git a/node_modules/@legendapp/list/react-native.web.mjs b/node_modules/@l
      };
    }
  }
-@@ -1787,9 +1975,8 @@
+@@ -1787,9 +1991,8 @@
  }
 
  // src/core/updateScroll.ts
@@ -3895,7 +4040,7 @@ diff --git a/node_modules/@legendapp/list/react-native.web.mjs b/node_modules/@l
    const { ignoreScrollFromMVCP, lastScrollAdjustForHistory, scrollAdjustHandler, scrollHistory, scrollingTo } = state;
    const prevScroll = state.scroll;
    if ((options == null ? void 0 : options.markHasScrolled) !== false) {
-@@ -1861,9 +2048,9 @@
+@@ -1861,9 +2064,9 @@
        scheduleFullDrawDistancePrewarm(ctx);
      } else {
        runCalculateItems();
@@ -3906,7 +4051,7 @@ diff --git a/node_modules/@legendapp/list/react-native.web.mjs b/node_modules/@l
        state.pendingMaintainScrollAtEnd = false;
        doMaintainScrollAtEnd(ctx);
      }
-@@ -2212,9 +2399,10 @@
+@@ -2212,9 +2415,10 @@
    });
  }
 
@@ -3918,7 +4063,7 @@ diff --git a/node_modules/@legendapp/list/react-native.web.mjs b/node_modules/@l
      return false;
    }
    let hasMountedIndex = false;
-@@ -2222,9 +2410,9 @@
+@@ -2222,9 +2426,9 @@
      const index = state.indexByKey.get(key);
      if (index !== void 0 && index >= start && index <= end) {
        hasMountedIndex = true;
@@ -3929,7 +4074,7 @@ diff --git a/node_modules/@legendapp/list/react-native.web.mjs b/node_modules/@l
        }
      }
    }
-@@ -2602,13 +2790,15 @@
+@@ -2602,13 +2806,15 @@
      if (!areEquivalentBootstrapInitialScrollTargets(initialScroll, updatedInitialScroll) || !!bootstrapInitialScroll || shouldResetDidFinish || didDataChange) {
        setInitialScrollTarget(ctx, updatedInitialScroll, {
          resetDidFinish: shouldResetDidFinish
@@ -3950,7 +4095,7 @@ diff --git a/node_modules/@legendapp/list/react-native.web.mjs b/node_modules/@l
      }
    }
    if (!didDataChange) {
-@@ -2727,9 +2917,9 @@
+@@ -2727,9 +2933,9 @@
    if (initialScroll.index !== void 0 && state.startBuffered >= 0 && state.endBuffered >= 0 && initialScroll.index >= state.startBuffered && initialScroll.index <= state.endBuffered) {
      bootstrapInitialScroll.targetIndexSeed = void 0;
    }
@@ -3961,7 +4106,7 @@ diff --git a/node_modules/@legendapp/list/react-native.web.mjs b/node_modules/@l
    const { data } = state.props;
    const visibleIndices = getBootstrapRevealVisibleIndices({
      dataLength: data.length,
-@@ -2745,9 +2935,9 @@
+@@ -2745,9 +2951,9 @@
    });
    const areVisibleIndicesMeasured = visibleIndices.length > 0 && visibleIndices.every((index) => {
      var _a4;
@@ -3972,7 +4117,7 @@ diff --git a/node_modules/@legendapp/list/react-native.web.mjs b/node_modules/@l
    const previousResolvedOffset = bootstrapInitialScroll.previousResolvedOffset;
    const previousVisibleIndices = bootstrapInitialScroll.visibleIndices;
    bootstrapInitialScroll.previousResolvedOffset = resolvedOffset;
-@@ -3324,11 +3514,29 @@
+@@ -3324,11 +3530,29 @@
    const {
      positions,
      props: { data }
@@ -4003,7 +4148,7 @@ diff --git a/node_modules/@legendapp/list/react-native.web.mjs b/node_modules/@l
      const lastIndex = data.length - 1;
      const lastId = getId(state, lastIndex);
      const lastPosition = positions[lastIndex];
-@@ -3349,14 +3557,14 @@
+@@ -3349,14 +3573,14 @@
            if (size > maxSize) {
              maxSize = size;
            }
@@ -4020,7 +4165,7 @@ diff --git a/node_modules/@legendapp/list/react-native.web.mjs b/node_modules/@l
        }
      }
    }
-@@ -3417,9 +3625,9 @@
+@@ -3417,9 +3641,9 @@
    const velocity = scrollVelocity != null ? scrollVelocity : getScrollVelocity(state);
    const shouldOptimize = !forceFullUpdate && !dataChanged && (optimizeForVisibleWindow || Math.abs(velocity) > 0 || state.scrollLength > 0 && lastScrollDelta > state.scrollLength);
    const maxVisibleArea = scrollBottomBuffered + 1e3;
@@ -4031,7 +4176,7 @@ diff --git a/node_modules/@legendapp/list/react-native.web.mjs b/node_modules/@l
    let currentRowTop = 0;
    let column = 1;
    let maxSizeInRow = 0;
-@@ -3446,9 +3654,9 @@
+@@ -3446,9 +3670,9 @@
      } else if (startIndex < dataLength) {
        const prevIndex = startIndex - 1;
        const prevId = getId(state, prevIndex);
@@ -4042,7 +4187,7 @@ diff --git a/node_modules/@legendapp/list/react-native.web.mjs b/node_modules/@l
          prevId,
          prevIndex,
          data[prevIndex],
-@@ -3464,9 +3672,27 @@
+@@ -3464,9 +3688,27 @@
    let didBreakEarly = false;
    let breakAt;
    for (let i = startIndex; i < dataLength; i++) {
@@ -4071,7 +4216,7 @@ diff --git a/node_modules/@legendapp/list/react-native.web.mjs b/node_modules/@l
      }
      if (shouldOptimize && breakAt === void 0 && !scrollingTo && !dataChanged && currentRowTop > maxVisibleArea) {
        const itemsPerRow = hasColumns ? numColumns : 1;
-@@ -3486,10 +3712,9 @@
+@@ -3486,10 +3728,9 @@
        currentRowTop += maxSizeInRow;
        column = 1;
        maxSizeInRow = 0;
@@ -4083,11 +4228,60 @@ diff --git a/node_modules/@legendapp/list/react-native.web.mjs b/node_modules/@l
        if (indexByKeyForChecking.has(id)) {
          console.error(
            `[legend-list] Error: Detected overlapping key (${id}) which causes missing items and gaps and other terrrible things. Check that keyExtractor returns unique values.`
-@@ -4379,8 +4604,19 @@
-           }
+@@ -4097,9 +4338,9 @@
+     }
+   }
+   return null;
+ }
+-function updateViewabilityForCachedRange(ctx, viewabilityConfigCallbackPairs, scrollLength, scroll, scrollBottom) {
++function getCachedVisibleRange(ctx, scroll, scrollBottom) {
+   var _a3, _b;
+   const state = ctx.state;
+   const {
+     endBuffered,
+@@ -4125,8 +4366,15 @@
+     if (didPassVisibleEnd) {
+       break;
+     }
+   }
++  return visibleRange;
++}
++function updateViewabilityForCachedRange(ctx, viewabilityConfigCallbackPairs, scrollLength, scroll, scrollBottom) {
++  const state = ctx.state;
++  const { startBuffered, endBuffered } = state;
++  const visibleRange = getCachedVisibleRange(ctx, scroll, scrollBottom);
++  if (!visibleRange) return;
+   Object.assign(state, {
+     endNoBuffer: visibleRange.endNoBuffer,
+     firstFullyOnScreenIndex: visibleRange.firstFullyOnScreenIndex,
+     idsInView: getIdsInVisibleRange(state, visibleRange),
+@@ -4269,8 +4517,9 @@
+           return;
          }
        }
      }
++    const scrollBeforeMVCP = state.scroll;
+     const checkMVCP = doMVCP && !suppressInitialScrollSideEffects ? prepareMVCP(ctx, dataChanged) : void 0;
+     if (dataChanged) {
+       resetLayoutCachesForDataChange(state);
+     }
+@@ -4298,9 +4547,8 @@
+         if (shouldRestorePosition && !shouldRestorePosition(data[index], index, data)) continue;
+         protectedContainerKeys.add(id);
+       }
+     }
+-    const scrollBeforeMVCP = state.scroll;
+     const scrollAdjustPendingBeforeMVCP = (_f = peek$(ctx, "scrollAdjustPending")) != null ? _f : 0;
+     checkMVCP == null ? void 0 : checkMVCP();
+     const didMVCPAdjustScroll = !!checkMVCP && (state.scroll !== scrollBeforeMVCP || ((_g = peek$(ctx, "scrollAdjustPending")) != null ? _g : 0) !== scrollAdjustPendingBeforeMVCP);
+     if (didMVCPAdjustScroll) {
+@@ -4377,8 +4625,19 @@
+           } else {
+             foundEnd = true;
+           }
+         }
++      }
++    }
 +    if (startBuffered === null && endBuffered === null && dataLength > 0) {
 +      const lastIndexInData = dataLength - 1;
 +      const lastIdInData = idCache[lastIndexInData] != null ? idCache[lastIndexInData] : getId(state, lastIndexInData);
@@ -4097,13 +4291,11 @@ diff --git a/node_modules/@legendapp/list/react-native.web.mjs b/node_modules/@l
 +        startBuffered = lastIndexInData;
 +        startBufferedId = lastIdInData;
 +        endBuffered = lastIndexInData;
-+      }
-+    }
+       }
+     }
      Object.assign(state, {
        endBuffered,
-       endNoBuffer: visibleRange.endNoBuffer,
-       firstFullyOnScreenIndex: visibleRange.firstFullyOnScreenIndex,
-@@ -4582,9 +4818,9 @@
+@@ -4582,9 +4841,9 @@
        return;
      }
      maybeEmitFirstVisibleItemChanged(state, visibleRange.startNoBuffer);
@@ -4114,7 +4306,7 @@ diff --git a/node_modules/@legendapp/list/react-native.web.mjs b/node_modules/@l
          setDidLayout(ctx);
          handleInitialScrollLayoutReady(ctx);
        }
-@@ -4740,16 +4976,28 @@
+@@ -4740,16 +4999,28 @@
    } else {
      updateItemSizesBatch(ctx, [measurement]);
    }
@@ -4144,7 +4336,7 @@ diff --git a/node_modules/@legendapp/list/react-native.web.mjs b/node_modules/@l
        const metadata = measurement.containerId !== void 0 && index !== void 0 && itemData !== void 0 ? resolveContainerItemMetadata(state, measurement.containerId, index, itemData) : void 0;
        const nextResult = applyItemSize(ctx, measurement.itemKey, measurement.size, metadata);
        mergeItemSizeUpdateResult(result, nextResult);
-@@ -4767,14 +5015,19 @@
+@@ -4767,14 +5038,19 @@
      sizesKnown,
      props: { getFixedItemSize, getItemType, horizontal, onItemSizeChanged, data, maintainScrollAtEnd }
    } = state;
@@ -4166,7 +4358,7 @@ diff --git a/node_modules/@legendapp/list/react-native.web.mjs b/node_modules/@l
        return { didMeasureUserScrollAnchorResetItem };
      }
      if (!(resolvedMeasurementItem == null ? void 0 : resolvedMeasurementItem.didResolveFixedItemSize)) {
-@@ -4785,27 +5038,27 @@
+@@ -4785,27 +5061,27 @@
          itemType: type
        };
      }
@@ -4198,7 +4390,7 @@ diff --git a/node_modules/@legendapp/list/react-native.web.mjs b/node_modules/@l
      }
      onItemSizeChanged == null ? void 0 : onItemSizeChanged({
        index,
-@@ -4819,9 +5072,9 @@
+@@ -4819,9 +5095,9 @@
    if (minIndexSizeChanged !== void 0) {
      state.minIndexSizeChanged = state.minIndexSizeChanged !== void 0 ? Math.min(state.minIndexSizeChanged, minIndexSizeChanged) : minIndexSizeChanged;
    }
@@ -4209,7 +4401,7 @@ diff --git a/node_modules/@legendapp/list/react-native.web.mjs b/node_modules/@l
      return {
        didChange: diff !== 0,
        didMeasureUserScrollAnchorResetItem,
-@@ -4833,19 +5086,18 @@
+@@ -4833,19 +5109,18 @@
      didChange: diff !== 0,
      didMeasureUserScrollAnchorResetItem
    };
@@ -4231,7 +4423,7 @@ diff --git a/node_modules/@legendapp/list/react-native.web.mjs b/node_modules/@l
    let itemType = resolvedMeasurementItem == null ? void 0 : resolvedMeasurementItem.itemType;
    let fixedItemSize = resolvedMeasurementItem == null ? void 0 : resolvedMeasurementItem.fixedItemSize;
    if (getFixedItemSize && !(resolvedMeasurementItem == null ? void 0 : resolvedMeasurementItem.didResolveFixedItemSize)) {
-@@ -4856,9 +5108,9 @@
+@@ -4856,9 +5131,9 @@
      didResolveFixedItemSize: resolvedMeasurementItem == null ? void 0 : resolvedMeasurementItem.didResolveFixedItemSize,
      fixedItemSize,
      itemType
@@ -4242,7 +4434,7 @@ diff --git a/node_modules/@legendapp/list/react-native.web.mjs b/node_modules/@l
    const prevSizeKnown = sizesKnown.get(itemKey);
    const size = Math.round(rawSize) ;
    sizesKnown.set(itemKey, size);
-@@ -4876,8 +5128,9 @@
+@@ -4876,8 +5151,9 @@
      } else {
        averages.avg = (averages.avg * averages.num + size) / (averages.num + 1);
        averages.num++;
@@ -4252,7 +4444,7 @@ diff --git a/node_modules/@legendapp/list/react-native.web.mjs b/node_modules/@l
    if (!prevSize || Math.abs(prevSize - size) > 0.1) {
      setSize(ctx, itemKey, size);
      return size - prevSize;
-@@ -5337,9 +5590,10 @@
+@@ -5337,9 +5613,10 @@
    let layout = rectangle;
    const axis = state.horizontal ? "width" : "height";
    const size = roundSize(rectangle[axis]);
@@ -4264,7 +4456,7 @@ diff --git a/node_modules/@legendapp/list/react-native.web.mjs b/node_modules/@l
    const applyLayout = () => {
      state.lastSize = layout;
      updateItemSizes(ctx, {
-@@ -6669,8 +6923,10 @@
+@@ -6669,8 +6946,10 @@
    const { maintainScrollAtEnd } = state.props;
    if (didColumnsChange) {
      state.sizes.clear();
@@ -4275,7 +4467,7 @@ diff --git a/node_modules/@legendapp/list/react-native.web.mjs b/node_modules/@l
      for (const key in state.averageSizes) {
        delete state.averageSizes[key];
      }
-@@ -7088,8 +7344,15 @@
+@@ -7088,8 +7367,15 @@
    const state = ctx.state;
    const IMPERATIVE_SCROLL_SETTLE_MAX_WAIT_MS = 800;
    const IMPERATIVE_SCROLL_SETTLE_STABLE_FRAMES = 2;
@@ -4291,7 +4483,7 @@ diff --git a/node_modules/@legendapp/list/react-native.web.mjs b/node_modules/@l
    const isScrollToIndexReady = (targetIndex, allowEmpty = false) => {
      var _a3;
      const props = state.props;
-@@ -7109,8 +7372,9 @@
+@@ -7109,8 +7395,9 @@
    const runWhenReady = (token, run, isReady) => {
      const startedAt = Date.now();
      let stableFrames = 0;
@@ -4301,7 +4493,7 @@ diff --git a/node_modules/@legendapp/list/react-native.web.mjs b/node_modules/@l
          return;
        }
        if (isSettlingAfterDataChange() || !isReady()) {
-@@ -7122,11 +7386,12 @@
+@@ -7122,11 +7409,12 @@
        if (stableFrames >= IMPERATIVE_SCROLL_SETTLE_STABLE_FRAMES || timedOut) {
          run();
          return;
@@ -4316,7 +4508,7 @@ diff --git a/node_modules/@legendapp/list/react-native.web.mjs b/node_modules/@l
    const runScrollRequest = (token, resolve, run, isReady = () => true) => {
      const runNow = () => {
        if (token !== imperativeScrollToken) {
-@@ -7147,14 +7412,25 @@
+@@ -7147,14 +7435,25 @@
      }
    };
    const startImperativeScroll = (resolve) => {
@@ -4342,7 +4534,7 @@ diff --git a/node_modules/@legendapp/list/react-native.web.mjs b/node_modules/@l
      const token = startImperativeScroll(resolve);
      runScrollRequest(token, resolve, run, isReady);
    });
-@@ -7193,8 +7469,10 @@
+@@ -7193,8 +7492,10 @@
      var _a3, _b;
      const mode = (_a3 = options == null ? void 0 : options.mode) != null ? _a3 : "sizes";
      state.sizes.clear();
@@ -4353,7 +4545,7 @@ diff --git a/node_modules/@legendapp/list/react-native.web.mjs b/node_modules/@l
      for (const key in state.averageSizes) {
        delete state.averageSizes[key];
      }
-@@ -7213,8 +7491,13 @@
+@@ -7213,8 +7514,13 @@
      triggerMountedContainerLayouts(ctx);
      (_b = state.triggerCalculateItemsInView) == null ? void 0 : _b.call(state, { forceFullItemPositions: true });
    };
@@ -4367,7 +4559,7 @@ diff --git a/node_modules/@legendapp/list/react-native.web.mjs b/node_modules/@l
      flashScrollIndicators: () => refScroller.current.flashScrollIndicators(),
      getAnimatableRef: () => {
        var _a3, _b, _c;
-@@ -7250,9 +7533,12 @@
+@@ -7250,9 +7556,12 @@
        },
        scroll: state.scroll,
        scrollLength: state.scrollLength,
@@ -4381,7 +4573,7 @@ diff --git a/node_modules/@legendapp/list/react-native.web.mjs b/node_modules/@l
        start: state.startNoBuffer,
        startBuffered: state.startBuffered
      }),
-@@ -7431,9 +7717,10 @@
+@@ -7431,9 +7740,10 @@
    }
    const normalizedTriggers = normalizeMaintainScrollAtEndOn(value.on, "on" in value);
    return {
@@ -4393,7 +4585,7 @@ diff --git a/node_modules/@legendapp/list/react-native.web.mjs b/node_modules/@l
  }
 
  // src/utils/normalizeMaintainVisibleContentPosition.ts
-@@ -7561,8 +7848,10 @@
+@@ -7561,8 +7871,10 @@
      estimatedItemSize = 100,
      estimatedListSize,
      extraData,
@@ -4404,7 +4596,7 @@ diff --git a/node_modules/@legendapp/list/react-native.web.mjs b/node_modules/@l
      horizontal,
      rtl,
      estimatedHeaderSize,
-@@ -7753,8 +8042,10 @@
+@@ -7753,8 +8065,10 @@
          scrollProcessingEnabled: true,
          scrollTime: 0,
          sizes: /* @__PURE__ */ new Map(),
@@ -4415,7 +4607,7 @@ diff --git a/node_modules/@legendapp/list/react-native.web.mjs b/node_modules/@l
          startNoBuffer: -1,
          startReachedSnapshot: void 0,
          stickyContainerPool: /* @__PURE__ */ new Set(),
-@@ -7818,8 +8109,10 @@
+@@ -7818,8 +8132,10 @@
      dataVersion,
      drawDistance,
      estimatedItemSize,
@@ -4426,7 +4618,7 @@ diff --git a/node_modules/@legendapp/list/react-native.web.mjs b/node_modules/@l
      horizontal: !!horizontal,
      itemsAreEqual,
      keyExtractor: useWrapIfItem(keyExtractor),
-@@ -7859,9 +8152,12 @@
+@@ -7859,9 +8175,12 @@
    }
    if (shouldResetFreshDataLayout) {
      resetInitialRenderState(ctx, {
@@ -4440,7 +4632,7 @@ diff --git a/node_modules/@legendapp/list/react-native.web.mjs b/node_modules/@l
    }
    const memoizedLastItemKeys = useMemo(() => {
      if (!dataProp.length) return [];
-@@ -8087,12 +8383,22 @@
+@@ -8087,12 +8406,22 @@
        if (state.queuedFullDrawDistancePrewarm !== void 0) {
          cancelAnimationFrame(state.queuedFullDrawDistancePrewarm);
          state.queuedFullDrawDistancePrewarm = void 0;
@@ -4511,21 +4703,23 @@ diff --git a/node_modules/@legendapp/list/react.d.ts b/node_modules/@legendapp/l
 diff --git a/node_modules/@legendapp/list/react.js b/node_modules/@legendapp/list/react.js
 --- a/node_modules/@legendapp/list/react.js
 +++ b/node_modules/@legendapp/list/react.js
-@@ -773,8 +773,14 @@
+@@ -772,10 +772,16 @@
+ // src/core/recalculateSettledScroll.ts
  function recalculateSettledScroll(ctx) {
    var _a3, _b;
    const state = ctx.state;
 +  const previousContentSize = getContentSize(ctx);
    if ((_a3 = state.props) == null ? void 0 : _a3.data) {
      (_b = state.triggerCalculateItemsInView) == null ? void 0 : _b.call(state, { forceFullItemPositions: true });
-   }
++  }
 +  // Settling can invalidate offscreen size versions after the last measured-row
 +  // maintenance pass. Hand the new geometry back to the existing tail owner.
 +  if (getContentSize(ctx) !== previousContentSize) {
 +    doMaintainScrollAtEnd(ctx);
-+  }
+   }
    checkThresholds(ctx);
  }
+ var DEFAULT_WEB_ADAPTIVE_RENDER_ENTER_VELOCITY = 6;
 @@ -872,9 +878,11 @@
 
  // src/utils/setInitialRenderState.ts
@@ -4591,7 +4785,8 @@ diff --git a/node_modules/@legendapp/list/react.js b/node_modules/@legendapp/lis
    var _a3, _b, _c;
    const state = ctx.state;
    if ((options == null ? void 0 : options.resolvedOffset) !== void 0) {
-@@ -950,6 +990,9 @@
+@@ -949,8 +989,11 @@
+   }
    const complete = () => {
      var _a4, _b2, _c2, _d, _e;
      const shouldReleaseDeferredPublicOnScroll = ((_a4 = state.initialScrollSession) == null ? void 0 : _a4.kind) === "bootstrap";
@@ -4601,6 +4796,7 @@ diff --git a/node_modules/@legendapp/list/react.js b/node_modules/@legendapp/lis
      const finalScrollOffset = (_d = (_c2 = (_b2 = options == null ? void 0 : options.resolvedOffset) != null ? _b2 : state.scrollPending) != null ? _c2 : state.scroll) != null ? _d : 0;
      initialScrollWatchdog.clear(state);
      if ((options == null ? void 0 : options.preserveTarget) && state.initialScroll) {
+       state.clearPreservedInitialScrollOnNextFinish = void 0;
 @@ -972,8 +1015,11 @@
      if (options == null ? void 0 : options.recalculateItems) {
        recalculateSettledScroll(ctx);
@@ -4907,7 +5103,52 @@ diff --git a/node_modules/@legendapp/list/react.js b/node_modules/@legendapp/lis
            if (state.props.horizontal && isHorizontalRTL(state)) {
              const currentContentSize = getContentSize(ctx);
              const logicalEndOffset = getLogicalHorizontalMaxOffset(state, currentContentSize);
-@@ -1718,8 +1898,19 @@
+@@ -1594,9 +1774,10 @@
+   return false;
+ }
+ function prepareMVCP(ctx, dataChanged) {
+   const state = ctx.state;
+-  const { idsInView, positions, props } = state;
++  const { positions, props } = state;
++  let idsInView = state.idsInView;
+   const {
+     maintainVisibleContentPosition: { data: mvcpData, size: mvcpScroll, shouldRestorePosition }
+   } = props;
+   const now = Date.now();
+@@ -1605,16 +1786,31 @@
+   if (dataChanged && state.pendingScrollToEnd && scrollingTo === void 0) {
+     state.mvcpAnchorLock = void 0;
+     return void 0;
+   }
++  const shouldMVCP = dataChanged ? mvcpData : mvcpScroll;
++  // HAPPIER-MVCP-PHYSICAL-BASELINE: a browser gesture can advance before onScroll.
++  // Reconcile its offset and visible anchor before geometry changes, preserving explicit targets.
++  if (shouldMVCP && scrollingTo === void 0 && !hasActiveInitialScroll(state)) {
++    const scroller = state.refScroller.current;
++    const observedScroll = scroller && typeof scroller.getCurrentScrollOffset === "function" ? scroller.getCurrentScrollOffset() : void 0;
++    if (typeof observedScroll === "number" && Number.isFinite(observedScroll) && Math.abs(observedScroll - state.scroll) > MVCP_POSITION_EPSILON) {
++      state.scroll = observedScroll;
++      state.mvcpAnchorLock = void 0;
++      const topPad = peek$(ctx, "stylePaddingTop") + peek$(ctx, "alignItemsAtEndPadding") + peek$(ctx, "headerSize");
++      const scroll = Math.max(0, observedScroll - topPad);
++      const visibleRange = getCachedVisibleRange(ctx, scroll, scroll + state.scrollLength);
++      idsInView = visibleRange ? getIdsInVisibleRange(state, visibleRange) : [];
++      state.idsInView = idsInView;
++    }
++  }
+   const anchorLock = resolveAnchorLock(state, enableMVCPAnchorLock, mvcpData, now) ;
+   let prevPosition;
+   let targetId;
+   const idsInViewWithPositions = [];
+   const scrollTarget = scrollingTo == null ? void 0 : scrollingTo.index;
+   const scrollingToViewPosition = scrollingTo == null ? void 0 : scrollingTo.viewPosition;
+   const isEndAnchoredScrollTarget = scrollTarget !== void 0 && state.props.data.length > 0 && scrollTarget >= state.props.data.length - 1 && (scrollingToViewPosition != null ? scrollingToViewPosition : 0) > 0;
+-  const shouldMVCP = dataChanged ? mvcpData : mvcpScroll;
+   const indexByKey = state.indexByKey;
+   const prevScroll = state.scroll;
+   getContentSize(ctx);
+   if (shouldMVCP) {
+@@ -1718,8 +1914,19 @@
              scrollingTo.itemSize = newSize;
            }
          }
@@ -4927,7 +5168,7 @@ diff --git a/node_modules/@legendapp/list/react.js b/node_modules/@legendapp/lis
          anchorId: anchorIdForLock,
          anchorPosition: anchorPositionForLock,
          dataChanged,
-@@ -1735,13 +1926,10 @@
+@@ -1735,13 +1942,10 @@
          };
          maybeApplyPredictedNativeMVCPAdjust(ctx);
          return;
@@ -4943,7 +5184,7 @@ diff --git a/node_modules/@legendapp/list/react.js b/node_modules/@legendapp/lis
      };
    }
  }
-@@ -1808,9 +1996,8 @@
+@@ -1808,9 +2012,8 @@
  }
 
  // src/core/updateScroll.ts
@@ -4953,7 +5194,7 @@ diff --git a/node_modules/@legendapp/list/react.js b/node_modules/@legendapp/lis
    const { ignoreScrollFromMVCP, lastScrollAdjustForHistory, scrollAdjustHandler, scrollHistory, scrollingTo } = state;
    const prevScroll = state.scroll;
    if ((options == null ? void 0 : options.markHasScrolled) !== false) {
-@@ -1882,9 +2069,9 @@
+@@ -1882,9 +2085,9 @@
        scheduleFullDrawDistancePrewarm(ctx);
      } else {
        runCalculateItems();
@@ -4964,7 +5205,7 @@ diff --git a/node_modules/@legendapp/list/react.js b/node_modules/@legendapp/lis
        state.pendingMaintainScrollAtEnd = false;
        doMaintainScrollAtEnd(ctx);
      }
-@@ -2233,9 +2420,10 @@
+@@ -2233,9 +2436,10 @@
    });
  }
 
@@ -4976,7 +5217,7 @@ diff --git a/node_modules/@legendapp/list/react.js b/node_modules/@legendapp/lis
      return false;
    }
    let hasMountedIndex = false;
-@@ -2243,9 +2431,9 @@
+@@ -2243,9 +2447,9 @@
      const index = state.indexByKey.get(key);
      if (index !== void 0 && index >= start && index <= end) {
        hasMountedIndex = true;
@@ -4987,7 +5228,7 @@ diff --git a/node_modules/@legendapp/list/react.js b/node_modules/@legendapp/lis
        }
      }
    }
-@@ -2623,13 +2811,15 @@
+@@ -2623,13 +2827,15 @@
      if (!areEquivalentBootstrapInitialScrollTargets(initialScroll, updatedInitialScroll) || !!bootstrapInitialScroll || shouldResetDidFinish || didDataChange) {
        setInitialScrollTarget(ctx, updatedInitialScroll, {
          resetDidFinish: shouldResetDidFinish
@@ -5008,7 +5249,7 @@ diff --git a/node_modules/@legendapp/list/react.js b/node_modules/@legendapp/lis
      }
    }
    if (!didDataChange) {
-@@ -2748,9 +2938,9 @@
+@@ -2748,9 +2954,9 @@
    if (initialScroll.index !== void 0 && state.startBuffered >= 0 && state.endBuffered >= 0 && initialScroll.index >= state.startBuffered && initialScroll.index <= state.endBuffered) {
      bootstrapInitialScroll.targetIndexSeed = void 0;
    }
@@ -5019,7 +5260,7 @@ diff --git a/node_modules/@legendapp/list/react.js b/node_modules/@legendapp/lis
    const { data } = state.props;
    const visibleIndices = getBootstrapRevealVisibleIndices({
      dataLength: data.length,
-@@ -2766,9 +2956,9 @@
+@@ -2766,9 +2972,9 @@
    });
    const areVisibleIndicesMeasured = visibleIndices.length > 0 && visibleIndices.every((index) => {
      var _a4;
@@ -5030,7 +5271,7 @@ diff --git a/node_modules/@legendapp/list/react.js b/node_modules/@legendapp/lis
    const previousResolvedOffset = bootstrapInitialScroll.previousResolvedOffset;
    const previousVisibleIndices = bootstrapInitialScroll.visibleIndices;
    bootstrapInitialScroll.previousResolvedOffset = resolvedOffset;
-@@ -3345,11 +3535,29 @@
+@@ -3345,11 +3551,29 @@
    const {
      positions,
      props: { data }
@@ -5061,7 +5302,7 @@ diff --git a/node_modules/@legendapp/list/react.js b/node_modules/@legendapp/lis
      const lastIndex = data.length - 1;
      const lastId = getId(state, lastIndex);
      const lastPosition = positions[lastIndex];
-@@ -3370,14 +3578,14 @@
+@@ -3370,14 +3594,14 @@
            if (size > maxSize) {
              maxSize = size;
            }
@@ -5078,7 +5319,7 @@ diff --git a/node_modules/@legendapp/list/react.js b/node_modules/@legendapp/lis
        }
      }
    }
-@@ -3438,9 +3646,9 @@
+@@ -3438,9 +3662,9 @@
    const velocity = scrollVelocity != null ? scrollVelocity : getScrollVelocity(state);
    const shouldOptimize = !forceFullUpdate && !dataChanged && (optimizeForVisibleWindow || Math.abs(velocity) > 0 || state.scrollLength > 0 && lastScrollDelta > state.scrollLength);
    const maxVisibleArea = scrollBottomBuffered + 1e3;
@@ -5089,7 +5330,7 @@ diff --git a/node_modules/@legendapp/list/react.js b/node_modules/@legendapp/lis
    let currentRowTop = 0;
    let column = 1;
    let maxSizeInRow = 0;
-@@ -3467,9 +3675,9 @@
+@@ -3467,9 +3691,9 @@
      } else if (startIndex < dataLength) {
        const prevIndex = startIndex - 1;
        const prevId = getId(state, prevIndex);
@@ -5100,7 +5341,7 @@ diff --git a/node_modules/@legendapp/list/react.js b/node_modules/@legendapp/lis
          prevId,
          prevIndex,
          data[prevIndex],
-@@ -3485,9 +3693,27 @@
+@@ -3485,9 +3709,27 @@
    let didBreakEarly = false;
    let breakAt;
    for (let i = startIndex; i < dataLength; i++) {
@@ -5129,7 +5370,7 @@ diff --git a/node_modules/@legendapp/list/react.js b/node_modules/@legendapp/lis
      }
      if (shouldOptimize && breakAt === void 0 && !scrollingTo && !dataChanged && currentRowTop > maxVisibleArea) {
        const itemsPerRow = hasColumns ? numColumns : 1;
-@@ -3507,10 +3733,9 @@
+@@ -3507,10 +3749,9 @@
        currentRowTop += maxSizeInRow;
        column = 1;
        maxSizeInRow = 0;
@@ -5141,11 +5382,60 @@ diff --git a/node_modules/@legendapp/list/react.js b/node_modules/@legendapp/lis
        if (indexByKeyForChecking.has(id)) {
          console.error(
            `[legend-list] Error: Detected overlapping key (${id}) which causes missing items and gaps and other terrrible things. Check that keyExtractor returns unique values.`
-@@ -4400,8 +4625,19 @@
-           }
+@@ -4118,9 +4359,9 @@
+     }
+   }
+   return null;
+ }
+-function updateViewabilityForCachedRange(ctx, viewabilityConfigCallbackPairs, scrollLength, scroll, scrollBottom) {
++function getCachedVisibleRange(ctx, scroll, scrollBottom) {
+   var _a3, _b;
+   const state = ctx.state;
+   const {
+     endBuffered,
+@@ -4146,8 +4387,15 @@
+     if (didPassVisibleEnd) {
+       break;
+     }
+   }
++  return visibleRange;
++}
++function updateViewabilityForCachedRange(ctx, viewabilityConfigCallbackPairs, scrollLength, scroll, scrollBottom) {
++  const state = ctx.state;
++  const { startBuffered, endBuffered } = state;
++  const visibleRange = getCachedVisibleRange(ctx, scroll, scrollBottom);
++  if (!visibleRange) return;
+   Object.assign(state, {
+     endNoBuffer: visibleRange.endNoBuffer,
+     firstFullyOnScreenIndex: visibleRange.firstFullyOnScreenIndex,
+     idsInView: getIdsInVisibleRange(state, visibleRange),
+@@ -4290,8 +4538,9 @@
+           return;
          }
        }
      }
++    const scrollBeforeMVCP = state.scroll;
+     const checkMVCP = doMVCP && !suppressInitialScrollSideEffects ? prepareMVCP(ctx, dataChanged) : void 0;
+     if (dataChanged) {
+       resetLayoutCachesForDataChange(state);
+     }
+@@ -4319,9 +4568,8 @@
+         if (shouldRestorePosition && !shouldRestorePosition(data[index], index, data)) continue;
+         protectedContainerKeys.add(id);
+       }
+     }
+-    const scrollBeforeMVCP = state.scroll;
+     const scrollAdjustPendingBeforeMVCP = (_f = peek$(ctx, "scrollAdjustPending")) != null ? _f : 0;
+     checkMVCP == null ? void 0 : checkMVCP();
+     const didMVCPAdjustScroll = !!checkMVCP && (state.scroll !== scrollBeforeMVCP || ((_g = peek$(ctx, "scrollAdjustPending")) != null ? _g : 0) !== scrollAdjustPendingBeforeMVCP);
+     if (didMVCPAdjustScroll) {
+@@ -4398,8 +4646,19 @@
+           } else {
+             foundEnd = true;
+           }
+         }
++      }
++    }
 +    if (startBuffered === null && endBuffered === null && dataLength > 0) {
 +      const lastIndexInData = dataLength - 1;
 +      const lastIdInData = idCache[lastIndexInData] != null ? idCache[lastIndexInData] : getId(state, lastIndexInData);
@@ -5155,13 +5445,11 @@ diff --git a/node_modules/@legendapp/list/react.js b/node_modules/@legendapp/lis
 +        startBuffered = lastIndexInData;
 +        startBufferedId = lastIdInData;
 +        endBuffered = lastIndexInData;
-+      }
-+    }
+       }
+     }
      Object.assign(state, {
        endBuffered,
-       endNoBuffer: visibleRange.endNoBuffer,
-       firstFullyOnScreenIndex: visibleRange.firstFullyOnScreenIndex,
-@@ -4603,9 +4839,9 @@
+@@ -4603,9 +4862,9 @@
        return;
      }
      maybeEmitFirstVisibleItemChanged(state, visibleRange.startNoBuffer);
@@ -5172,7 +5460,7 @@ diff --git a/node_modules/@legendapp/list/react.js b/node_modules/@legendapp/lis
          setDidLayout(ctx);
          handleInitialScrollLayoutReady(ctx);
        }
-@@ -4761,16 +4997,28 @@
+@@ -4761,16 +5020,28 @@
    } else {
      updateItemSizesBatch(ctx, [measurement]);
    }
@@ -5202,7 +5490,7 @@ diff --git a/node_modules/@legendapp/list/react.js b/node_modules/@legendapp/lis
        const metadata = measurement.containerId !== void 0 && index !== void 0 && itemData !== void 0 ? resolveContainerItemMetadata(state, measurement.containerId, index, itemData) : void 0;
        const nextResult = applyItemSize(ctx, measurement.itemKey, measurement.size, metadata);
        mergeItemSizeUpdateResult(result, nextResult);
-@@ -4788,14 +5036,19 @@
+@@ -4788,14 +5059,19 @@
      sizesKnown,
      props: { getFixedItemSize, getItemType, horizontal, onItemSizeChanged, data, maintainScrollAtEnd }
    } = state;
@@ -5224,7 +5512,7 @@ diff --git a/node_modules/@legendapp/list/react.js b/node_modules/@legendapp/lis
        return { didMeasureUserScrollAnchorResetItem };
      }
      if (!(resolvedMeasurementItem == null ? void 0 : resolvedMeasurementItem.didResolveFixedItemSize)) {
-@@ -4806,27 +5059,27 @@
+@@ -4806,27 +5082,27 @@
          itemType: type
        };
      }
@@ -5256,7 +5544,7 @@ diff --git a/node_modules/@legendapp/list/react.js b/node_modules/@legendapp/lis
      }
      onItemSizeChanged == null ? void 0 : onItemSizeChanged({
        index,
-@@ -4840,9 +5093,9 @@
+@@ -4840,9 +5116,9 @@
    if (minIndexSizeChanged !== void 0) {
      state.minIndexSizeChanged = state.minIndexSizeChanged !== void 0 ? Math.min(state.minIndexSizeChanged, minIndexSizeChanged) : minIndexSizeChanged;
    }
@@ -5267,7 +5555,7 @@ diff --git a/node_modules/@legendapp/list/react.js b/node_modules/@legendapp/lis
      return {
        didChange: diff !== 0,
        didMeasureUserScrollAnchorResetItem,
-@@ -4854,19 +5107,18 @@
+@@ -4854,19 +5130,18 @@
      didChange: diff !== 0,
      didMeasureUserScrollAnchorResetItem
    };
@@ -5289,7 +5577,7 @@ diff --git a/node_modules/@legendapp/list/react.js b/node_modules/@legendapp/lis
    let itemType = resolvedMeasurementItem == null ? void 0 : resolvedMeasurementItem.itemType;
    let fixedItemSize = resolvedMeasurementItem == null ? void 0 : resolvedMeasurementItem.fixedItemSize;
    if (getFixedItemSize && !(resolvedMeasurementItem == null ? void 0 : resolvedMeasurementItem.didResolveFixedItemSize)) {
-@@ -4877,9 +5129,9 @@
+@@ -4877,9 +5152,9 @@
      didResolveFixedItemSize: resolvedMeasurementItem == null ? void 0 : resolvedMeasurementItem.didResolveFixedItemSize,
      fixedItemSize,
      itemType
@@ -5300,7 +5588,7 @@ diff --git a/node_modules/@legendapp/list/react.js b/node_modules/@legendapp/lis
    const prevSizeKnown = sizesKnown.get(itemKey);
    const size = Math.round(rawSize) ;
    sizesKnown.set(itemKey, size);
-@@ -4897,8 +5149,9 @@
+@@ -4897,8 +5172,9 @@
      } else {
        averages.avg = (averages.avg * averages.num + size) / (averages.num + 1);
        averages.num++;
@@ -5310,7 +5598,7 @@ diff --git a/node_modules/@legendapp/list/react.js b/node_modules/@legendapp/lis
    if (!prevSize || Math.abs(prevSize - size) > 0.1) {
      setSize(ctx, itemKey, size);
      return size - prevSize;
-@@ -5358,9 +5611,10 @@
+@@ -5358,9 +5634,10 @@
    let layout = rectangle;
    const axis = state.horizontal ? "width" : "height";
    const size = roundSize(rectangle[axis]);
@@ -5322,7 +5610,7 @@ diff --git a/node_modules/@legendapp/list/react.js b/node_modules/@legendapp/lis
    const applyLayout = () => {
      state.lastSize = layout;
      updateItemSizes(ctx, {
-@@ -6690,8 +6944,10 @@
+@@ -6690,8 +6967,10 @@
    const { maintainScrollAtEnd } = state.props;
    if (didColumnsChange) {
      state.sizes.clear();
@@ -5333,7 +5621,7 @@ diff --git a/node_modules/@legendapp/list/react.js b/node_modules/@legendapp/lis
      for (const key in state.averageSizes) {
        delete state.averageSizes[key];
      }
-@@ -7109,8 +7365,15 @@
+@@ -7109,8 +7388,15 @@
    const state = ctx.state;
    const IMPERATIVE_SCROLL_SETTLE_MAX_WAIT_MS = 800;
    const IMPERATIVE_SCROLL_SETTLE_STABLE_FRAMES = 2;
@@ -5349,7 +5637,7 @@ diff --git a/node_modules/@legendapp/list/react.js b/node_modules/@legendapp/lis
    const isScrollToIndexReady = (targetIndex, allowEmpty = false) => {
      var _a3;
      const props = state.props;
-@@ -7130,8 +7393,9 @@
+@@ -7130,8 +7416,9 @@
    const runWhenReady = (token, run, isReady) => {
      const startedAt = Date.now();
      let stableFrames = 0;
@@ -5359,7 +5647,7 @@ diff --git a/node_modules/@legendapp/list/react.js b/node_modules/@legendapp/lis
          return;
        }
        if (isSettlingAfterDataChange() || !isReady()) {
-@@ -7143,11 +7407,12 @@
+@@ -7143,11 +7430,12 @@
        if (stableFrames >= IMPERATIVE_SCROLL_SETTLE_STABLE_FRAMES || timedOut) {
          run();
          return;
@@ -5374,7 +5662,7 @@ diff --git a/node_modules/@legendapp/list/react.js b/node_modules/@legendapp/lis
    const runScrollRequest = (token, resolve, run, isReady = () => true) => {
      const runNow = () => {
        if (token !== imperativeScrollToken) {
-@@ -7168,14 +7433,25 @@
+@@ -7168,14 +7456,25 @@
      }
    };
    const startImperativeScroll = (resolve) => {
@@ -5400,7 +5688,7 @@ diff --git a/node_modules/@legendapp/list/react.js b/node_modules/@legendapp/lis
      const token = startImperativeScroll(resolve);
      runScrollRequest(token, resolve, run, isReady);
    });
-@@ -7214,8 +7490,10 @@
+@@ -7214,8 +7513,10 @@
      var _a3, _b;
      const mode = (_a3 = options == null ? void 0 : options.mode) != null ? _a3 : "sizes";
      state.sizes.clear();
@@ -5411,7 +5699,7 @@ diff --git a/node_modules/@legendapp/list/react.js b/node_modules/@legendapp/lis
      for (const key in state.averageSizes) {
        delete state.averageSizes[key];
      }
-@@ -7234,8 +7512,13 @@
+@@ -7234,8 +7535,13 @@
      triggerMountedContainerLayouts(ctx);
      (_b = state.triggerCalculateItemsInView) == null ? void 0 : _b.call(state, { forceFullItemPositions: true });
    };
@@ -5425,7 +5713,7 @@ diff --git a/node_modules/@legendapp/list/react.js b/node_modules/@legendapp/lis
      flashScrollIndicators: () => refScroller.current.flashScrollIndicators(),
      getAnimatableRef: () => {
        var _a3, _b, _c;
-@@ -7271,9 +7554,12 @@
+@@ -7271,9 +7577,12 @@
        },
        scroll: state.scroll,
        scrollLength: state.scrollLength,
@@ -5439,7 +5727,7 @@ diff --git a/node_modules/@legendapp/list/react.js b/node_modules/@legendapp/lis
        start: state.startNoBuffer,
        startBuffered: state.startBuffered
      }),
-@@ -7452,9 +7738,10 @@
+@@ -7452,9 +7761,10 @@
    }
    const normalizedTriggers = normalizeMaintainScrollAtEndOn(value.on, "on" in value);
    return {
@@ -5451,7 +5739,7 @@ diff --git a/node_modules/@legendapp/list/react.js b/node_modules/@legendapp/lis
  }
 
  // src/utils/normalizeMaintainVisibleContentPosition.ts
-@@ -7582,8 +7869,10 @@
+@@ -7582,8 +7892,10 @@
      estimatedItemSize = 100,
      estimatedListSize,
      extraData,
@@ -5462,7 +5750,7 @@ diff --git a/node_modules/@legendapp/list/react.js b/node_modules/@legendapp/lis
      horizontal,
      rtl,
      estimatedHeaderSize,
-@@ -7774,8 +8063,10 @@
+@@ -7774,8 +8086,10 @@
          scrollProcessingEnabled: true,
          scrollTime: 0,
          sizes: /* @__PURE__ */ new Map(),
@@ -5473,7 +5761,7 @@ diff --git a/node_modules/@legendapp/list/react.js b/node_modules/@legendapp/lis
          startNoBuffer: -1,
          startReachedSnapshot: void 0,
          stickyContainerPool: /* @__PURE__ */ new Set(),
-@@ -7839,8 +8130,10 @@
+@@ -7839,8 +8153,10 @@
      dataVersion,
      drawDistance,
      estimatedItemSize,
@@ -5484,7 +5772,7 @@ diff --git a/node_modules/@legendapp/list/react.js b/node_modules/@legendapp/lis
      horizontal: !!horizontal,
      itemsAreEqual,
      keyExtractor: useWrapIfItem(keyExtractor),
-@@ -7880,9 +8173,12 @@
+@@ -7880,9 +8196,12 @@
    }
    if (shouldResetFreshDataLayout) {
      resetInitialRenderState(ctx, {
@@ -5498,7 +5786,7 @@ diff --git a/node_modules/@legendapp/list/react.js b/node_modules/@legendapp/lis
    }
    const memoizedLastItemKeys = React3.useMemo(() => {
      if (!dataProp.length) return [];
-@@ -8108,12 +8404,22 @@
+@@ -8108,12 +8427,22 @@
        if (state.queuedFullDrawDistancePrewarm !== void 0) {
          cancelAnimationFrame(state.queuedFullDrawDistancePrewarm);
          state.queuedFullDrawDistancePrewarm = void 0;
@@ -5524,21 +5812,23 @@ diff --git a/node_modules/@legendapp/list/react.js b/node_modules/@legendapp/lis
 diff --git a/node_modules/@legendapp/list/react.mjs b/node_modules/@legendapp/list/react.mjs
 --- a/node_modules/@legendapp/list/react.mjs
 +++ b/node_modules/@legendapp/list/react.mjs
-@@ -752,8 +752,14 @@
+@@ -751,10 +751,16 @@
+ // src/core/recalculateSettledScroll.ts
  function recalculateSettledScroll(ctx) {
    var _a3, _b;
    const state = ctx.state;
 +  const previousContentSize = getContentSize(ctx);
    if ((_a3 = state.props) == null ? void 0 : _a3.data) {
      (_b = state.triggerCalculateItemsInView) == null ? void 0 : _b.call(state, { forceFullItemPositions: true });
-   }
++  }
 +  // Settling can invalidate offscreen size versions after the last measured-row
 +  // maintenance pass. Hand the new geometry back to the existing tail owner.
 +  if (getContentSize(ctx) !== previousContentSize) {
 +    doMaintainScrollAtEnd(ctx);
-+  }
+   }
    checkThresholds(ctx);
  }
+ var DEFAULT_WEB_ADAPTIVE_RENDER_ENTER_VELOCITY = 6;
 @@ -851,9 +857,11 @@
 
  // src/utils/setInitialRenderState.ts
@@ -5604,7 +5894,8 @@ diff --git a/node_modules/@legendapp/list/react.mjs b/node_modules/@legendapp/li
    var _a3, _b, _c;
    const state = ctx.state;
    if ((options == null ? void 0 : options.resolvedOffset) !== void 0) {
-@@ -929,6 +969,9 @@
+@@ -928,8 +968,11 @@
+   }
    const complete = () => {
      var _a4, _b2, _c2, _d, _e;
      const shouldReleaseDeferredPublicOnScroll = ((_a4 = state.initialScrollSession) == null ? void 0 : _a4.kind) === "bootstrap";
@@ -5614,6 +5905,7 @@ diff --git a/node_modules/@legendapp/list/react.mjs b/node_modules/@legendapp/li
      const finalScrollOffset = (_d = (_c2 = (_b2 = options == null ? void 0 : options.resolvedOffset) != null ? _b2 : state.scrollPending) != null ? _c2 : state.scroll) != null ? _d : 0;
      initialScrollWatchdog.clear(state);
      if ((options == null ? void 0 : options.preserveTarget) && state.initialScroll) {
+       state.clearPreservedInitialScrollOnNextFinish = void 0;
 @@ -951,8 +994,11 @@
      if (options == null ? void 0 : options.recalculateItems) {
        recalculateSettledScroll(ctx);
@@ -5920,7 +6212,52 @@ diff --git a/node_modules/@legendapp/list/react.mjs b/node_modules/@legendapp/li
            if (state.props.horizontal && isHorizontalRTL(state)) {
              const currentContentSize = getContentSize(ctx);
              const logicalEndOffset = getLogicalHorizontalMaxOffset(state, currentContentSize);
-@@ -1697,8 +1877,19 @@
+@@ -1573,9 +1753,10 @@
+   return false;
+ }
+ function prepareMVCP(ctx, dataChanged) {
+   const state = ctx.state;
+-  const { idsInView, positions, props } = state;
++  const { positions, props } = state;
++  let idsInView = state.idsInView;
+   const {
+     maintainVisibleContentPosition: { data: mvcpData, size: mvcpScroll, shouldRestorePosition }
+   } = props;
+   const now = Date.now();
+@@ -1584,16 +1765,31 @@
+   if (dataChanged && state.pendingScrollToEnd && scrollingTo === void 0) {
+     state.mvcpAnchorLock = void 0;
+     return void 0;
+   }
++  const shouldMVCP = dataChanged ? mvcpData : mvcpScroll;
++  // HAPPIER-MVCP-PHYSICAL-BASELINE: a browser gesture can advance before onScroll.
++  // Reconcile its offset and visible anchor before geometry changes, preserving explicit targets.
++  if (shouldMVCP && scrollingTo === void 0 && !hasActiveInitialScroll(state)) {
++    const scroller = state.refScroller.current;
++    const observedScroll = scroller && typeof scroller.getCurrentScrollOffset === "function" ? scroller.getCurrentScrollOffset() : void 0;
++    if (typeof observedScroll === "number" && Number.isFinite(observedScroll) && Math.abs(observedScroll - state.scroll) > MVCP_POSITION_EPSILON) {
++      state.scroll = observedScroll;
++      state.mvcpAnchorLock = void 0;
++      const topPad = peek$(ctx, "stylePaddingTop") + peek$(ctx, "alignItemsAtEndPadding") + peek$(ctx, "headerSize");
++      const scroll = Math.max(0, observedScroll - topPad);
++      const visibleRange = getCachedVisibleRange(ctx, scroll, scroll + state.scrollLength);
++      idsInView = visibleRange ? getIdsInVisibleRange(state, visibleRange) : [];
++      state.idsInView = idsInView;
++    }
++  }
+   const anchorLock = resolveAnchorLock(state, enableMVCPAnchorLock, mvcpData, now) ;
+   let prevPosition;
+   let targetId;
+   const idsInViewWithPositions = [];
+   const scrollTarget = scrollingTo == null ? void 0 : scrollingTo.index;
+   const scrollingToViewPosition = scrollingTo == null ? void 0 : scrollingTo.viewPosition;
+   const isEndAnchoredScrollTarget = scrollTarget !== void 0 && state.props.data.length > 0 && scrollTarget >= state.props.data.length - 1 && (scrollingToViewPosition != null ? scrollingToViewPosition : 0) > 0;
+-  const shouldMVCP = dataChanged ? mvcpData : mvcpScroll;
+   const indexByKey = state.indexByKey;
+   const prevScroll = state.scroll;
+   getContentSize(ctx);
+   if (shouldMVCP) {
+@@ -1697,8 +1893,19 @@
              scrollingTo.itemSize = newSize;
            }
          }
@@ -5940,7 +6277,7 @@ diff --git a/node_modules/@legendapp/list/react.mjs b/node_modules/@legendapp/li
          anchorId: anchorIdForLock,
          anchorPosition: anchorPositionForLock,
          dataChanged,
-@@ -1714,13 +1905,10 @@
+@@ -1714,13 +1921,10 @@
          };
          maybeApplyPredictedNativeMVCPAdjust(ctx);
          return;
@@ -5956,7 +6293,7 @@ diff --git a/node_modules/@legendapp/list/react.mjs b/node_modules/@legendapp/li
      };
    }
  }
-@@ -1787,9 +1975,8 @@
+@@ -1787,9 +1991,8 @@
  }
 
  // src/core/updateScroll.ts
@@ -5966,7 +6303,7 @@ diff --git a/node_modules/@legendapp/list/react.mjs b/node_modules/@legendapp/li
    const { ignoreScrollFromMVCP, lastScrollAdjustForHistory, scrollAdjustHandler, scrollHistory, scrollingTo } = state;
    const prevScroll = state.scroll;
    if ((options == null ? void 0 : options.markHasScrolled) !== false) {
-@@ -1861,9 +2048,9 @@
+@@ -1861,9 +2064,9 @@
        scheduleFullDrawDistancePrewarm(ctx);
      } else {
        runCalculateItems();
@@ -5977,7 +6314,7 @@ diff --git a/node_modules/@legendapp/list/react.mjs b/node_modules/@legendapp/li
        state.pendingMaintainScrollAtEnd = false;
        doMaintainScrollAtEnd(ctx);
      }
-@@ -2212,9 +2399,10 @@
+@@ -2212,9 +2415,10 @@
    });
  }
 
@@ -5989,7 +6326,7 @@ diff --git a/node_modules/@legendapp/list/react.mjs b/node_modules/@legendapp/li
      return false;
    }
    let hasMountedIndex = false;
-@@ -2222,9 +2410,9 @@
+@@ -2222,9 +2426,9 @@
      const index = state.indexByKey.get(key);
      if (index !== void 0 && index >= start && index <= end) {
        hasMountedIndex = true;
@@ -6000,7 +6337,7 @@ diff --git a/node_modules/@legendapp/list/react.mjs b/node_modules/@legendapp/li
        }
      }
    }
-@@ -2602,13 +2790,15 @@
+@@ -2602,13 +2806,15 @@
      if (!areEquivalentBootstrapInitialScrollTargets(initialScroll, updatedInitialScroll) || !!bootstrapInitialScroll || shouldResetDidFinish || didDataChange) {
        setInitialScrollTarget(ctx, updatedInitialScroll, {
          resetDidFinish: shouldResetDidFinish
@@ -6021,7 +6358,7 @@ diff --git a/node_modules/@legendapp/list/react.mjs b/node_modules/@legendapp/li
      }
    }
    if (!didDataChange) {
-@@ -2727,9 +2917,9 @@
+@@ -2727,9 +2933,9 @@
    if (initialScroll.index !== void 0 && state.startBuffered >= 0 && state.endBuffered >= 0 && initialScroll.index >= state.startBuffered && initialScroll.index <= state.endBuffered) {
      bootstrapInitialScroll.targetIndexSeed = void 0;
    }
@@ -6032,7 +6369,7 @@ diff --git a/node_modules/@legendapp/list/react.mjs b/node_modules/@legendapp/li
    const { data } = state.props;
    const visibleIndices = getBootstrapRevealVisibleIndices({
      dataLength: data.length,
-@@ -2745,9 +2935,9 @@
+@@ -2745,9 +2951,9 @@
    });
    const areVisibleIndicesMeasured = visibleIndices.length > 0 && visibleIndices.every((index) => {
      var _a4;
@@ -6043,7 +6380,7 @@ diff --git a/node_modules/@legendapp/list/react.mjs b/node_modules/@legendapp/li
    const previousResolvedOffset = bootstrapInitialScroll.previousResolvedOffset;
    const previousVisibleIndices = bootstrapInitialScroll.visibleIndices;
    bootstrapInitialScroll.previousResolvedOffset = resolvedOffset;
-@@ -3324,11 +3514,29 @@
+@@ -3324,11 +3530,29 @@
    const {
      positions,
      props: { data }
@@ -6074,7 +6411,7 @@ diff --git a/node_modules/@legendapp/list/react.mjs b/node_modules/@legendapp/li
      const lastIndex = data.length - 1;
      const lastId = getId(state, lastIndex);
      const lastPosition = positions[lastIndex];
-@@ -3349,14 +3557,14 @@
+@@ -3349,14 +3573,14 @@
            if (size > maxSize) {
              maxSize = size;
            }
@@ -6091,7 +6428,7 @@ diff --git a/node_modules/@legendapp/list/react.mjs b/node_modules/@legendapp/li
        }
      }
    }
-@@ -3417,9 +3625,9 @@
+@@ -3417,9 +3641,9 @@
    const velocity = scrollVelocity != null ? scrollVelocity : getScrollVelocity(state);
    const shouldOptimize = !forceFullUpdate && !dataChanged && (optimizeForVisibleWindow || Math.abs(velocity) > 0 || state.scrollLength > 0 && lastScrollDelta > state.scrollLength);
    const maxVisibleArea = scrollBottomBuffered + 1e3;
@@ -6102,7 +6439,7 @@ diff --git a/node_modules/@legendapp/list/react.mjs b/node_modules/@legendapp/li
    let currentRowTop = 0;
    let column = 1;
    let maxSizeInRow = 0;
-@@ -3446,9 +3654,9 @@
+@@ -3446,9 +3670,9 @@
      } else if (startIndex < dataLength) {
        const prevIndex = startIndex - 1;
        const prevId = getId(state, prevIndex);
@@ -6113,7 +6450,7 @@ diff --git a/node_modules/@legendapp/list/react.mjs b/node_modules/@legendapp/li
          prevId,
          prevIndex,
          data[prevIndex],
-@@ -3464,9 +3672,27 @@
+@@ -3464,9 +3688,27 @@
    let didBreakEarly = false;
    let breakAt;
    for (let i = startIndex; i < dataLength; i++) {
@@ -6142,7 +6479,7 @@ diff --git a/node_modules/@legendapp/list/react.mjs b/node_modules/@legendapp/li
      }
      if (shouldOptimize && breakAt === void 0 && !scrollingTo && !dataChanged && currentRowTop > maxVisibleArea) {
        const itemsPerRow = hasColumns ? numColumns : 1;
-@@ -3486,10 +3712,9 @@
+@@ -3486,10 +3728,9 @@
        currentRowTop += maxSizeInRow;
        column = 1;
        maxSizeInRow = 0;
@@ -6154,11 +6491,60 @@ diff --git a/node_modules/@legendapp/list/react.mjs b/node_modules/@legendapp/li
        if (indexByKeyForChecking.has(id)) {
          console.error(
            `[legend-list] Error: Detected overlapping key (${id}) which causes missing items and gaps and other terrrible things. Check that keyExtractor returns unique values.`
-@@ -4379,8 +4604,19 @@
-           }
+@@ -4097,9 +4338,9 @@
+     }
+   }
+   return null;
+ }
+-function updateViewabilityForCachedRange(ctx, viewabilityConfigCallbackPairs, scrollLength, scroll, scrollBottom) {
++function getCachedVisibleRange(ctx, scroll, scrollBottom) {
+   var _a3, _b;
+   const state = ctx.state;
+   const {
+     endBuffered,
+@@ -4125,8 +4366,15 @@
+     if (didPassVisibleEnd) {
+       break;
+     }
+   }
++  return visibleRange;
++}
++function updateViewabilityForCachedRange(ctx, viewabilityConfigCallbackPairs, scrollLength, scroll, scrollBottom) {
++  const state = ctx.state;
++  const { startBuffered, endBuffered } = state;
++  const visibleRange = getCachedVisibleRange(ctx, scroll, scrollBottom);
++  if (!visibleRange) return;
+   Object.assign(state, {
+     endNoBuffer: visibleRange.endNoBuffer,
+     firstFullyOnScreenIndex: visibleRange.firstFullyOnScreenIndex,
+     idsInView: getIdsInVisibleRange(state, visibleRange),
+@@ -4269,8 +4517,9 @@
+           return;
          }
        }
      }
++    const scrollBeforeMVCP = state.scroll;
+     const checkMVCP = doMVCP && !suppressInitialScrollSideEffects ? prepareMVCP(ctx, dataChanged) : void 0;
+     if (dataChanged) {
+       resetLayoutCachesForDataChange(state);
+     }
+@@ -4298,9 +4547,8 @@
+         if (shouldRestorePosition && !shouldRestorePosition(data[index], index, data)) continue;
+         protectedContainerKeys.add(id);
+       }
+     }
+-    const scrollBeforeMVCP = state.scroll;
+     const scrollAdjustPendingBeforeMVCP = (_f = peek$(ctx, "scrollAdjustPending")) != null ? _f : 0;
+     checkMVCP == null ? void 0 : checkMVCP();
+     const didMVCPAdjustScroll = !!checkMVCP && (state.scroll !== scrollBeforeMVCP || ((_g = peek$(ctx, "scrollAdjustPending")) != null ? _g : 0) !== scrollAdjustPendingBeforeMVCP);
+     if (didMVCPAdjustScroll) {
+@@ -4377,8 +4625,19 @@
+           } else {
+             foundEnd = true;
+           }
+         }
++      }
++    }
 +    if (startBuffered === null && endBuffered === null && dataLength > 0) {
 +      const lastIndexInData = dataLength - 1;
 +      const lastIdInData = idCache[lastIndexInData] != null ? idCache[lastIndexInData] : getId(state, lastIndexInData);
@@ -6168,13 +6554,11 @@ diff --git a/node_modules/@legendapp/list/react.mjs b/node_modules/@legendapp/li
 +        startBuffered = lastIndexInData;
 +        startBufferedId = lastIdInData;
 +        endBuffered = lastIndexInData;
-+      }
-+    }
+       }
+     }
      Object.assign(state, {
        endBuffered,
-       endNoBuffer: visibleRange.endNoBuffer,
-       firstFullyOnScreenIndex: visibleRange.firstFullyOnScreenIndex,
-@@ -4582,9 +4818,9 @@
+@@ -4582,9 +4841,9 @@
        return;
      }
      maybeEmitFirstVisibleItemChanged(state, visibleRange.startNoBuffer);
@@ -6185,7 +6569,7 @@ diff --git a/node_modules/@legendapp/list/react.mjs b/node_modules/@legendapp/li
          setDidLayout(ctx);
          handleInitialScrollLayoutReady(ctx);
        }
-@@ -4740,16 +4976,28 @@
+@@ -4740,16 +4999,28 @@
    } else {
      updateItemSizesBatch(ctx, [measurement]);
    }
@@ -6215,7 +6599,7 @@ diff --git a/node_modules/@legendapp/list/react.mjs b/node_modules/@legendapp/li
        const metadata = measurement.containerId !== void 0 && index !== void 0 && itemData !== void 0 ? resolveContainerItemMetadata(state, measurement.containerId, index, itemData) : void 0;
        const nextResult = applyItemSize(ctx, measurement.itemKey, measurement.size, metadata);
        mergeItemSizeUpdateResult(result, nextResult);
-@@ -4767,14 +5015,19 @@
+@@ -4767,14 +5038,19 @@
      sizesKnown,
      props: { getFixedItemSize, getItemType, horizontal, onItemSizeChanged, data, maintainScrollAtEnd }
    } = state;
@@ -6237,7 +6621,7 @@ diff --git a/node_modules/@legendapp/list/react.mjs b/node_modules/@legendapp/li
        return { didMeasureUserScrollAnchorResetItem };
      }
      if (!(resolvedMeasurementItem == null ? void 0 : resolvedMeasurementItem.didResolveFixedItemSize)) {
-@@ -4785,27 +5038,27 @@
+@@ -4785,27 +5061,27 @@
          itemType: type
        };
      }
@@ -6269,7 +6653,7 @@ diff --git a/node_modules/@legendapp/list/react.mjs b/node_modules/@legendapp/li
      }
      onItemSizeChanged == null ? void 0 : onItemSizeChanged({
        index,
-@@ -4819,9 +5072,9 @@
+@@ -4819,9 +5095,9 @@
    if (minIndexSizeChanged !== void 0) {
      state.minIndexSizeChanged = state.minIndexSizeChanged !== void 0 ? Math.min(state.minIndexSizeChanged, minIndexSizeChanged) : minIndexSizeChanged;
    }
@@ -6280,7 +6664,7 @@ diff --git a/node_modules/@legendapp/list/react.mjs b/node_modules/@legendapp/li
      return {
        didChange: diff !== 0,
        didMeasureUserScrollAnchorResetItem,
-@@ -4833,19 +5086,18 @@
+@@ -4833,19 +5109,18 @@
      didChange: diff !== 0,
      didMeasureUserScrollAnchorResetItem
    };
@@ -6302,7 +6686,7 @@ diff --git a/node_modules/@legendapp/list/react.mjs b/node_modules/@legendapp/li
    let itemType = resolvedMeasurementItem == null ? void 0 : resolvedMeasurementItem.itemType;
    let fixedItemSize = resolvedMeasurementItem == null ? void 0 : resolvedMeasurementItem.fixedItemSize;
    if (getFixedItemSize && !(resolvedMeasurementItem == null ? void 0 : resolvedMeasurementItem.didResolveFixedItemSize)) {
-@@ -4856,9 +5108,9 @@
+@@ -4856,9 +5131,9 @@
      didResolveFixedItemSize: resolvedMeasurementItem == null ? void 0 : resolvedMeasurementItem.didResolveFixedItemSize,
      fixedItemSize,
      itemType
@@ -6313,7 +6697,7 @@ diff --git a/node_modules/@legendapp/list/react.mjs b/node_modules/@legendapp/li
    const prevSizeKnown = sizesKnown.get(itemKey);
    const size = Math.round(rawSize) ;
    sizesKnown.set(itemKey, size);
-@@ -4876,8 +5128,9 @@
+@@ -4876,8 +5151,9 @@
      } else {
        averages.avg = (averages.avg * averages.num + size) / (averages.num + 1);
        averages.num++;
@@ -6323,7 +6707,7 @@ diff --git a/node_modules/@legendapp/list/react.mjs b/node_modules/@legendapp/li
    if (!prevSize || Math.abs(prevSize - size) > 0.1) {
      setSize(ctx, itemKey, size);
      return size - prevSize;
-@@ -5337,9 +5590,10 @@
+@@ -5337,9 +5613,10 @@
    let layout = rectangle;
    const axis = state.horizontal ? "width" : "height";
    const size = roundSize(rectangle[axis]);
@@ -6335,7 +6719,7 @@ diff --git a/node_modules/@legendapp/list/react.mjs b/node_modules/@legendapp/li
    const applyLayout = () => {
      state.lastSize = layout;
      updateItemSizes(ctx, {
-@@ -6669,8 +6923,10 @@
+@@ -6669,8 +6946,10 @@
    const { maintainScrollAtEnd } = state.props;
    if (didColumnsChange) {
      state.sizes.clear();
@@ -6346,7 +6730,7 @@ diff --git a/node_modules/@legendapp/list/react.mjs b/node_modules/@legendapp/li
      for (const key in state.averageSizes) {
        delete state.averageSizes[key];
      }
-@@ -7088,8 +7344,15 @@
+@@ -7088,8 +7367,15 @@
    const state = ctx.state;
    const IMPERATIVE_SCROLL_SETTLE_MAX_WAIT_MS = 800;
    const IMPERATIVE_SCROLL_SETTLE_STABLE_FRAMES = 2;
@@ -6362,7 +6746,7 @@ diff --git a/node_modules/@legendapp/list/react.mjs b/node_modules/@legendapp/li
    const isScrollToIndexReady = (targetIndex, allowEmpty = false) => {
      var _a3;
      const props = state.props;
-@@ -7109,8 +7372,9 @@
+@@ -7109,8 +7395,9 @@
    const runWhenReady = (token, run, isReady) => {
      const startedAt = Date.now();
      let stableFrames = 0;
@@ -6372,7 +6756,7 @@ diff --git a/node_modules/@legendapp/list/react.mjs b/node_modules/@legendapp/li
          return;
        }
        if (isSettlingAfterDataChange() || !isReady()) {
-@@ -7122,11 +7386,12 @@
+@@ -7122,11 +7409,12 @@
        if (stableFrames >= IMPERATIVE_SCROLL_SETTLE_STABLE_FRAMES || timedOut) {
          run();
          return;
@@ -6387,7 +6771,7 @@ diff --git a/node_modules/@legendapp/list/react.mjs b/node_modules/@legendapp/li
    const runScrollRequest = (token, resolve, run, isReady = () => true) => {
      const runNow = () => {
        if (token !== imperativeScrollToken) {
-@@ -7147,14 +7412,25 @@
+@@ -7147,14 +7435,25 @@
      }
    };
    const startImperativeScroll = (resolve) => {
@@ -6413,7 +6797,7 @@ diff --git a/node_modules/@legendapp/list/react.mjs b/node_modules/@legendapp/li
      const token = startImperativeScroll(resolve);
      runScrollRequest(token, resolve, run, isReady);
    });
-@@ -7193,8 +7469,10 @@
+@@ -7193,8 +7492,10 @@
      var _a3, _b;
      const mode = (_a3 = options == null ? void 0 : options.mode) != null ? _a3 : "sizes";
      state.sizes.clear();
@@ -6424,7 +6808,7 @@ diff --git a/node_modules/@legendapp/list/react.mjs b/node_modules/@legendapp/li
      for (const key in state.averageSizes) {
        delete state.averageSizes[key];
      }
-@@ -7213,8 +7491,13 @@
+@@ -7213,8 +7514,13 @@
      triggerMountedContainerLayouts(ctx);
      (_b = state.triggerCalculateItemsInView) == null ? void 0 : _b.call(state, { forceFullItemPositions: true });
    };
@@ -6438,7 +6822,7 @@ diff --git a/node_modules/@legendapp/list/react.mjs b/node_modules/@legendapp/li
      flashScrollIndicators: () => refScroller.current.flashScrollIndicators(),
      getAnimatableRef: () => {
        var _a3, _b, _c;
-@@ -7250,9 +7533,12 @@
+@@ -7250,9 +7556,12 @@
        },
        scroll: state.scroll,
        scrollLength: state.scrollLength,
@@ -6452,7 +6836,7 @@ diff --git a/node_modules/@legendapp/list/react.mjs b/node_modules/@legendapp/li
        start: state.startNoBuffer,
        startBuffered: state.startBuffered
      }),
-@@ -7431,9 +7717,10 @@
+@@ -7431,9 +7740,10 @@
    }
    const normalizedTriggers = normalizeMaintainScrollAtEndOn(value.on, "on" in value);
    return {
@@ -6464,7 +6848,7 @@ diff --git a/node_modules/@legendapp/list/react.mjs b/node_modules/@legendapp/li
  }
 
  // src/utils/normalizeMaintainVisibleContentPosition.ts
-@@ -7561,8 +7848,10 @@
+@@ -7561,8 +7871,10 @@
      estimatedItemSize = 100,
      estimatedListSize,
      extraData,
@@ -6475,7 +6859,7 @@ diff --git a/node_modules/@legendapp/list/react.mjs b/node_modules/@legendapp/li
      horizontal,
      rtl,
      estimatedHeaderSize,
-@@ -7753,8 +8042,10 @@
+@@ -7753,8 +8065,10 @@
          scrollProcessingEnabled: true,
          scrollTime: 0,
          sizes: /* @__PURE__ */ new Map(),
@@ -6486,7 +6870,7 @@ diff --git a/node_modules/@legendapp/list/react.mjs b/node_modules/@legendapp/li
          startNoBuffer: -1,
          startReachedSnapshot: void 0,
          stickyContainerPool: /* @__PURE__ */ new Set(),
-@@ -7818,8 +8109,10 @@
+@@ -7818,8 +8132,10 @@
      dataVersion,
      drawDistance,
      estimatedItemSize,
@@ -6497,7 +6881,7 @@ diff --git a/node_modules/@legendapp/list/react.mjs b/node_modules/@legendapp/li
      horizontal: !!horizontal,
      itemsAreEqual,
      keyExtractor: useWrapIfItem(keyExtractor),
-@@ -7859,9 +8152,12 @@
+@@ -7859,9 +8175,12 @@
    }
    if (shouldResetFreshDataLayout) {
      resetInitialRenderState(ctx, {
@@ -6511,7 +6895,7 @@ diff --git a/node_modules/@legendapp/list/react.mjs b/node_modules/@legendapp/li
    }
    const memoizedLastItemKeys = useMemo(() => {
      if (!dataProp.length) return [];
-@@ -8087,12 +8383,22 @@
+@@ -8087,12 +8406,22 @@
        if (state.queuedFullDrawDistancePrewarm !== void 0) {
          cancelAnimationFrame(state.queuedFullDrawDistancePrewarm);
          state.queuedFullDrawDistancePrewarm = void 0;

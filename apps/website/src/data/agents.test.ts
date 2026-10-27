@@ -49,7 +49,7 @@ import {
  *   released registry   the id set, the binary, the subcommand, the vendor
  *                       URLs, the install path, local control, connected
  *                       services, tool delivery
- *   unreleased registry the UPCOMING set, and nothing else
+ *   unreleased registry validates curated UPCOMING claims, and nothing else
  *   the docs repo       happierDocsPath resolves to a real .mdx
  *   shape only          h1, standfirst, lead, whatItDoes, faq
  */

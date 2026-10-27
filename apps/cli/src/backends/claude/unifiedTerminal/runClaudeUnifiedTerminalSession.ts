@@ -1,4 +1,5 @@
 import { createUnreadTerminalArtifactsCleanup } from '@/terminal/runtime/terminalLaunchSpec';
+import { ClaudeNativeProviderExitUnverifiedError } from '../sdk/types';
 
 import type {
   ClaudeUnifiedTerminalHost,
@@ -27,6 +28,7 @@ import {
 } from './createClaudeUnifiedHookLifecycleBridge';
 import { createReplayableHookSubscription } from './createReplayableHookSubscription';
 import { createClaudeUnifiedTranscriptBridge } from './createClaudeUnifiedTranscriptBridge';
+import type { ClaudeWorkflowActivityObservationContext } from '../workflows/claudeWorkflowActivitySource';
 import { isClaudeMainChainCompactBoundary } from '../localControl/readClaudeTranscriptTurnSignal';
 import type { ClaudeRemoteSubagentFileCollector } from '../remote/sidechains/claudeRemoteSubagentFileCollector';
 import {
@@ -298,6 +300,7 @@ export type ClaudeUnifiedTerminalSessionOptions<Mode extends EnhancedMode = Enha
   onThinkingChange?: ((thinking: boolean) => void) | undefined;
   onReady?: (() => void | Promise<void>) | undefined;
   onUsageLimitDetails?: ((details: NormalizedProviderUsageLimitDetailsV1) => void | Promise<void>) | undefined;
+  onQuotaEvidence?: ((windows: readonly NormalizedProviderUsageLimitDetailsV1[]) => void | Promise<void>) | undefined;
   onTerminalScreenObserved?: ((observation: ClaudeUnifiedTerminalScreenObservation) => void) | undefined;
   onRuntimeAuthFailureEvent?: ((error: unknown) => void | Promise<void>) | undefined;
   onProviderPromptStarted?: (() => void | Promise<void>) | undefined;
@@ -330,7 +333,7 @@ export type ClaudeUnifiedTerminalSessionOptions<Mode extends EnhancedMode = Enha
    */
   onRawTranscriptValue?: ((
     value: unknown,
-    observation: Readonly<{ historicalReplay: boolean }>,
+    observation: ClaudeWorkflowActivityObservationContext,
   ) => void) | undefined;
   /**
    * Invoked for every transcript row the runner suppresses from `onMessage` (controller-typed
@@ -966,6 +969,19 @@ export async function runClaudeUnifiedTerminalSession<Mode extends EnhancedMode 
   const allowReadinessBeforeSessionStart = Boolean(first && opts.allowFirstInputBeforeSessionStart);
   const allowEmptyStartupInputBeforeSessionStart = first === null && Boolean(opts.initialMode);
   let lifecycleBridge: ReturnType<typeof createClaudeUnifiedHookLifecycleBridge> | undefined;
+  const observeProviderProcessExit = (): void => {
+    if (lifecycleBridge) {
+      lifecycleBridge.observeProcessExit();
+    } else {
+      void opts.runtimeActivityAdapter?.handleRuntimeLoss('claude_process_exit', { providerStopped: true }).catch((error) => {
+        logger.debug('[unified]: Claude process-exit activity observation failed', error);
+      });
+    }
+  };
+  const notifyProviderLaunchStarting = async (): Promise<void> => {
+    await opts.runtimeActivityAdapter?.publishBeforeRuntimeStart('claude-unified-provider-not-started');
+    await opts.onProviderLaunchStarting?.();
+  };
   const acceptedPromptTranscriptDiscovery = createClaudeUnifiedAcceptedPromptTranscriptDiscovery({
     acceptedPromptWindowMs: configuration.claudeUnifiedTerminalAcceptedPromptEchoWindowMs,
     onControlCommandConsumed: opts.onTranscriptMessageSuppressed,
@@ -1163,9 +1179,24 @@ export async function runClaudeUnifiedTerminalSession<Mode extends EnhancedMode 
   let handle: TerminalHostHandle | null = null;
   let terminalHostLifecycle: 'owned' | 'borrowed' = 'owned';
   let currentTerminalProcess: Pick<OwnedTerminalProcess, 'whenExited' | 'terminate'> | null = null;
+  let runtimeExitError: unknown;
   // The process owner coalesces termination, retains success, and permits retry
   // after failure. A second promise cache here would override that contract.
-  const terminateCurrentTerminalProcess = (): Promise<void> => currentTerminalProcess?.terminate() ?? Promise.resolve();
+  const terminateCurrentTerminalProcess = async (): Promise<void> => {
+    const ownedProcess = currentTerminalProcess;
+    if (!ownedProcess) return;
+    try {
+      await ownedProcess.terminate();
+      // Complete this process's proven exit before another runner can reuse the Session ledger.
+      const exit = await ownedProcess.whenExited;
+      if (exit.nativeExited !== true && exit.processTreeStopped !== true) {
+        throw new ClaudeNativeProviderExitUnverifiedError();
+      }
+    } catch (error) {
+      if (error instanceof ClaudeNativeProviderExitUnverifiedError) throw error;
+      throw new AggregateError([error, new ClaudeNativeProviderExitUnverifiedError()], 'Claude owned process termination could not be verified', { cause: error });
+    }
+  };
   let controller: ClaudeUnifiedController | null = null;
   let runtimeControlBridge: ClaudeUnifiedRuntimeControlBridge | null = null;
   let dialogChoiceScreenProbe: ClaudeUnifiedDialogChoiceScreenProbe | null = null;
@@ -1196,6 +1227,18 @@ export async function runClaudeUnifiedTerminalSession<Mode extends EnhancedMode 
     ...(opts.signal ? [opts.signal] : []),
   ]);
   let fatalRuntimeError: unknown = null;
+  const observeUnverifiedProviderExit = (runtimeError?: unknown): void => {
+    if (!(fatalRuntimeError instanceof ClaudeNativeProviderExitUnverifiedError)) {
+      const unverifiedExit = new ClaudeNativeProviderExitUnverifiedError();
+      const priorError = fatalRuntimeError ?? runtimeError;
+      fatalRuntimeError = priorError
+        ? new AggregateError([priorError, unverifiedExit], 'Claude runtime failed with unverified provider exit', { cause: priorError })
+        : unverifiedExit;
+    }
+    void opts.runtimeActivityAdapter?.handleRuntimeLoss('claude_process_exit').catch((error) => {
+      logger.debug('[unified]: Claude process-exit activity observation failed', error);
+    });
+  };
   const expectedProviderResumeSessionId =
     typeof opts.expectedProviderResumeSessionId === 'string'
     && opts.expectedProviderResumeSessionId.trim().length > 0
@@ -1297,7 +1340,7 @@ export async function runClaudeUnifiedTerminalSession<Mode extends EnhancedMode 
       const launchSpawn = await ensureSpawn();
       ensureHookSubscription();
       explicitResumeIdentityRequired = expectedProviderResumeSessionId !== null;
-      await opts.onProviderLaunchStarting?.();
+      await notifyProviderLaunchStarting();
       handle = currentTerminalHost.handle.attachmentId
         ? currentTerminalHost.handle
         : { ...currentTerminalHost.handle, attachmentId: createTerminalAttachmentId() };
@@ -1307,8 +1350,14 @@ export async function runClaudeUnifiedTerminalSession<Mode extends EnhancedMode 
       });
       terminalHostLifecycle = currentTerminalHost.lifecycle;
       spawnArtifactsHandedOff = true;
-      void currentTerminalProcess.whenExited.then(
-        () => runtimeAbortController.abort('claude-unified-current-terminal-process-exited'),
+      const ownedProcess = currentTerminalProcess;
+      void ownedProcess.whenExited.then(
+        (exit) => {
+          if (currentTerminalProcess !== ownedProcess) return;
+          if (exit.nativeExited === true || exit.processTreeStopped === true) observeProviderProcessExit();
+          else observeUnverifiedProviderExit();
+          runtimeAbortController.abort('claude-unified-current-terminal-process-exited');
+        },
         (error) => {
           fatalRuntimeError ??= error;
           runtimeAbortController.abort(error);
@@ -1330,7 +1379,7 @@ export async function runClaudeUnifiedTerminalSession<Mode extends EnhancedMode 
         const fallbackSpawn = await ensureSpawn();
         ensureHookSubscription();
         explicitResumeIdentityRequired = expectedProviderResumeSessionId !== null;
-        await opts.onProviderLaunchStarting?.();
+        await notifyProviderLaunchStarting();
         spawnArtifactsHandedOff = true;
         handle = await hostResolution.adapter.createOrAttachHost({
           sessionName: hostResolution.adapter.kind === 'herdr' ? sessionName : fallbackSessionName,
@@ -1361,7 +1410,7 @@ export async function runClaudeUnifiedTerminalSession<Mode extends EnhancedMode 
           isolatedEnv: true,
         } as const;
         explicitResumeIdentityRequired = expectedProviderResumeSessionId !== null;
-        await opts.onProviderLaunchStarting?.();
+        await notifyProviderLaunchStarting();
         spawnArtifactsHandedOff = true;
         handle = await hostResolution.adapter.createOrAttachHost(createOptions);
       }
@@ -2377,6 +2426,7 @@ export async function runClaudeUnifiedTerminalSession<Mode extends EnhancedMode 
               await opts.onReady?.();
             },
             onUsageLimitDetails: opts.onUsageLimitDetails,
+            onQuotaEvidence: opts.onQuotaEvidence,
             onRuntimeAuthFailureEvent: opts.onRuntimeAuthFailureEvent,
             onProviderPromptStarted: opts.onProviderPromptStarted,
             onProviderPromptSubmitMetadata: runtimeControlBridge
@@ -2548,6 +2598,7 @@ export async function runClaudeUnifiedTerminalSession<Mode extends EnhancedMode 
             transcriptMissingWarningMs: configuration.claudeTranscriptMissingWarningMs,
             subscribeClaudeSessionHooks: activeHookSubscription.subscribe,
             // Discover identity without settling Pending ahead of the ordered importer.
+            onStartupReplayComplete: () => activeHookSubscription.finishStartup(),
             classifyDiscoveredSession: ({ messages }) => (
               acceptedPromptTranscriptDiscovery.findMatchingTranscript(messages) ? 'main' : null
             ),
@@ -2628,11 +2679,19 @@ export async function runClaudeUnifiedTerminalSession<Mode extends EnhancedMode 
             startupGraceActive: () => startupHostLivenessGraceActive,
             isExpectedHostExit: (liveness) => expectedPromptInputExit && isCleanTerminalExit(liveness),
             onHostExited: () => {
+              if (!currentTerminalProcess) {
+                void opts.runtimeActivityAdapter?.handleRuntimeLoss('claude_process_exit').catch((error) => {
+                  logger.debug('[unified]: Claude process-exit activity observation failed', error);
+                });
+              }
               if (!runtimeAbortController.signal.aborted) {
                 runtimeAbortController.abort('claude-unified-terminal-graceful-exit');
               }
             },
             onHostDead: (error) => {
+              if (!currentTerminalProcess) {
+                observeUnverifiedProviderExit(error);
+              }
               void publishHostDeadHealth(activeHandle, error.liveness);
               fatalRuntimeError ??= error;
               runtimeAbortController.abort(error);
@@ -2646,6 +2705,9 @@ export async function runClaudeUnifiedTerminalSession<Mode extends EnhancedMode 
       await controller.run();
     } catch (error) {
       if (error instanceof ClaudeUnifiedTerminalHostDeadError) {
+        if (!currentTerminalProcess && error.liveness?.paneAlive === false && error.liveness.probeInconclusive !== true) {
+          if (!fatalRuntimeError) observeUnverifiedProviderExit(error);
+        }
         await publishHostDeadHealth(activeHandle, error.liveness);
         emitClaudeUnifiedHostDead(telemetry, {
           hostKind: activeHandle.kind,
@@ -2653,6 +2715,10 @@ export async function runClaudeUnifiedTerminalSession<Mode extends EnhancedMode 
           paneId: activeHandle.paneId,
           liveness: error.liveness,
         });
+      }
+      if (fatalRuntimeError && fatalRuntimeError !== error) {
+        if (error instanceof ClaudeUnifiedTerminalHostDeadError) throw fatalRuntimeError;
+        throw new AggregateError([error, fatalRuntimeError], 'Claude runtime failed with unverified provider exit', { cause: error });
       }
       throw error;
     }
@@ -2675,6 +2741,9 @@ export async function runClaudeUnifiedTerminalSession<Mode extends EnhancedMode 
     if (fatalRuntimeError) {
       throw fatalRuntimeError;
     }
+  } catch (error) {
+    runtimeExitError = error;
+    throw error;
   } finally {
     runtimeAbortController.abort('claude-unified-runtime-disposed');
     arbiterForResumeSummaryCompaction = null;
@@ -2706,16 +2775,31 @@ export async function runClaudeUnifiedTerminalSession<Mode extends EnhancedMode 
     } else {
       await preserveActiveTerminalHost('wrapper_exit');
     }
-    if (currentTerminalProcess && terminalHostLifecycle !== 'borrowed') {
-      await terminateCurrentTerminalProcess().catch((error) => {
-        logger.infoFile('[unified]: failed to terminate current terminal provider process (non-fatal)', error);
+    let incompleteOwnedCleanup: unknown;
+    const noteOwnedCleanupFailure = async (error: unknown): Promise<void> => {
+      incompleteOwnedCleanup = error;
+      await opts.runtimeActivityAdapter?.handleRuntimeLoss('claude_process_cleanup_failed').catch((observationError) => {
+        logger.debug('[unified]: failed to publish provider cleanup observation loss', observationError);
+      });
+    };
+    if (currentTerminalProcess) {
+      await terminateCurrentTerminalProcess().catch(async (error: unknown) => {
+        await noteOwnedCleanupFailure(error);
+        logger.infoFile('[unified]: failed to terminate current terminal provider process', error instanceof AggregateError ? error.cause : error);
       });
     }
-    if (terminalHostLifecycle === 'borrowed') {
-      await releaseBorrowedTerminalHost('wrapper_exit').catch((error) => {
-        logger.infoFile('[unified]: failed to release borrowed terminal attachment (non-fatal)', error);
+    if (terminalHostLifecycle === 'borrowed' && !incompleteOwnedCleanup) {
+      await releaseBorrowedTerminalHost('wrapper_exit').catch(async (error: unknown) => {
+        logger.infoFile('[unified]: failed to release borrowed terminal attachment', error);
       });
     }
+    currentTerminalProcess = null;
     activeHookSubscription.dispose();
+    if (incompleteOwnedCleanup) {
+      if (runtimeExitError) {
+        throw new AggregateError([runtimeExitError, incompleteOwnedCleanup], 'Claude runtime failed with incomplete owned process cleanup', { cause: runtimeExitError });
+      }
+      throw incompleteOwnedCleanup;
+    }
   }
 }

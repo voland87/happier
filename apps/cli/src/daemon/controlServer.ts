@@ -389,10 +389,11 @@ export function createDaemonControlApp({
     pid: number;
     materializationKey: string;
     connectedServicesBindingsRaw: unknown;
+    previousMaterializedRoot?: string;
     sessionDirectory?: string | null;
     sessionId?: string;
   }>) => Promise<ExecutionRunConnectedServiceMaterializeResponseWire>;
-  // Run-end lifecycle: unregister the run's runtime target + clean its run-scoped materialized root.
+  // Run-end lifecycle: unregister the runtime target and clean only disposable run materialization.
   handleExecutionRunConnectedServiceRelease?: (input: Readonly<{
     runId: string;
     pid: number;
@@ -1576,6 +1577,7 @@ export function createDaemonControlApp({
       pid: request.body.pid,
       materializationKey: request.body.materializationKey,
       connectedServicesBindingsRaw: request.body.connectedServicesBindingsRaw,
+      ...(request.body.previousMaterializedRoot ? { previousMaterializedRoot: request.body.previousMaterializedRoot } : {}),
       sessionDirectory: request.body.sessionDirectory ?? null,
       ...(request.body.sessionId ? { sessionId: request.body.sessionId } : {}),
     });
@@ -1583,7 +1585,8 @@ export function createDaemonControlApp({
   });
 
   // Run-end lifecycle for the run-materialization bridge: unregister the run's runtime target and
-  // clean its run-scoped materialized root. Best-effort semantics on the caller side; the handler
+  // clean only disposable run materialization. Durable provider homes are retained. Best-effort
+  // semantics on the caller side; the handler
   // itself never tears down a target owned by a different materialization.
   typed.post(EXECUTION_RUN_CONNECTED_SERVICE_RELEASE_PATH, {
     schema: {
@@ -2245,6 +2248,7 @@ export function startDaemonControlServer({
     pid: number;
     materializationKey: string;
     connectedServicesBindingsRaw: unknown;
+    previousMaterializedRoot?: string;
     sessionDirectory?: string | null;
     sessionId?: string;
   }>) => Promise<ExecutionRunConnectedServiceMaterializeResponseWire>;

@@ -320,6 +320,8 @@ jobs:
               - 'scripts/pipeline/**'
               - 'packages/tests/src/testkit/process/**'
             installers_smoke:
+              - 'packages/cli-common/src/service/**'
+              - 'apps/cli/src/daemon/service/**'
               - '.github/actions/bootstrap-minisign/**'
               - 'apps/ui/src-tauri/**'
               - 'scripts/install/**'
@@ -1446,9 +1448,14 @@ jobs:
         shell: pwsh
         run: node scripts/workspaces/ensureWorkspacePackagesBuiltCli.mjs @happier-dev/cli-common @happier-dev/release-runtime
 
-      - name: Verify Windows payload promotion
+      - name: Verify Windows installer contracts
         shell: pwsh
-        run: node --test scripts/release/installers_windows_payload_promotion.contract.test.mjs
+        run: node --test scripts/release/installers_security.test.mjs scripts/release/installers_windows_payload_promotion.contract.test.mjs
+
+      - name: Verify Windows scheduled task contracts
+        shell: pwsh
+        working-directory: packages/cli-common
+        run: node ../../node_modules/vitest/vitest.mjs run --config vitest.config.ts src/service/windows.test.ts
 
       - name: Run unified installer smoke
         shell: pwsh

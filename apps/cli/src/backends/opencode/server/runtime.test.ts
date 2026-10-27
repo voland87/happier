@@ -1,3 +1,5 @@
+import { buildUsageLimitIssueFingerprint } from '@happier-dev/protocol';
+import { createSessionTurnLifecycle } from '@/agent/runtime/session/turn/lifecycle';
 import { mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -22,6 +24,8 @@ import {
   createOpenCodeServerRuntime as createOpenCodeServerRuntimeProduction,
   OPENCODE_CONNECTED_AUTH_NOT_MATERIALIZED_CODE,
 } from './runtime';
+import { normalizeOpenCodeV2Event } from './openCodeV2EventAdapter';
+import { projectOpenCodeSessionMcpServers } from './openCodeMcpToolNames';
 import { isTerminalOpenCodeToolPartStatus } from './runtime/createOpenCodeForegroundToolTracker';
 import { OPENCODE_SERVER_RESTARTED_DURING_TURN_ISSUE_CODE } from './runtime/createOpenCodeManagedServerTurnInterruptionSupervisor';
 import {
@@ -47,7 +51,9 @@ import {
   type SharedManagedOpenCodeServerState,
 } from './sharedManagedServer';
 import type { OpenCodeGlobalEvent } from './types';
-import type { ProviderEnforcedPermissionHandler } from '@/agent/permissions/ProviderEnforcedPermissionHandler';
+import { ProviderEnforcedPermissionHandler } from '@/agent/permissions/ProviderEnforcedPermissionHandler';
+import { createMutableApiSessionClientFixture } from '@/testkit/backends/sessionFixtures';
+import type { AgentState } from '@/api/types';
 
 const mockNotifyDaemonConnectedServiceRuntimeAuthFailure = vi.hoisted(() => vi.fn(async () => ({})));
 const mockQueryDaemonOpenCodeBrokerLoadHandshake = vi.hoisted(() => vi.fn());
@@ -118,6 +124,11 @@ function createOpenCodeServerRuntime(
 type OpenCodeRuntimePromptHarness = Readonly<{
   sendPromptWithMeta(params: ProviderPromptWithMeta): Promise<void>;
 }>;
+
+function sessionMcpName(sessionId: string, serverName: string): string {
+  const projection = projectOpenCodeSessionMcpServers(sessionId, { [serverName]: { command: process.execPath } });
+  return projection.registrations[0]!.projectedName;
+}
 
 function createReadyMcpServers() {
   return {
@@ -882,7 +893,7 @@ describe('createOpenCodeServerRuntime', () => {
 
     expect(client.mcpAdd).toHaveBeenCalledWith({
       directory: '/tmp',
-      name: 'happier-session-happy_sess_opencode--happier',
+      name: sessionMcpName('happy_sess_opencode', 'happier'),
       config: {
         type: 'local',
         enabled: true,
@@ -922,11 +933,11 @@ describe('createOpenCodeServerRuntime', () => {
     await secondRuntime.startOrLoad({});
     await firstRuntime.reset();
 
-    expect(directoryMcpStatus.get('happier-session-happy_sess_first--happier')).toBe('disabled');
-    expect(directoryMcpStatus.get('happier-session-happy_sess_second--happier')).toBe('connected');
+    expect(directoryMcpStatus.get(sessionMcpName('happy_sess_first', 'happier'))).toBe('disabled');
+    expect(directoryMcpStatus.get(sessionMcpName('happy_sess_second', 'happier'))).toBe('connected');
     expect(firstClient.mcpDisconnect).toHaveBeenCalledWith({
       directory: '/tmp',
-      name: 'happier-session-happy_sess_first--happier',
+      name: sessionMcpName('happy_sess_first', 'happier'),
     });
 
     await secondRuntime.reset();
@@ -961,7 +972,7 @@ describe('createOpenCodeServerRuntime', () => {
     await resetPromise;
     expect(client.mcpDisconnect).toHaveBeenCalledWith({
       directory: '/tmp',
-      name: 'happier-session-happy_sess_cleanup--happier',
+      name: sessionMcpName('happy_sess_cleanup', 'happier'),
     });
   });
 
@@ -970,7 +981,7 @@ describe('createOpenCodeServerRuntime', () => {
     let resolveSlowCustomMcp!: () => void;
     client.mcpAdd.mockImplementation(async (input?: unknown) => {
       const name = (input as { name?: unknown } | undefined)?.name;
-      if (name === 'happier-session-happy_sess_opencode--slow_custom') {
+      if (name === sessionMcpName('happy_sess_opencode', 'slow_custom')) {
         await new Promise<void>((resolve) => {
           resolveSlowCustomMcp = resolve;
         });
@@ -1024,7 +1035,7 @@ describe('createOpenCodeServerRuntime', () => {
       await expect.poll(() => client.mcpAdd.mock.calls.length).toBe(2);
       expect(client.mcpAdd).toHaveBeenNthCalledWith(2, {
         directory: '/tmp',
-        name: 'happier-session-happy_sess_opencode--happier',
+        name: sessionMcpName('happy_sess_opencode', 'happier'),
         config: {
           type: 'local',
           enabled: true,
@@ -1534,7 +1545,7 @@ describe('createOpenCodeServerRuntime', () => {
     await expect.poll(() => client.mcpAdd.mock.calls.length).toBe(2);
     expect(client.mcpAdd).toHaveBeenNthCalledWith(2, {
       directory: '/tmp/opencode-session-dir',
-      name: 'happier-session-happy_sess_opencode--happier',
+      name: sessionMcpName('happy_sess_opencode', 'happier'),
       config: {
         type: 'local',
         enabled: true,
@@ -1575,7 +1586,7 @@ describe('createOpenCodeServerRuntime', () => {
     expect(client.mcpAdd).toHaveBeenCalledTimes(2);
     expect(client.mcpAdd).toHaveBeenNthCalledWith(1, {
       directory: '/tmp',
-      name: 'happier-session-happy_sess_opencode--broken_first',
+      name: sessionMcpName('happy_sess_opencode', 'broken_first'),
       config: {
         type: 'local',
         enabled: true,
@@ -1584,7 +1595,7 @@ describe('createOpenCodeServerRuntime', () => {
     });
     expect(client.mcpAdd).toHaveBeenNthCalledWith(2, {
       directory: '/tmp',
-      name: 'happier-session-happy_sess_opencode--healthy_second',
+      name: sessionMcpName('happy_sess_opencode', 'healthy_second'),
       config: {
         type: 'local',
         enabled: true,
@@ -1594,7 +1605,7 @@ describe('createOpenCodeServerRuntime', () => {
     expect(debugSpy).toHaveBeenCalledWith(
       '[OpenCodeServer] Failed to register MCP server (non-fatal)',
       expect.objectContaining({
-        serverName: 'happier-session-happy_sess_opencode--broken_first',
+        serverName: sessionMcpName('happy_sess_opencode', 'broken_first'),
         error: expect.any(Error),
       }),
     );
@@ -3534,7 +3545,7 @@ describe('createOpenCodeServerRuntime', () => {
             sessionID: 'ses_1',
             messageID: 'msg_tool_custom_1',
             callID: 'call_custom_mcp_1',
-            tool: 'happier-session-happy_sess_opencode--qa_marker_stdio_20260306_get_marker',
+            tool: `${sessionMcpName('happy_sess_opencode', 'qa_marker_stdio_20260306')}_get_marker`,
             state: {
               status: 'completed',
               input: {},
@@ -8604,6 +8615,15 @@ describe('createOpenCodeServerRuntime', () => {
   it('maps structured OpenCode usage-limit session errors into runtime issue details', async () => {
     const client = createFakeClient();
     const session = createFakeSession('happy_sess_opencode_usage_error');
+    const acceptedIssues: Array<import('@happier-dev/protocol').SessionRuntimeIssueV1> = [];
+    const lifecycle = createSessionTurnLifecycle({ sessionId: session.sessionId, enqueueSessionTurn: async (mutation) => {
+      if (mutation.action === 'fail' && mutation.issue) acceptedIssues.push(mutation.issue);
+    } });
+    session.sessionTurnLifecycle = lifecycle;
+    const failTurn = vi.spyOn(lifecycle, 'failTurn');
+    session.sendAgentMessage.mockImplementation((provider: import('@/api/session/sessionMessageTypes').ACPProvider, body: import('@/api/session/sessionMessageTypes').ACPMessageData) => {
+      void lifecycle.observeAcpLifecycleMarker({ provider, body }).pendingWrite;
+    });
     const runtime = createOpenCodeServerRuntime({
       directory: '/tmp',
       env: {
@@ -8661,7 +8681,7 @@ describe('createOpenCodeServerRuntime', () => {
       { timeout: 5_000 },
     ).toBe(1);
 
-    expect(session.sessionTurnLifecycle.failTurn).toHaveBeenCalledWith(expect.objectContaining({
+    expect(failTurn).toHaveBeenCalledWith(expect.objectContaining({
       provider: 'opencode',
       issue: expect.objectContaining({
         source: 'usage_limit',
@@ -8688,6 +8708,7 @@ describe('createOpenCodeServerRuntime', () => {
       sessionId: 'happy_sess_opencode_usage_error',
       switchesThisTurn: 0,
       classification: expect.objectContaining({
+        runtimeIssueFingerprint: buildUsageLimitIssueFingerprint(acceptedIssues[0]!),
         kind: 'rate_limit',
         serviceId: 'openai',
         profileId: 'primary',
@@ -8781,7 +8802,6 @@ describe('createOpenCodeServerRuntime', () => {
           usageLimit: expect.objectContaining({
             resetAtMs: null,
             retryAfterMs: expect.any(Number),
-            providerLimitId: 'free_tier_limit',
             connectedService: expect.objectContaining({
               serviceId: 'openai',
               profileId: 'primary',
@@ -8802,7 +8822,6 @@ describe('createOpenCodeServerRuntime', () => {
           groupId: 'team-pool',
           resetsAtMs: null,
           retryAfterMs: expect.any(Number),
-          providerLimitId: 'free_tier_limit',
         }),
       }, {
         timeoutMs: CONNECTED_SERVICE_RUNTIME_AUTH_FAILURE_REPORT_TIMEOUT_MS,
@@ -9005,7 +9024,6 @@ describe('createOpenCodeServerRuntime', () => {
             usageLimit: expect.objectContaining({
               resetAtMs: null,
               retryAfterMs: expect.any(Number),
-              providerLimitId: 'free_tier_limit',
               connectedService: expect.objectContaining({
                 serviceId: 'openai',
                 profileId: 'primary',
@@ -10089,6 +10107,188 @@ describe('createOpenCodeServerRuntime', () => {
     expect(client.sessionMessagesList).toHaveBeenCalledWith({ sessionId: 'ses_remote' });
     expect(session.sendAgentMessageCommitted).not.toHaveBeenCalled();
     expect(session.sendUserTextMessageCommitted).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])('routes released V2 subagent tool progress until child termination (terminal before acknowledgement: %s)', async (terminalBeforeAcknowledgement) => {
+    const { client, session, runtime, promptPromise } = await beginOpenCodePromptForTest();
+    const emitNative = async (type: string, data: Record<string, unknown>) => {
+      const normalized = normalizeOpenCodeV2Event(type, data);
+      await client.__emit({ directory: '/tmp', payload: { type: normalized.type, properties: normalized.properties } });
+    };
+    const parentTool = { sessionID: 'ses_1', assistantMessageID: 'parent-native-message', id: 'native-subagent-call' };
+    await emitNative('session.tool.input.started', { ...parentTool, name: 'subagent' });
+    await emitNative('session.tool.called', { ...parentTool, input: { agent: 'explore', description: 'Native child', prompt: 'Work', background: true }, executed: true });
+    await emitNative('session.tool.progress', { ...parentTool, metadata: { sessionID: 'ses_child', status: 'running' } });
+    const childTool = { sessionID: 'ses_child', assistantMessageID: 'child-tool-message', id: 'child-native-tool' };
+    await emitNative('session.tool.input.started', { ...childTool, name: 'bash' });
+    await emitNative('session.tool.called', { ...childTool, input: { command: 'echo child' }, executed: true });
+    await emitNative('session.tool.success', { ...childTool, content: [{ type: 'text', text: 'child tool output' }], executed: true });
+    await expect.poll(() => sentAgentMessagesOfType(session, 'tool-result').some((value) =>
+      (value as { callId?: string; sidechainId?: string }).callId === 'child-native-tool'
+      && (value as { sidechainId?: string }).sidechainId === 'native-subagent-call')).toBe(true);
+    if (terminalBeforeAcknowledgement) {
+      await emitNative('session.text.delta', { sessionID: 'ses_child', assistantMessageID: 'child-native-message', ordinal: 0, delta: 'NATIVE_CHILD' });
+      await emitNative('session.execution.succeeded', { sessionID: 'ses_child' });
+      await expect.poll(() => sentAgentMessagesOfType(session, 'tool-result').some((value) => (value as { callId?: string }).callId === 'native-subagent-call')).toBe(true);
+    }
+    await emitNative('session.tool.success', { ...parentTool, content: [{ type: 'text', text: 'launch acknowledged' }], metadata: { sessionID: 'ses_child', status: 'running' }, executed: true });
+    expect(sentAgentMessagesOfType(session, 'tool-call')).toEqual(expect.arrayContaining([expect.objectContaining({ callId: 'native-subagent-call', name: 'subagent' })]));
+    if (!terminalBeforeAcknowledgement) expect(sentAgentMessagesOfType(session, 'tool-result')).not.toEqual(expect.arrayContaining([expect.objectContaining({ callId: 'native-subagent-call' })]));
+    await emitTerminalAssistantAndIdle(client, { messageId: 'parent-complete' });
+    await promptPromise;
+    if (!terminalBeforeAcknowledgement) {
+      await emitNative('session.text.delta', { sessionID: 'ses_child', assistantMessageID: 'child-native-message', ordinal: 0, delta: 'NATIVE_CHILD' });
+      await emitNative('session.execution.succeeded', { sessionID: 'ses_child' });
+    }
+    await expect.poll(() => getCommittedTranscriptRows(session, { sidechainId: 'native-subagent-call' }).some((row) => row.body.message === 'NATIVE_CHILD')).toBe(true);
+    await expect.poll(() => sentAgentMessagesOfType(session, 'tool-result').some((value) => (value as { callId?: string }).callId === 'native-subagent-call')).toBe(true);
+    expect(sentAgentMessagesOfType(session, 'tool-result').filter((value) => (value as { callId?: string }).callId === 'native-subagent-call')).toHaveLength(1);
+    await runtime.reset();
+  });
+
+  it.each(['succeeded', 'failed', 'interrupted'] as const)('settles native background child from released V2 execution %s evidence without settling its parent', async (outcome) => {
+    const { client, session, runtime, promptPromise } = await beginOpenCodePromptForTest();
+    await client.__emit({ directory: '/tmp', payload: { type: 'message.part.updated', properties: { part: {
+      id: 'task-background-part', type: 'tool', sessionID: 'ses_1', messageID: 'task-parent-message',
+      callID: 'background-task', tool: 'subagent', state: { status: 'completed', input: { description: 'Background task' },
+        output: 'launch acknowledged', metadata: { sessionID: 'ses_child', status: 'running' } },
+    } } } });
+    const parentSettlement = observePromiseSettlement(promptPromise);
+    const normalized = normalizeOpenCodeV2Event(`session.execution.${outcome}`, {
+      sessionID: 'ses_child', reason: 'user', error: { name: 'ProviderError', message: 'Child failed' },
+    });
+    await client.__emit({ directory: '/tmp', payload: { type: normalized.type, properties: normalized.properties } });
+    await expect.poll(() => sentAgentMessagesOfType(session, 'tool-result').some((value) =>
+      (value as { callId?: string }).callId === 'background-task')).toBe(true);
+    expect(sentAgentMessagesOfType(session, 'tool-result')).toEqual(expect.arrayContaining([
+      expect.objectContaining({ callId: 'background-task', ...(outcome === 'succeeded' ? {} : { isError: true }) }),
+    ]));
+    expect(parentSettlement.status).toBe('pending');
+    await runtime.reset();
+    await promptPromise.catch(() => undefined);
+  });
+
+  it('retires only a terminal child’s pending attention through the real permission owner', async () => {
+    let agentState: AgentState = { requests: {}, completedRequests: {} };
+    const session = { ...createFakeSession(), getAgentStateSnapshot: () => agentState };
+    const permissionSession = createMutableApiSessionClientFixture({ overrides: {
+      sessionId: session.sessionId,
+      getAgentStateSnapshot: () => agentState,
+      updateAgentState: async (updater) => { agentState = updater(agentState); },
+      updateAgentStateRequestSettlement: async (updater) => { agentState = updater(agentState); },
+    } });
+    const onAbortRequested = vi.fn();
+    const permissionHandler = new ProviderEnforcedPermissionHandler(permissionSession, { logPrefix: '[Test]', onAbortRequested });
+    const { client, runtime, promptPromise } = await beginOpenCodePromptForTest({ permissionHandler, session });
+    await client.__emit({ directory: '/tmp', payload: { type: 'message.part.updated', properties: { part: {
+      id: 'attention-launch', type: 'tool', sessionID: 'ses_1', messageID: 'attention-parent', callID: 'attention-task', tool: 'task',
+      state: { status: 'completed', input: { background: true }, metadata: { sessionId: 'attention-child', background: true } },
+    } } } });
+    await emitTerminalAssistantAndIdle(client, { messageId: 'attention-parent-complete' });
+    await promptPromise;
+    const neighbor = permissionHandler.handleToolCall('neighbor-permission', 'bash', { command: 'echo neighbor' });
+    await client.__emit({ directory: '/tmp', payload: { type: 'question.asked', properties: {
+      id: 'pending-child-question', sessionID: 'attention-child', questions: [{ question: 'Continue?', header: 'Question', options: [] }],
+    } } });
+    await client.__emit({ directory: '/tmp', payload: { type: 'permission.asked', properties: {
+      id: 'pending-child-permission', sessionID: 'attention-child', permission: 'bash', patterns: ['echo child'],
+    } } });
+    await expect.poll(() => Object.keys(agentState.requests ?? {}).length).toBe(3);
+    const terminal = normalizeOpenCodeV2Event('session.execution.succeeded', { sessionID: 'attention-child' });
+    const terminalWork = client.__emit({ directory: '/tmp', payload: { type: terminal.type, properties: terminal.properties } });
+    const resumedWork = client.__emit({ directory: '/tmp', payload: { type: 'message.part.updated', properties: { part: {
+      id: 'resumed-attention-launch', type: 'tool', sessionID: 'ses_1', messageID: 'resumed-attention-parent',
+      callID: 'resumed-attention-task', tool: 'task',
+      state: { status: 'completed', input: { background: true }, metadata: { sessionId: 'attention-child', background: true } },
+    } } } });
+    await Promise.all([terminalWork, resumedWork]);
+    try {
+      await expect.poll(() => Object.keys(agentState.requests ?? {})).toEqual(['neighbor-permission']);
+      expect(agentState.completedRequests?.['pending-child-question']?.status).toBe('canceled');
+      expect(onAbortRequested).not.toHaveBeenCalled();
+      expect(client.questionReply).not.toHaveBeenCalled();
+      expect(client.questionReject).not.toHaveBeenCalled();
+      expect(client.permissionReply).not.toHaveBeenCalled();
+    } finally {
+      permissionHandler.cancelPendingRequest('neighbor-permission', 'Test finished');
+      permissionHandler.cancelPendingRequest('pending-child-question', 'Test finished');
+      permissionHandler.cancelPendingRequest('pending-child-permission', 'Test finished');
+      await neighbor;
+      await runtime.reset();
+    }
+  });
+
+  it('settles parent foreground work while its known child still has a running tool', async () => {
+    const { client, runtime, promptPromise } = await beginOpenCodePromptForTest();
+    await client.__emit({ directory: '/tmp', payload: { type: 'message.part.updated', properties: { part: {
+      id: 'parent-task', type: 'tool', sessionID: 'ses_1', messageID: 'parent-tool-message', callID: 'parent-task-call', tool: 'task',
+      state: { status: 'completed', input: { description: 'Child' }, metadata: { sessionId: 'ses_child', background: true } },
+    } } } });
+    await client.__emit({ directory: '/tmp', payload: { type: 'message.part.updated', properties: { part: {
+      id: 'child-tool', type: 'tool', sessionID: 'ses_child', messageID: 'child-tool-message', callID: 'child-call', tool: 'bash',
+      state: { status: 'running', input: { command: 'sleep while parent completes' } },
+    } } } });
+    const parentSettlement = observePromiseSettlement(promptPromise);
+    try {
+      await emitTerminalAssistantAndIdle(client, { messageId: 'parent-finished' });
+      await expect.poll(() => parentSettlement.status).toBe('resolved');
+    } finally {
+      await runtime.reset();
+      await promptPromise.catch(() => undefined);
+    }
+  });
+
+  it('keeps background Task output and attention routed after the parent completes, until child termination', async () => {
+    const permissionHandler = createFakePermissionHandler();
+    const { client, session, runtime, promptPromise, onThinkingChange } = await beginOpenCodePromptForTest({ permissionHandler });
+    await client.__emit({ directory: '/tmp', payload: { type: 'message.part.updated', properties: { part: {
+      id: 'task-background-part', type: 'tool', sessionID: 'ses_1', messageID: 'task-parent-message',
+      callID: 'background-task', tool: 'task', state: { status: 'completed',
+        input: { description: 'Background task' }, output: 'launch acknowledged',
+        metadata: { sessionId: 'ses_child', background: true } },
+    } } } });
+    await flushTranscriptCommitMicrotasks();
+    expect(sentAgentMessagesOfType(session, 'tool-result')).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ callId: 'background-task' }),
+    ]));
+    await emitTerminalAssistantAndIdle(client, { messageId: 'parent-complete' });
+    await promptPromise;
+    const parentStarts = sentAgentMessagesOfType(session, 'task_started').length;
+    await emitAssistantMessageUpdated(client, { sessionId: 'ses_child', messageId: 'child-message', completed: null });
+    await client.__emit({ directory: '/tmp', payload: { type: 'message.part.updated', properties: { part: {
+      id: 'child-text', type: 'text', sessionID: 'ses_child', messageID: 'child-message',
+    } } } });
+    await client.__emit({ directory: '/tmp', payload: { type: 'message.part.delta', properties: {
+      sessionID: 'ses_child', messageID: 'child-message', partID: 'child-text', delta: 'Late child output',
+    } } });
+    await client.__emit({ directory: '/tmp', payload: { type: 'message.part.updated', properties: { part: {
+      id: 'child-tool', type: 'tool', sessionID: 'ses_child', messageID: 'child-tool-message',
+      callID: 'child-tool-call', tool: 'bash', state: { status: 'running', input: { command: 'echo child' } },
+    } } } });
+    await client.__emit({ directory: '/tmp', payload: { type: 'session.status', properties: { sessionID: 'ses_1', status: { type: 'idle' } } } });
+    expect(onThinkingChange.mock.calls.at(-1)).toEqual([false]);
+    await client.__emit({ directory: '/tmp', payload: { type: 'question.asked', properties: {
+      id: 'child-question', sessionID: 'ses_child', questions: [{ question: 'Continue?', header: 'Question', options: [] }],
+    } } });
+    await expect.poll(() => client.questionReply.mock.calls.length).toBe(1);
+    await client.__emit({ directory: '/tmp', payload: { type: 'permission.asked', properties: {
+      id: 'child-permission', sessionID: 'ses_child', permission: 'bash', patterns: ['echo child'],
+    } } });
+    await expect.poll(() => client.permissionReply.mock.calls.length).toBe(1);
+    await emitTerminalAssistantAndIdle(client, { sessionId: 'ses_child', messageId: 'child-message' });
+    await expect.poll(() => getCommittedTranscriptRows(session, { sidechainId: 'background-task' })
+      .some((row) => row.body.message === 'Late child output')).toBe(true);
+    expect(sentAgentMessagesOfType(session, 'tool-result')).toEqual(expect.arrayContaining([
+      expect.objectContaining({ callId: 'background-task' }),
+    ]));
+    expect(sentAgentMessagesOfType(session, 'task_started')).toHaveLength(parentStarts);
+    expect(onThinkingChange.mock.calls.at(-1)).toEqual([false]);
+    await client.__emit({ directory: '/tmp', payload: { type: 'question.asked', properties: {
+      id: 'late-retired-question', sessionID: 'ses_child', questions: [{ question: 'Retired?', options: [] }],
+    } } });
+    await flushTranscriptCommitMicrotasks();
+    expect(client.questionReply).toHaveBeenCalledTimes(1);
+    await runtime.reset();
   });
 
   it('streams Task child session deltas and tool calls into a sidechain (during the turn)', async () => {

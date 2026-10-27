@@ -23,12 +23,38 @@ acceptance remain owned by the existing terminal readiness and custody paths.
 Once a provider effect may have occurred, steering failures do not automatically
 replay the prompt through ordinary delivery.
 
+In development source, Claude's main-chain `[Request interrupted by user]` and
+`[Request interrupted by user for tool use]` transcript markers both abort the
+foreground turn through the shared transcript lifecycle classifier. This releases
+a waiting **Send now** prompt through the existing arbiter; the interruption
+itself does not establish provider acceptance of that follow-up.
+
+## Composer busy-steer policy (development)
+
+`decideSessionMessageDelivery` owns the requested action for ordinary composer
+sends. Both configured delivery modes, **Queue in agent** and **Pending until
+ready**, honor **Steer immediately** by durably enqueuing `steer_if_active` when
+the session supports steering. An explicit per-send Pending intent or the
+**Server pending** busy policy keeps `enqueue`. Runtime readiness and payload
+steerability still gate delivery through the existing Pending owner.
+
 ## UI settlement convergence (development)
 
 Provider acceptance carries the exact Pending `localId` to `SessionClient`, which
 requests server settlement. The server transaction commits or updates the
 transcript message and removes that Pending row before publishing the message
 event and the separate Pending count/version event.
+
+In development source, Claude's Agent SDK and legacy remote runtimes share
+`createClaudeRemotePromptSettlementTracker`. They request the documented
+[`--replay-user-messages`](https://code.claude.com/docs/en/cli-reference) acknowledgment and correlate its main-chain user UUID
+with the exact submitted Pending prompt. Local enqueue, SDK iterable consumption,
+and stdin writes do not settle Pending or retire its replay handoff. A submitted
+prompt without acknowledgment has an uncertain delivery outcome; its handoff
+remains available and Pending does not automatically resend it. Inputs rejected
+before submission remain retryable. Matching acknowledgment echoes carry
+provider-only context and are excluded from the visible transcript. Locally
+handled commands retain their explicit local settlement.
 
 In development source, Claude unified terminal reports exact transcript-proven acceptance before stopping
 for missing required session hooks. The hook failure still stops the wrapper and
@@ -76,20 +102,40 @@ materialization; row retirement still waits for that materialization. Existing
 acceptance and committed-sequence fences continue to protect in-flight sends and
 legitimate durable Pending/transcript coexistence.
 
+In development source, acceptance fences bind to the refresh outstanding when
+HTTP success arrives. Waiting for response-body identity validation cannot attach
+that earlier acceptance to a newer read that already proves row removal. The
+shared requested-action entry point reconciles the exact session on row
+`not-found` and `action-conflict`, then preserves the original action error. This
+covers Send now, steering, and resume actions without UI-owned row removal.
+
 To distinguish settlement from display failures, inspect the canonical Pending
 read for the exact session and `localId`. A retained server row points to
 acceptance or settlement; an absent server row with a stale mounted Pending row
 points to client convergence. Host contention can delay either path and is not
 itself evidence of a projection defect.
 
-When an accepted row remains unresolved after its bounded settlement attempt,
-the session runner records a file-only info diagnostic with the session and
-`localId`. This includes terminal transport failures, server no-ops or
+Accepted settlement retries transient server `internal` errors, transaction
+unavailability, and lost socket acknowledgements through the same exact-`localId`
+operation while its session/runtime authority remains current. This retries only
+the idempotent server settlement, never provider input. Existing server-directed
+delays and the acknowledgement-loss retry cadence govern retry waits; reconnect,
+runtime replacement, and close retain their existing cancellation fences.
+
+The session runner records each scheduled retry in its file log. When an accepted
+row remains unresolved after a non-retryable outcome, it records a file-only info
+diagnostic with the session and `localId`. This includes server no-ops or
 not-found responses without exact committed proof, and unexpected resolution
 crashes. The diagnostic is present at the default session file log level and
 does not write to the provider's interactive terminal.
 
 ## Live runner wake-up recovery (development)
+
+Pending counts and versions come from the server's projection. A materialization
+acknowledgement without that projection, including the released-server adapter,
+retains the last server state. It does not decrement counts or increment versions:
+the same claim's post-commit hint may already have arrived during transcript lookup.
+Older snapshots and hints remain unable to replace newer pending state.
 
 The session client owns pending-input wake subscriptions. A transient socket
 disconnect does not end those subscriptions: idle and active-turn consumers must
@@ -124,13 +170,49 @@ provider launch. Those runners start their provider process only after input arr
 Waiting for their stream observer to publish activity would deadlock delivery
 configured as `after_runtime_idle`.
 
-After a local provider stops or a remote provider relaunches, a lost observer can
-publish prelaunch idle when no unresolved provider tasks remain. Unresolved task
-evidence keeps activity unknown; it is not silently cleared. Prelaunch publication
-does not install the new stream observer. Each owned local process attempt also
-uses this prelaunch publication before activating its installed scanner, including
-retries after process failure. Unified-terminal attachment retains its observation
-startup because the attached provider may already be working.
+A confirmed exit of an owned Claude process retires its tracked provider tasks
+through the shared activity ledger and publishes idle immediately. Local, legacy
+remote, Agent SDK, and unified-terminal runners use that same owner. The retired
+tasks are recorded at the default `info` file-log level. Closing an SDK stream or
+transport alone does not prove process exit: its owned child must actually exit,
+and the remote query finishes that cleanup before a replacement query can reuse
+the ledger. Native launchers report the native child's actual exit over their
+private IPC channel; the owner drains that channel before deciding whether the
+provider stopped. A launcher exit code or signal alone cannot establish that fact.
+The standalone binary payload includes the shared native-exit sidecar. Claude's
+launch-mode classifier follows symlinks to the same real path that the launcher
+imports. The launcher also reports when it imports the provider into its own
+process; its actual exit then proves provider exit, including extensionless links
+to JavaScript. Filesystem classification alone never retires provider tasks.
+Agent SDK process capture qualifies direct provider/runtime invocations separately
+from Windows shell shims. A shim's exit alone retains unknown task inventory;
+successful owned tree cleanup can establish stop when it observed the live root.
+Local Windows shell exits use the same uncertainty rule. An abort or operation
+error from a running child does not settle its physical-exit waiter; cleanup and
+task retirement still wait for actual exit.
+Unverified owned cleanup or an unexpected native launcher exit whose provider
+termination cannot be confirmed ends the runner instead of retrying into the same
+ledger; unresolved task identities remain unknown. Native children may keep stream
+pipes open after launcher death, so unverified exit reporting does not wait for
+those pipes to close.
+
+Positive provider-stop evidence remains authoritative through delayed observation
+loss and task records. The existing prelaunch boundary opens observation for the
+next provider attempt; installing an observer alone does not undo a stop. After
+that boundary, hooks without launch provenance can still make observation unknown.
+
+An external terminal host's pane death or clean exit status does not supply the
+private native-exit proof. Its lost observation retains task identities as unknown;
+an expected prompt-input exit remains a normal session end, while unexpected host
+death takes the fatal runtime path.
+
+Losing only observation, such as the transcript feed, retains task identities and
+demotes their activity to unknown. Fresh native evidence can confirm a task again;
+a confirmed process exit settles the retained inventory. Prelaunch publication
+does not install the new stream observer. Each owned local process attempt uses
+this publication before activating its installed scanner, including retries after
+process failure. Unified-terminal attachment retains its observation startup
+because the attached provider may already be working.
 
 Local fast-start retains a deferred session client across the switch to remote.
 That wrapper must forward provider input outcomes and delivery-state reads to the

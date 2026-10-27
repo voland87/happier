@@ -9,7 +9,7 @@ import vm from 'node:vm';
 
 import { describe, expect, it, vi } from 'vitest';
 
-function createRunnerScriptHarness() {
+function createRunnerScriptHarness(controllerChannel = false) {
   const scriptPath = resolve(__dirname, '../../../scripts/terminal_launch_spec_runner.cjs');
   const source = readFileSync(scriptPath, 'utf8').replace(/^#!.*\n/, '');
   const scriptRequire = createRequire(scriptPath);
@@ -22,6 +22,8 @@ function createRunnerScriptHarness() {
     cwd: vi.fn(() => '/tmp/workspace'),
     stdout: { write: vi.fn() },
     stderr: { write: vi.fn() },
+    connected: true,
+    send: vi.fn((_message: unknown, callback: (error: Error | null) => void) => { callback(null); return true; }),
   });
   const module = { exports: {} as Record<string, unknown> };
   const fakeRequire = Object.assign((id: string) => {
@@ -31,8 +33,9 @@ function createRunnerScriptHarness() {
     if (id === 'node:os') return require(id);
     if (id === 'node:path') return require(id);
     if (id === './process_tree.cjs') return scriptRequire(id);
+    if (id === './native_process_exit.cjs') return scriptRequire(id);
     throw new Error(`unexpected require: ${id}`);
-  }, { main: {} });
+  }, { main: controllerChannel ? module : {} });
 
   vm.runInNewContext(source, {
     console,
@@ -46,6 +49,37 @@ function createRunnerScriptHarness() {
 }
 
 describe('terminal_launch_spec_runner.cjs', () => {
+  it.each(['operation-error', 'native-close'] as const)('reports provider exit only after native close, awaiting IPC delivery (%s)', async (outcome) => {
+    const { child, module, fakeProcess } = createRunnerScriptHarness(true);
+    const runLaunchSpec = module.exports.runLaunchSpec as (spec: {
+      command: string; args: string[]; cwd: string; env: NodeJS.ProcessEnv;
+    }, signal: AbortSignal) => Promise<number>;
+    let deliverExit: (() => void) | undefined;
+    fakeProcess.send.mockImplementation((message, callback) => {
+      if (typeof message === 'object' && message !== null && 'type' in message && message.type === 'terminal-native-exited') {
+        deliverExit = () => callback(null);
+      } else callback(null);
+      return true;
+    });
+    const result = runLaunchSpec({ command: 'native', args: [], cwd: tmpdir(), env: {} }, new AbortController().signal);
+    child.emit('spawn');
+    expect(fakeProcess.send).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'terminal-native-exited' }), expect.anything());
+    if (outcome === 'operation-error') {
+      const failed = expect(result).rejects.toThrow('post-spawn operation failed');
+      child.emit('error', new Error('post-spawn operation failed'));
+      await failed;
+      expect(deliverExit).toBeUndefined();
+    } else {
+      let settled = false;
+      void result.then(() => { settled = true; });
+      child.emit('close', 0, null);
+      await vi.waitFor(() => expect(deliverExit).toBeDefined());
+      expect(settled).toBe(false);
+      expect(fakeProcess.send).toHaveBeenCalledWith({ type: 'terminal-native-exited', code: 0, signal: null }, expect.any(Function));
+      deliverExit!();
+      await expect(result).resolves.toBe(0);
+    }
+  });
   it('keeps a genuine native spawn receipt when Node reports a later process operation error', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'happier-terminal-launch-'));
     const spawnResultPath = join(directory, 'native-startup.json');
@@ -183,7 +217,7 @@ describe('terminal_launch_spec_runner.cjs', () => {
       expect.any(Array),
       expect.objectContaining({ windowsVerbatimArguments: true }),
     );
-    child.emit('close', 0, null);
+    child.emit('exit', 0, null);
     await expect(result).resolves.toBe(0);
   });
 

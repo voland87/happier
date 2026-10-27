@@ -117,6 +117,40 @@ export function buildRemoveWindowsScheduledTaskIfPresentPowerShellCommand(params
   ].join('; ');
 }
 
+/**
+ * List the tasks in one Task Scheduler folder as invariant JSON (`["\\Happier\\task", ...]`).
+ *
+ * `schtasks /Query` without `/TN` enumerates every task on the machine, which can exceed the
+ * schtasks timeout on hosts with many tasks; with `/TN <folder>` a missing folder is only a
+ * localized error message. The scheduler API reports a missing folder as FileNotFoundException.
+ */
+export function buildListWindowsScheduledTaskFolderPowerShellCommand(params: Readonly<{
+  taskFolder: string;
+}>): string {
+  const folderPath = `\\${String(params.taskFolder ?? '').split(/[\\/]+/u).filter(Boolean).join('\\')}`;
+  return [
+    '$ErrorActionPreference = "Stop"',
+    '$scheduler = New-Object -ComObject Schedule.Service',
+    '$scheduler.Connect()',
+    `try { $folder = $scheduler.GetFolder(${psQuoted(folderPath)}) } catch [System.IO.FileNotFoundException] { "[]"; exit 0 }`,
+    // TASK_ENUM_HIDDEN=1 so hidden tasks are listed too.
+    'ConvertTo-Json -Compress -InputObject @(@($folder.GetTasks(1)) | ForEach-Object { [string]$_.Path })',
+  ].join('; ');
+}
+
+export function parseWindowsScheduledTaskFolderPowerShellJson(text: string): readonly string[] | null {
+  const trimmed = String(text ?? '').trim();
+  // Missing and empty folders both produce explicit []; blank output cannot establish absence.
+  if (!trimmed) return null;
+  try {
+    const parsed: unknown = JSON.parse(trimmed);
+    if (!Array.isArray(parsed) || !parsed.every((value) => typeof value === 'string')) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
 export type WindowsScheduledTaskStatusSnapshot = Readonly<{
   exists: boolean;
   enabled: boolean;
@@ -220,9 +254,16 @@ export function renderWindowsScheduledTaskWrapperPs1(params: Readonly<{
 
   return [
     '$ErrorActionPreference = "Stop"',
+    // Setup failures (and a missing program) terminate before any redirect is in place;
+    // record them where launch diagnostics look instead of only in the task's exit code.
+    err ? `trap { $_ | Out-File -LiteralPath ${psQuoted(err)} -Append; exit 1 }` : '',
     wd ? `Set-Location -LiteralPath ${psQuoted(wd)}` : '',
     envLines,
+    // Windows PowerShell 5.1 wraps each redirected native stderr line in an ErrorRecord, so
+    // under "Stop" the first warning the program prints would terminate the wrapper (#539).
+    cmd ? '$ErrorActionPreference = "Continue"' : '',
     cmd ? `${cmd}${redirect}` : '',
+    cmd ? 'exit $LASTEXITCODE' : '',
     '',
   ]
     .filter(Boolean)

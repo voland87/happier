@@ -356,7 +356,8 @@ export const UNLISTED_AGENTS: Record<string, string> = {
 };
 
 /**
- * Agents that exist in the unreleased tree and NOT in the released build.
+ * Curated agents that exist in development and NOT in the released build.
+ * Development entries may stay omitted until there is an announcement to make.
  *
  * They are named because pretending they are not being worked on would be its
  * own small dishonesty. They are labelled because a reader who installs today

@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 
 import {
@@ -10,7 +11,84 @@ import {
   startStackDevTargets,
   startStackDevTargetsInBackground,
 } from './supervisor.mjs';
-import { renderMutagenProject } from './mutagen_project.mjs';
+import { loadSiblingMutagenOwner, renderMutagenProject } from './mutagen_project.mjs';
+
+test('predecessor Stack borrows the sibling sync owner without creating or releasing a private project', async (t) => {
+  const sourceDir = fileURLToPath(new URL('../../../../../', import.meta.url));
+  if (!await loadSiblingMutagenOwner(sourceDir)) {
+    t.skip('requires the optional executable sibling 0.3 checkout');
+    return;
+  }
+  const sibling = new URL('../../../../../../0.3/apps/stack/scripts/utils/dev_targets/', import.meta.url);
+  const { resolveDevTargetMutagenRuntime } = await import(new URL('mutagen_runtime.mjs', sibling));
+  const { renderMutagenProject: renderSharedProject, resolveMutagenSessionName } = await import(new URL('mutagen_project.mjs', sibling));
+  const root = await mkdtemp(join(tmpdir(), 'hstack-predecessor-sync-'));
+  const env = { HAPPIER_STACK_STORAGE_DIR: root, PATH: root + ':' + process.env.PATH };
+  const stackBaseDir = join(root, 'predecessor-stack');
+  const target = { name: 'mac-host', platform: 'posix', ssh: 'mac-ssh', repoDir: '/mirror/0.2', cliHomeDir: '/remote/home' };
+  const runtime = resolveDevTargetMutagenRuntime({ stackBaseDir, sourceDir, env });
+  const sessionName = resolveMutagenSessionName(target.name, sourceDir);
+  const project = renderSharedProject({ sourceDir, targets: [target], ownerId: 'dev-target-sync-service' });
+  const calls = [];
+  const options = {
+    stackName: 'predecessor-test', stackBaseDir, sourceDir, targets: [target],
+    targetPlans: [{ target, services: { server: false, expo: true, daemon: false } }],
+    localServerPort: 3000, localExpoPort: 8081, env,
+  };
+  try {
+    await mkdir(join(runtime.projectFile, '..'), { recursive: true });
+    await writeFile(runtime.projectFile, project);
+    // Real process capture must supply the canonical owner's JSON output.
+    for (const executable of ['mutagen', 'ssh']) {
+      const path = join(root, executable);
+      await writeFile(path, '#!' + process.execPath + '\nif(process.argv.some(arg => arg.includes(".Name}}|"))) console.log(' + JSON.stringify(sessionName + '|Watching|false|true|1|0/0|0/0|true|1|0/0|0/0|active|1|ok|0|0|no-watch|no-watch') + '); else console.log(' + JSON.stringify(JSON.stringify([{
+        name: sessionName, paused: false, status: 'watching', successfulCycles: 1,
+        alpha: { connected: true, scanned: true }, beta: { connected: true, scanned: true },
+      }])) + ');\n');
+      await chmod(path, 0o700);
+    }
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const controller = await startStackDevTargets(options, {
+        // Mutagen and SSH are process boundaries; all owner/lifecycle logic is real.
+        runProcess: attempt === 2 ? undefined : async (input) => {
+          calls.push(input);
+          return { code: 0, out: JSON.stringify([{
+            name: sessionName, paused: false, status: 'watching', successfulCycles: 1,
+            alpha: { connected: true, scanned: true }, beta: { connected: true, scanned: true },
+          }]) };
+        },
+        spawnProcess: (input) => { calls.push(input); return { ...input, exitCode: null }; },
+        stopProcess: async (child) => { if (child) child.exitCode = 0; },
+      });
+      await controller.close();
+    }
+    assert.equal(await readFile(runtime.projectFile, 'utf8'), project);
+    await assert.rejects(readFile(join(stackBaseDir, 'mutagen', 'mutagen.yml')), { code: 'ENOENT' });
+    const syncCalls = calls.filter(call => call.command === 'mutagen');
+    assert.ok(syncCalls.some(call => call.args[1] === 'flush' && call.args[2] === sessionName));
+    assert.ok(syncCalls.every(call => call.env.MUTAGEN_DATA_DIRECTORY === runtime.dataDir));
+    assert.equal(syncCalls.some(call => ['start', 'terminate', 'pause', 'reset'].includes(call.args[1])), false);
+    assert.ok(syncCalls.filter(call => call.args[1] === 'monitor').every(call => call.args.includes(sessionName)));
+    const noProcesses = {
+      runProcess: async () => { assert.fail('invalid shared endpoints must fail before process dispatch'); },
+      spawnProcess: () => { assert.fail('invalid shared endpoints must fail before service startup'); },
+    };
+    for (const wrongProject of [
+      renderSharedProject({ sourceDir: '/other/0.2', targets: [target] }),
+      renderSharedProject({ sourceDir, targets: [{ ...target, repoDir: '/other/mirror' }] }),
+      renderSharedProject({ sourceDir, targets: [{ ...target, ssh: 'other-host' }] }),
+    ]) {
+      await writeFile(runtime.projectFile, wrongProject);
+      await assert.rejects(startStackDevTargets(options, noProcesses), /shared synchronization endpoints do not match/);
+      assert.equal(await readFile(runtime.projectFile, 'utf8'), wrongProject);
+    }
+    await rm(runtime.projectFile);
+    await assert.rejects(startStackDevTargets(options, noProcesses), { code: 'ENOENT' });
+    await assert.rejects(readFile(join(stackBaseDir, 'mutagen', 'mutagen.yml')), { code: 'ENOENT' });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
 
 test('background dev target startup never gates the local stack and remains closeable while preparing', async () => {
   let resolveStartup;

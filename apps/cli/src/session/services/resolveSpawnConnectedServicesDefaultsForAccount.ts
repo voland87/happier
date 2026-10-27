@@ -3,6 +3,7 @@ import type { BackendTargetRefV1, ConnectedServiceBindingsV1 } from '@happier-de
 
 import type { Credentials } from '@/persistence';
 import { bootstrapAccountSettingsContext } from '@/settings/accountSettings/bootstrapAccountSettingsContext';
+import { isAccountSettingsContentInvalidError } from '@/settings/accountSettings/accountSettingsRefreshError';
 import {
   agentSupportsSpawnConnectedServicesDefaults,
   resolveSpawnConnectedServicesDefaultDisposition,
@@ -46,6 +47,9 @@ export async function resolveSpawnConnectedServicesDefaultsForAccount(params: Re
       connectedServicesUpdatedAt: Date.now(),
     };
   } catch (error) {
+    if (isAccountSettingsContentInvalidError(error)) {
+      throw new Error('connected_services_default_settings_invalid');
+    }
     if (error instanceof Error && error.message === 'connected_services_default_settings_invalid') {
       throw error;
     }

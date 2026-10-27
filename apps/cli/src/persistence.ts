@@ -20,10 +20,12 @@ import { isServerIdFilesystemSafe, sanitizeServerIdForFilesystem } from '@/serve
 import { isLocalishServerUrl } from '@/server/serverUrlClassification';
 import * as z from 'zod';
 import { decodeBase64, encodeBase64 } from '@/api/encryption';
+import { decodeJwtPayload } from '@/cloud/decodeJwtPayload';
 import { logger } from '@/ui/logger';
 import { resolveMachineIdForServerFromSettings } from '@/daemon/resolveMachineIdForServerFromSettings';
 import { cleanupAtomicWriteTempFiles, cleanupAtomicWriteTempFilesSync, writeJsonAtomicSync } from '@/utils/fs/writeJsonAtomicSync';
 import { reclaimJsonOwnerFileLockSnapshot } from '@/utils/fs/jsonOwnerFileLock';
+import { isPidAliveBySignal } from '@/daemon/processRunState';
 import type { PublicReleaseRingLabel } from '@happier-dev/release-runtime/releaseRings';
 import { createServerUrlComparableKey } from '@happier-dev/protocol';
 import type { MachineReplacementReason } from '@happier-dev/protocol';
@@ -166,6 +168,11 @@ export interface Settings {
   lastTokenSubByServerId?: Record<string, string | undefined>
   machineIdConfirmedByServerByServerId?: Record<string, boolean | undefined>
   daemonAutoStartWhenRunningHappy?: boolean
+  /**
+   * Opt-in: after the daemon starts, restart tracked session runners still pinned to an older
+   * CLI runtime onto the current one (idle runners only). Off unless explicitly `true`.
+   */
+  restartSessionRunnersOnUpdate?: boolean
   chromeMode?: boolean
   /**
    * Per-server, per-account reconnect cursor for `/v2/changes`.
@@ -663,10 +670,20 @@ export type Credentials = {
     type: 'legacy', secret: Uint8Array
   } | {
     type: 'dataKey', publicKey: Uint8Array, machineKey: Uint8Array
-  }
+  } | null
 }
 
 export type CredentialReadScope = Readonly<{ serverId?: string }>;
+
+export function requireEncryptionCredentials(credentials: Credentials): asserts credentials is Credentials & {
+  encryption: NonNullable<Credentials['encryption']>;
+} {
+  if (!credentials.encryption) {
+    throw Object.assign(new Error('This operation requires account encryption key material. Reauthenticate with the account recovery key.'), {
+      code: 'ACCOUNT_ENCRYPTION_KEY_REQUIRED',
+    });
+  }
+}
 
 export async function readCredentials(scope: CredentialReadScope = {}): Promise<Credentials | null> {
   const serverId = scope.serverId === undefined ? configuration.activeServerId : scope.serverId.trim();
@@ -702,6 +719,8 @@ export async function readCredentials(scope: CredentialReadScope = {}): Promise<
           machineKey: decodeBase64(credentials.encryption.machineKey)
         }
       }
+    } else if (credentials.encryption === null) {
+      return { token: credentials.token, encryption: null };
     }
   } catch {
     return null
@@ -730,6 +749,31 @@ export async function writeCredentialsDataKey(credentials: { publicKey: Uint8Arr
     encryption: { publicKey: encodeBase64(credentials.publicKey), machineKey: encodeBase64(credentials.machineKey) },
     token: credentials.token,
   });
+}
+
+export async function writeCredentialsTokenOnly(credentials: { token: string }): Promise<Credentials> {
+  const existing = await readCredentials();
+  // Reauthentication of the same Account must retain keys for historical encrypted records.
+  const accountId = (token: string): string | null => {
+    const subject = decodeJwtPayload(token)?.sub;
+    return typeof subject === 'string' && subject.trim() ? subject.trim() : null;
+  };
+  const incomingAccountId = accountId(credentials.token);
+  if (!incomingAccountId || (existing?.encryption && !accountId(existing.token))) {
+    throw Object.assign(new Error('Cannot establish the account identity for terminal credentials. Request authentication again.'), {
+      code: 'AUTH_CREDENTIAL_INVALID',
+    });
+  }
+  if (existing?.encryption && incomingAccountId && accountId(existing.token) === incomingAccountId) {
+    if (existing.encryption.type === 'legacy') {
+      await writeCredentialsLegacy({ token: credentials.token, secret: existing.encryption.secret });
+    } else {
+      await writeCredentialsDataKey({ token: credentials.token, publicKey: existing.encryption.publicKey, machineKey: existing.encryption.machineKey });
+    }
+    return { ...existing, token: credentials.token };
+  }
+  await writeStoredCredentialFile({ token: credentials.token, encryption: null });
+  return { token: credentials.token, encryption: null };
 }
 
 export async function clearCredentials(): Promise<void> {
@@ -1084,10 +1128,64 @@ export async function clearDaemonStateForTests(options: Readonly<{
 }
 
 /**
- * Acquire an exclusive lock file for the daemon.
- * The lock file proves the daemon is running and prevents multiple instances.
- * Returns the file handle to hold for the daemon's lifetime, or null if locked.
+ * Reclaim a departed publication through the exact-owner file primitive. Stop observers
+ * capture the lock before probing control; a replaced lock or state cancels cleanup.
+ * Live, access-denied and uninspectable PIDs stay protected by the shared signal probe.
  */
+export async function reclaimDeadDaemonPublication(options: Readonly<{
+  stateFile?: string;
+  expectedState?: Readonly<{ pid: number; httpPort: number; startedAt?: number; controlToken?: string }> | null;
+  expectedPid?: number;
+  expectedLockRaw?: string | null;
+}> = {}): Promise<boolean> {
+  const stateFile = options.stateFile ?? configuration.daemonStateFile;
+  const lockFile = `${stateFile}.lock`;
+  const readOptional = (path: string): string | null => {
+    try { return readFileSync(path, 'utf8'); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+      throw error;
+    }
+  };
+  try {
+    const lockRaw = options.expectedLockRaw === undefined ? readOptional(lockFile) : options.expectedLockRaw;
+    const expected = options.expectedState ?? null;
+    const lockPid = lockRaw === null ? null : Number(lockRaw.trim());
+    const pid = expected?.pid ?? lockPid;
+    if (options.expectedPid !== undefined && pid !== options.expectedPid) return false;
+    if (!pid || !Number.isSafeInteger(pid) || pid <= 0 || isPidAliveBySignal(pid)) return false;
+    if (lockRaw !== null && lockPid !== pid) return false;
+    if (readOptional(lockFile) !== lockRaw) return false;
+    const stateRaw = readOptional(stateFile);
+    if (stateRaw !== null) {
+      const parsed = DaemonLocallyPersistedStateSchema.safeParse(JSON.parse(stateRaw));
+      if (!parsed.success || !expected) return false;
+      const current = normalizeDaemonState(parsed.data);
+      if (current.pid !== expected.pid || current.httpPort !== expected.httpPort
+        || current.controlToken !== expected.controlToken
+        || (expected.startedAt !== undefined && current.startedAt !== expected.startedAt)) return false;
+      const reclaimed = await reclaimJsonOwnerFileLockSnapshot(stateFile, stateRaw, async (quarantinePath) => {
+        const raw = await readFile(quarantinePath, 'utf8');
+        if (isPidAliveBySignal(pid) || readOptional(lockFile) !== lockRaw) throw new Error('Daemon owner changed during cleanup');
+        return raw;
+      });
+      if (reclaimed !== 'reclaimed') return false;
+    } else if (expected) {
+      // A daemon may have completed its own publication cleanup already.
+      if (readOptional(lockFile) !== lockRaw) return false;
+    }
+    if (lockRaw === null) return true;
+    return await reclaimJsonOwnerFileLockSnapshot(lockFile, lockRaw, async (quarantinePath) => {
+      const raw = await readFile(quarantinePath, 'utf8');
+      if (isPidAliveBySignal(pid) || readOptional(stateFile) !== null) throw new Error('Daemon publication changed during cleanup');
+      return raw;
+    }) === 'reclaimed';
+  } catch {
+    return false;
+  }
+}
+
+/** Acquire the exclusive lifecycle lock, retaining live or unverified owners. */
 export async function acquireDaemonLock(
   maxAttempts: number = 5,
   delayIncrementMs: number = 200
@@ -1140,13 +1238,7 @@ export async function acquireDaemonLock(
               return null;
             }
 
-            let processExists = false;
-            try {
-              process.kill(pid, 0); // Check if process exists
-              processExists = true;
-            } catch (probeError) {
-              processExists = (probeError as NodeJS.ErrnoException | null)?.code === 'EPERM';
-            }
+            const processExists = isPidAliveBySignal(pid);
             if (processExists) {
               // PID reuse safety: only treat the lock as valid if the PID looks like a happier daemon.
               // Otherwise a recycled PID can wedge daemon startup forever.

@@ -1,5 +1,9 @@
 import * as fs from 'node:fs';
 import { spawnBackgroundSync } from '@happier-dev/cli-common/process';
+import {
+  buildListWindowsScheduledTaskFolderPowerShellCommand,
+  parseWindowsScheduledTaskFolderPowerShellJson,
+} from '@happier-dev/cli-common/service';
 import { basename, join, win32 as win32Path } from 'node:path';
 
 import type { PublicReleaseRingId } from '@happier-dev/release-runtime/releaseRings';
@@ -186,14 +190,6 @@ function parseWindowsWrapperValue(contents: string, key: string): string | null 
   return String(match?.[1] ?? '').trim() || null;
 }
 
-function parseCsvFirstField(line: string): string | null {
-  const trimmed = String(line ?? '').trim();
-  if (!trimmed) return null;
-  const match = /^"((?:[^"]|"")*)"/u.exec(trimmed);
-  if (!match) return null;
-  return match[1]?.replaceAll('""', '"').trim() || null;
-}
-
 function normalizeWindowsScheduledTaskName(taskName: string): string | null {
   const normalized = String(taskName ?? '')
     .trim()
@@ -234,12 +230,15 @@ function parseWindowsScheduledTaskWrapperPathFromTaskToRun(taskToRunText: string
   return bareMatch?.[1]?.trim() || null;
 }
 
+function readWindowsSchtasksTimeoutMs(): number {
+  return readPositiveIntEnv('HAPPIER_WINDOWS_SCHTASKS_TIMEOUT_MS', 15_000);
+}
+
 function runWindowsSchtasksCommand(args: readonly string[]): ReturnType<typeof spawnBackgroundSync> {
-  const timeoutMs = readPositiveIntEnv('HAPPIER_WINDOWS_SCHTASKS_TIMEOUT_MS', 15_000);
   return spawnBackgroundSync('schtasks', args, {
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
-    timeout: timeoutMs,
+    timeout: readWindowsSchtasksTimeoutMs(),
   });
 }
 
@@ -279,16 +278,26 @@ function deriveWindowsServiceHomeDirFromWrapperPath(wrapperPath: string | null):
 }
 
 function listWindowsScheduledTaskNames(): readonly string[] {
-  const result = runWindowsSchtasksCommand(['/Query', '/FO', 'CSV', '/NH']);
+  // Only the Happier folder: enumerating every task on the machine can outlast the timeout.
+  const result = spawnBackgroundSync('powershell.exe', [
+    '-NoProfile',
+    '-NonInteractive',
+    '-ExecutionPolicy',
+    'Bypass',
+    '-Command',
+    buildListWindowsScheduledTaskFolderPowerShellCommand({ taskFolder: '\\Happier\\' }),
+  ], {
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+    timeout: readWindowsSchtasksTimeoutMs(),
+  });
   if (result.error) throw result.error;
-  if (result.status !== 0) {
-    throw new Error(`Could not enumerate Happier scheduled tasks: ${String(result.stderr ?? '').trim() || `schtasks exited with status ${result.status}`}`);
+  const taskPaths = result.status === 0 ? parseWindowsScheduledTaskFolderPowerShellJson(String(result.stdout ?? '')) : null;
+  if (!taskPaths) {
+    throw new Error(`Could not enumerate Happier scheduled tasks: ${String(result.stderr ?? '').trim() || `powershell exited with status ${result.status}`}`);
   }
 
-  return String(result.stdout ?? '')
-    .split(/\r?\n/u)
-    .map((line) => parseCsvFirstField(line))
-    .filter((taskName): taskName is string => Boolean(taskName))
+  return taskPaths
     .map((taskName) => normalizeWindowsScheduledTaskName(taskName))
     .filter((taskName): taskName is string => Boolean(taskName))
     .filter((taskName) => taskName.toLowerCase().startsWith('happier\\happier-daemon'));

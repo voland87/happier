@@ -1,3 +1,4 @@
+import { normalizeSessionMessageContentForStorage } from "@/app/session/normalizeSessionMessageContentForStorage";
 import { markSessionParticipantsChanged, type SessionParticipantCursor } from "@/app/session/changeTracking/markSessionParticipantsChanged";
 import { db } from "@/storage/db";
 import { inTx, type Tx } from "@/storage/inTx";
@@ -188,7 +189,7 @@ export function resolveReadyProjectionEventType(params: Readonly<{
         : undefined;
 }
 
-function selectSessionActivityBadgeInputs() {
+export function selectSessionActivityBadgeInputs() {
     return {
         seq: true,
         // Not a badge input: `resolveSessionUnreadSinceWrite` decides the edge against the *stored*
@@ -988,18 +989,21 @@ export async function createSessionMessage(
         return { ok: false, error: "invalid-params" };
     }
 
-    const content = "content" in params ? params.content : ciphertext ? ({ t: "encrypted", c: ciphertext } satisfies PrismaJson.SessionMessageContent) : null;
+    const rawContent = "content" in params ? params.content : ciphertext ? ({ t: "encrypted", c: ciphertext } satisfies PrismaJson.SessionMessageContent) : null;
 
-    if (!sessionId || !actorUserId || !content) {
+    if (!sessionId || !actorUserId || !rawContent) {
         return { ok: false, error: "invalid-params" };
     }
 
-    if (content.t === "encrypted" && (!content.c || typeof content.c !== "string")) {
+    if (rawContent.t === "encrypted" && (!rawContent.c || typeof rawContent.c !== "string")) {
         return { ok: false, error: "invalid-params" };
     }
-    if (content.t === "plain" && !("v" in content)) {
+    if (rawContent.t === "plain" && !("v" in rawContent)) {
         return { ok: false, error: "invalid-params" };
     }
+
+    const content = normalizeSessionMessageContentForStorage(rawContent);
+    if (!content) return { ok: false, error: "invalid-params" };
 
     const resolveRoleForStorageMode = (storageMode: "e2ee" | "plain") =>
         resolveSessionMessageRole({

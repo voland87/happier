@@ -1,3 +1,6 @@
+import { RPC_ERROR_CODES } from '@happier-dev/protocol/rpc';
+import { createRpcCallError } from '@happier-dev/protocol/rpcErrors';
+
 export type RpcRequestDisposition = 'notSent' | 'outcomeUnknown';
 
 const RPC_REQUEST_DISPOSITION = Symbol('rpcRequestDisposition');
@@ -27,4 +30,12 @@ export function readRpcRequestDisposition(error: unknown): RpcRequestDisposition
   if ((typeof error !== 'object' || error === null) && typeof error !== 'function') return null;
   const disposition = (error as { [RPC_REQUEST_DISPOSITION]?: unknown })[RPC_REQUEST_DISPOSITION];
   return disposition === 'notSent' || disposition === 'outcomeUnknown' ? disposition : null;
+}
+
+/** Classify an actual relay refusal, never an error from decoding its response. */
+export function createRpcAcknowledgementError(input: { error: string; errorCode?: string }): unknown {
+  const error = createRpcCallError(input);
+  return Object.values(RPC_ERROR_CODES).some(code => code === input.errorCode)
+    ? markRpcRequestDisposition(error, 'notSent')
+    : error;
 }

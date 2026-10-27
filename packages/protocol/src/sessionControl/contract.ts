@@ -13,6 +13,7 @@ import { ActionUiPlacementSchema } from '../actions/actionUiPlacements.js';
 import { SubAgentRunResultV2Schema } from '../tools/v2/index.js';
 import { StopSessionIncompleteReasonSchema } from '../sessionStop.js';
 import { AccountEncryptionModeSchema } from '../features/payload/capabilities/encryptionCapabilities.js';
+import { SESSION_PERMISSION_MODES } from '../sessionMetadata/sessionPermissionModes.js';
 import {
   PrimaryTurnStatusV1Schema,
   SessionRuntimeIssueV1Schema,
@@ -109,6 +110,9 @@ export {
   SessionUsageLimitRecoveryResumePromptModeV1Schema,
   SessionUsageLimitRecoveryV1Schema,
   resolveSessionUsageLimitRecoveryResumePromptModeV1,
+  buildUsageLimitIssueFingerprint,
+  isSessionUsageLimitRecoveryForIssue,
+  readSessionUsageLimitRecoveryForIssue,
   type SessionUsageLimitRecoveryAuthSelectionV1,
   type SessionUsageLimitRecoveryResumePromptModeV1,
   type SessionUsageLimitRecoveryV1,
@@ -182,7 +186,7 @@ export type SessionControlEnvelopeBase = z.infer<typeof SessionControlEnvelopeBa
 export const AuthStatusResultSchema = z.object({
   authenticated: z.literal(true),
   encryption: z.object({
-    type: z.enum(['legacy', 'dataKey']),
+    type: z.enum(['legacy', 'dataKey', 'tokenOnly']),
   }).passthrough(),
   machineRegistered: z.boolean(),
   machineId: z.string().min(1).optional(),
@@ -205,6 +209,8 @@ export const SessionSummarySchema = z.object({
   title: z.string().min(1).optional(),
   path: z.string().optional(),
   host: z.string().optional(),
+  machineId: z.string().trim().min(1).optional(),
+  permissionMode: z.enum(SESSION_PERMISSION_MODES).exclude(['acceptEdits', 'bypassPermissions']).optional(),
   share: z.object({
     accessLevel: z.string().min(1),
     canApprovePermissions: z.boolean(),
@@ -213,7 +219,7 @@ export const SessionSummarySchema = z.object({
   systemPurpose: z.string().nullable().optional(),
   encryptionMode: AccountEncryptionModeSchema.optional(),
   encryption: z.object({
-    type: z.enum(['legacy', 'dataKey']),
+    type: z.enum(['legacy', 'dataKey', 'plain']),
   }).passthrough(),
   latestTurnId: z.string().min(1).nullable().optional(),
   latestTurnStatus: PrimaryTurnStatusV1Schema.nullable().optional(),

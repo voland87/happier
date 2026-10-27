@@ -298,7 +298,7 @@ describe('MessageView (fork button)', () => {
     const screen = await renderScreen(<MessageView message={message} metadata={null} sessionId="s1" />);
 
     const actionContainer = getActionContainer(screen, 'm2');
-    const rowContainer = findAncestor(actionContainer, (node: any) => typeof node.props?.onHoverIn === 'function');
+    const rowContainer = findAncestor(actionContainer, (node: any) => typeof node.props?.onPointerEnter === 'function' && typeof node.props?.onPointerLeave === 'function');
     expect(rowContainer).toBeTruthy();
     expect(rowContainer?.props.pointerEvents).toBeUndefined();
   });

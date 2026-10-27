@@ -1,16 +1,14 @@
 import { createSessionScopedSocket } from '@/api/session/sockets';
 import { randomUUID } from 'node:crypto';
 import { SOCKET_RPC_EVENTS } from '@happier-dev/protocol/socketRpc';
-import { createRpcCallError } from '@happier-dev/protocol/rpcErrors';
-import { decodeBase64, decrypt, encodeBase64, encrypt } from '@/api/encryption';
-import type { SessionEncryptionContext, SessionStoredContentEncryptionMode } from '@/session/transport/encryption/sessionEncryptionContext';
+import { encryptSessionPayload, decryptSessionPayload, type SessionEncryptionContext, type SessionStoredContentEncryptionMode } from '@/session/transport/encryption/sessionEncryptionContext';
 import { waitForSocketConnect } from '@/session/transport/socket/waitForSocketConnect';
 import { resolveSessionControlSocketConnectTimeoutMs } from '@/session/transport/shared/sessionTimeouts';
 import {
   createSocketRpcDisconnectGuard,
   SocketRpcDisconnectBeforeAcknowledgementError,
 } from './socketRpcDisconnectGuard';
-import { markRpcRequestDisposition } from './rpcRequestDisposition';
+import { createRpcAcknowledgementError, markRpcRequestDisposition, readRpcRequestDisposition } from './rpcRequestDisposition';
 
 export async function callSessionRpc(params: Readonly<{
   token: string;
@@ -63,7 +61,7 @@ export async function callSessionRpc(params: Readonly<{
     const mode: SessionStoredContentEncryptionMode = params.mode ?? 'e2ee';
     const rpcParams = mode === 'plain'
       ? params.request
-      : encodeBase64(encrypt(params.ctx.encryptionKey, params.ctx.encryptionVariant, params.request), 'base64');
+      : encryptSessionPayload({ ctx: params.ctx, payload: params.request });
 
     const responsePromise = new Promise<{ ok: boolean; result?: unknown; error?: string; errorCode?: string }>((resolve, reject) => {
       if (timeoutMs !== null) {
@@ -90,7 +88,7 @@ export async function callSessionRpc(params: Readonly<{
     const response = await Promise.race([responsePromise, disconnectGuard.disconnected]);
 
     if (!response.ok) {
-      throw createRpcCallError({
+      throw createRpcAcknowledgementError({
         error: response.error || 'RPC call failed',
         errorCode: response.errorCode,
       });
@@ -102,9 +100,11 @@ export async function callSessionRpc(params: Readonly<{
 
     const encryptedResult = typeof response.result === 'string' ? response.result.trim() : '';
     if (!encryptedResult) return null;
-    return decrypt(params.ctx.encryptionKey, params.ctx.encryptionVariant, decodeBase64(encryptedResult, 'base64'));
+    return decryptSessionPayload({ ctx: params.ctx, ciphertextBase64: encryptedResult });
   } catch (error) {
-    throw markRpcRequestDisposition(error, requestEmitted ? 'outcomeUnknown' : 'notSent');
+    throw readRpcRequestDisposition(error) === null
+      ? markRpcRequestDisposition(error, requestEmitted ? 'outcomeUnknown' : 'notSent')
+      : error;
   } finally {
     if (responseTimer) clearTimeout(responseTimer);
     disconnectGuard.dispose();

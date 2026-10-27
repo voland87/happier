@@ -114,7 +114,7 @@ export function registerExecutionRunHandlers(
     onExecutionRunPublicStateUpdated?: (run: ExecutionRunPublicState) => void;
     resolveAccountSettings?: () => Promise<Record<string, unknown> | null> | Record<string, unknown> | null;
   }>,
-): void {
+): Readonly<{ dispose: () => Promise<void> }> {
   const resolveCwd = ctx.resolveCwd ?? (() => ctx.cwd);
   const policy = resolveExecutionRunPolicy({
     defaults: {
@@ -157,6 +157,7 @@ export function registerExecutionRunHandlers(
         credentials: await readCredentials().catch(() => null),
         cwd: resolveCwd(),
         sessionId: params.sessionId,
+        ...(params.previousMaterializedRoot ? { previousMaterializedRoot: params.previousMaterializedRoot } : {}),
       }),
   });
 
@@ -643,4 +644,6 @@ export function registerExecutionRunHandlers(
       ...(typeof acted.result !== 'undefined' ? { result: acted.result } : {}),
     };
   });
+
+  return { dispose: () => manager.dispose() };
 }

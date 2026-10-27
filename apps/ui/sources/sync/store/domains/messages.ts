@@ -13,7 +13,7 @@ import {
 import { isToolPotentiallyMutableForScm } from '@/sync/domains/tools/toolMutationClassification';
 import { syncPerformanceTelemetry } from '../../runtime/syncPerformanceTelemetry';
 import { nowServerMs } from '../../runtime/time';
-import { SESSION_RUNTIME_STATUS_STALE_SIGNAL_MS } from '@/sync/domains/session/attention/deriveSessionRuntimePresentationState';
+import { readSessionRuntimeLostSinceMs } from '@/sync/domains/session/attention/deriveSessionRuntimePresentationState';
 import { buildSessionListRenderableFromSession, type SessionListRenderableSession } from '@/sync/domains/session/listing/sessionListRenderable';
 import { shouldIncludeSubagentSourceMessage } from '@/sync/domains/session/subagents/subagentSourceMessageDetection';
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
@@ -225,8 +225,8 @@ function coerceSessionMessages(input: unknown): SessionMessages {
             : undefined;
 
     const latestThinkingMessageId: string | null =
-        typeof raw?.latestThinkingMessageId === 'string'
-            ? (raw.latestThinkingMessageId as string)
+        typeof raw?.latestThinkingMessageId === 'string' || raw?.latestThinkingMessageId === null
+            ? raw.latestThinkingMessageId
             : findLatestThinkingMessageId({ idsOldestFirst: messageIdsOldestFirst, messagesById });
 
     const latestThinkingMessageActivityAtMs: number | null =
@@ -368,34 +368,23 @@ function buildPinRouteHydrationFacts(messages: ReadonlyArray<Message>): readonly
     return facts;
 }
 
-/**
- * Instant the session's CLI process was last observed attached, when the client is confident that
- * process is gone. `presence` is exactly `active ? 'online' : activeAt`, so a detached session
- * already carries its own last-seen instant; we additionally require the detachment to have
- * outlived the runtime-signal staleness bound so a reconnect blip is never read as death.
- *
- * This is a death fact, not an inactivity verdict: a session that is still attached never produces
- * one, however long it has been quiet.
- */
 function readOwnerProcessGoneSinceMs(session: Session | undefined): number | null {
-    if (!session || session.active === true) return null;
-    const activeAt = typeof session.activeAt === 'number' && Number.isFinite(session.activeAt)
-        ? Math.trunc(session.activeAt)
-        : null;
-    if (activeAt === null || activeAt <= 0) return null;
-    return nowServerMs() - activeAt > SESSION_RUNTIME_STATUS_STALE_SIGNAL_MS ? activeAt : null;
+    return session ? readSessionRuntimeLostSinceMs(session, nowServerMs()) : null;
 }
 
 export function applyAgentStateUpdateToSessionMessages(params: Readonly<{
     existing: SessionMessages;
     agentState: Session['agentState'] | null;
+    mainHistoryStartLoaded?: boolean;
 }>): {
     sessionMessages: SessionMessages;
     sessionLatestUsage?: Session['latestUsage'];
     sessionTodos?: Session['todos'];
 } {
     const existing = coerceSessionMessages(params.existing);
-    const reducerResult = reducer(existing.reducerState, [], params.agentState);
+    const reducerResult = reducer(existing.reducerState, [], params.agentState, {
+        mainHistoryStartLoaded: params.mainHistoryStartLoaded,
+    });
     const processedMessages = reducerResult.messages;
 
     const messagesById = existing.messagesById;
@@ -553,11 +542,25 @@ export function createMessagesDomain<S extends MessagesDomain & MessagesDomainDe
     return {
         sessionMessages: {},
         sessionMessagesHistoryStartLoaded: {},
-        markSessionMessagesHistoryStartLoaded: (sessionId) => set((state) => {
-            const previous = state.sessionMessagesHistoryStartLoaded ?? {};
-            if (previous[sessionId] === true) return state;
-            return { ...state, sessionMessagesHistoryStartLoaded: { ...previous, [sessionId]: true as const } };
-        }),
+        markSessionMessagesHistoryStartLoaded: (sessionId) => {
+            let didChange = false;
+            set((state) => {
+                const previous = state.sessionMessagesHistoryStartLoaded ?? {};
+                if (previous[sessionId] === true) return state;
+                didChange = true;
+                const existing = state.sessionMessages[sessionId];
+                return {
+                    ...state,
+                    sessionMessagesHistoryStartLoaded: { ...previous, [sessionId]: true as const },
+                    // Coverage changed the permission projection even if AgentState did not.
+                    sessionMessages: existing ? {
+                        ...state.sessionMessages,
+                        [sessionId]: { ...existing, lastAppliedAgentStateVersion: null },
+                    } : state.sessionMessages,
+                };
+            });
+            if (didChange && get().sessions[sessionId]?.agentState) get().applyMessages(sessionId, []);
+        },
         isMutableToolCall: (sessionId: string, callId: string) => {
             const rawSessionMessages = get().sessionMessages[sessionId];
             if (!rawSessionMessages) {
@@ -637,7 +640,10 @@ export function createMessagesDomain<S extends MessagesDomain & MessagesDomainDe
                         existingSession.reducerState,
                         normalizedMessages,
                         shouldApplyAgentState ? agentState : null,
-                        { ownerProcessGoneSinceMs: readOwnerProcessGoneSinceMs(session) },
+                        {
+                            ownerProcessGoneSinceMs: readOwnerProcessGoneSinceMs(session),
+                            mainHistoryStartLoaded: state.sessionMessagesHistoryStartLoaded?.[sessionId] === true,
+                        },
                     ),
                 );
                 const processedMessages = reducerResult.messages;
@@ -1102,7 +1108,9 @@ export function createMessagesDomain<S extends MessagesDomain & MessagesDomainDe
 
                 if (agentState) {
                     // Process AgentState through reducer to get initial permission messages
-                    const reducerResult = reducer(reducerState, [], agentState);
+                    const reducerResult = reducer(reducerState, [], agentState, {
+                        mainHistoryStartLoaded: state.sessionMessagesHistoryStartLoaded?.[sessionId] === true,
+                    });
                     const processedMessages = reducerResult.messages;
 
                     for (const message of processedMessages) {

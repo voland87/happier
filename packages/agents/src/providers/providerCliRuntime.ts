@@ -126,7 +126,7 @@ function bashCurlPipe(url: string): ProviderCliInstallCommand {
 
 function powershellInstall(command: string): ProviderCliInstallCommand {
   return {
-    cmd: 'powershell',
+    cmd: 'powershell.exe',
     args: ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', command],
   };
 }
@@ -219,13 +219,13 @@ export const PROVIDER_CLI_RUNTIME_SPECS: Readonly<Record<AgentId, ProviderCliRun
           },
         ],
       },
-      // OpenAI Codex rust-v0.147.0's checksum-pinned x64 Windows package
-      // expands to 370,442,135 bytes, including one 298,668,336-byte
-      // executable. A 384 MiB ceiling leaves bounded headroom while retaining
-      // generic archive, entry-count, path, and compression-ratio protections.
+      // Digest-verified rust-v0.163.0 Windows x64 expands to 465,689,987 bytes;
+      // its largest file is 341,270,320 bytes. Reuse the 0.3 Agent manifest's
+      // 512 MiB total budget while retaining the existing per-file budget and
+      // shared archive, entry-count, path and compression-ratio protections.
       archiveExtractionLimits: {
         maxFileBytes: 384 * 1024 * 1024,
-        maxExpandedBytes: 384 * 1024 * 1024,
+        maxExpandedBytes: 512 * 1024 * 1024,
       },
     },
     manualInstallKind: 'command',
@@ -249,6 +249,7 @@ export const PROVIDER_CLI_RUNTIME_SPECS: Readonly<Record<AgentId, ProviderCliRun
     alternativeBinaryNames: ['opencode2'],
     knownCommandCandidates: [
       { kind: 'homeBinDir', relativeDir: '.opencode/bin' },
+      { kind: 'homeBinDir', relativeDir: '.local/bin' },
       { kind: 'homePath', relativePath: 'AppData/Roaming/npm/opencode.cmd' },
     ],
     sourcePreferenceDefault: 'system-first',
@@ -447,7 +448,7 @@ export const PROVIDER_CLI_RUNTIME_SPECS: Readonly<Record<AgentId, ProviderCliRun
     manualInstallRecipes: {
       darwin: [bashCurlPipe('https://cursor.com/install')],
       linux: [bashCurlPipe('https://cursor.com/install')],
-      win32: [powershellInstall('iwr https://cursor.com/install.ps1 -useb | iex')],
+      win32: [powershellInstall("irm 'https://cursor.com/install?win32=true' | iex")],
     },
     acceptsJavaScriptFileOverride: false,
     installGuideUrl: 'https://cursor.com/docs/cli/installation',
@@ -538,6 +539,23 @@ export const PROVIDER_CLI_RUNTIME_SPECS: Readonly<Record<AgentId, ProviderCliRun
     acceptsJavaScriptFileOverride: false,
     installGuideUrl: 'https://docs.factory.ai/cli/getting-started/quickstart',
     docsUrl: 'https://docs.factory.ai/ide-integrations',
+  },
+  codebuddy: {
+    id: 'codebuddy',
+    title: 'CodeBuddy Code CLI',
+    binaryName: 'codebuddy',
+    knownCommandCandidates: null,
+    sourcePreferenceDefault: 'system-first',
+    managedInstall: {
+      kind: 'managed_package',
+      packageName: '@tencent-ai/codebuddy-code',
+      binaryName: 'codebuddy',
+    },
+    manualInstallKind: 'command',
+    manualInstallRecipes: null,
+    acceptsJavaScriptFileOverride: false,
+    installGuideUrl: 'https://www.codebuddy.ai/docs/cli/quickstart',
+    docsUrl: 'https://www.codebuddy.ai/docs/cli/acp',
   },
 } as const;
 

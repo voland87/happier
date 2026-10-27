@@ -27,6 +27,65 @@ vi.mock('node:child_process', async (importOriginal) => {
 });
 
 describe('createCodexAppServerClient', () => {
+    it('serializes native initialization for shared SQLite state without serializing ongoing clients', async () => {
+        await withTempDir('happier-codex-app-server-native-startup-', async (root) => {
+            await mkdir(join(root, 'sqlite'), { recursive: true });
+            const fakeAppServer = await writeFakeCodexAppServerScript({
+                dir: root,
+                importLines: ['import { mkdir, rm } from "node:fs/promises";', 'import { join } from "node:path";'],
+                setupLines: [
+                    'const nativeStartup = join(process.env.CODEX_SQLITE_HOME, "native-startup");',
+                ],
+                bodyLines: [
+                    'for await (const line of rl) {',
+                    '  if (!line.trim()) continue;',
+                    '  const msg = JSON.parse(line);',
+                    '  if (msg.method === "initialize") {',
+                    '    try { await mkdir(nativeStartup); } catch (error) {',
+                    '      process.stdout.write(JSON.stringify({ id: msg.id, error: { code: -32000, message: error.code } }) + "\\n");',
+                    '      continue;',
+                    '    }',
+                    '    await new Promise(resolve => setTimeout(resolve, 100));',
+                    '    await rm(nativeStartup, { recursive: true });',
+                    '    process.stdout.write(JSON.stringify({ id: msg.id, result: {} }) + "\\n");',
+                    '  } else if (msg.method === "test/ping") {',
+                    '    process.stdout.write(JSON.stringify({ id: msg.id, result: { pong: true } }) + "\\n");',
+                    '  }',
+                    '}',
+                ],
+            });
+            const clients: Awaited<ReturnType<typeof createCodexAppServerClient>>[] = [];
+            const spawn = vi.mocked(childProcess.spawn);
+            const originalSpawn = spawn.getMockImplementation();
+            if (!originalSpawn) throw new Error('Expected the OS spawn observer');
+            const stderr: string[] = [];
+            spawn.mockImplementation((...args) => {
+                const child = originalSpawn(...args);
+                child.stderr?.on('data', chunk => { stderr.push(String(chunk)); });
+                return child;
+            });
+            try {
+                const outcomes = await Promise.allSettled(['account-a', 'account-b'].map(async (home) => {
+                    const client = await createCodexAppServerClient({
+                        initializeRequestOptions: { timeoutMs: 2_000 },
+                        processEnv: createCodexAppServerProcessEnv(fakeAppServer, {
+                            CODEX_HOME: join(root, home), CODEX_SQLITE_HOME: join(root, 'sqlite'),
+                        }),
+                    });
+                    clients.push(client);
+                    return client;
+                }));
+                expect({ failures: outcomes.flatMap(outcome => outcome.status === 'rejected' ? [outcome.reason] : []), stderr })
+                    .toEqual({ failures: [], stderr: [] });
+                await expect(Promise.all(clients.map(client => client.request('test/ping'))))
+                    .resolves.toEqual([{ pong: true }, { pong: true }]);
+            } finally {
+                await Promise.all(clients.map(client => client.dispose()));
+                spawn.mockImplementation(originalSpawn);
+            }
+        });
+    });
+
     it('uses the Codex daemon proxy transport without starting another app-server', async () => {
         await withTempDir('happier-codex-app-server-client-daemon-proxy-', async (root) => {
             const fakeAppServer = await writeFakeCodexAppServerScript({
@@ -68,7 +127,7 @@ describe('createCodexAppServerClient', () => {
     });
 
     it('speaks JSON-RPC over the shared app-server Unix WebSocket', async () => {
-        await withTempDir('happier-codex-app-server-client-websocket-', async (root) => {
+        await withTempDir('codex-ws-', async (root) => {
             const socketPath = process.platform === 'win32'
                 ? `\\\\.\\pipe\\happier-codex-test-${process.pid}-${Date.now()}`
                 : join(root, 'app-server.sock');
@@ -113,7 +172,7 @@ describe('createCodexAppServerClient', () => {
                 });
                 await new Promise<void>((resolve) => httpServer.close(() => resolve()));
             }
-        });
+        }, process.platform === 'win32' ? undefined : '/tmp');
     });
 
     it('settles pending requests and reports stdin failure without an uncaught stream error', async () => {

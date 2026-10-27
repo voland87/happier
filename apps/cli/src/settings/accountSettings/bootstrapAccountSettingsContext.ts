@@ -33,7 +33,7 @@ import {
   resetActiveAccountSettingsSnapshotForTests,
 } from './activeAccountSettingsSnapshot';
 import { resolveAccountSettingsHttpBaseUrl } from './resolveAccountSettingsHttpBaseUrl';
-import { AccountSettingsStaleError } from './accountSettingsRefreshError';
+import { AccountSettingsStaleError, AccountSettingsContentInvalidError, isAccountSettingsContentInvalidError } from './accountSettingsRefreshError';
 import {
   assertAccountEncryptionModeAllowedByEffectiveClientRequirement,
   isClientE2eeRequiredError,
@@ -55,6 +55,15 @@ export type AccountSettingsContext = Readonly<{
   settingsSecretsReadKeys: readonly Uint8Array[];
   whenRefreshed: Promise<AccountSettingsContext> | null;
 }>;
+
+// Schema rejection is a data refusal, independent of network/cache fallback policy.
+function parseBootstrapAccountSettings(raw: unknown): AccountSettings {
+  try {
+    return accountSettingsParse(raw);
+  } catch (error) {
+    throw new AccountSettingsContentInvalidError(error);
+  }
+}
 
 function migrateAccountSettingsForCodexAppServerDefault(settings: AccountSettings): AccountSettings {
   const schemaVersion = settings.schemaVersion;
@@ -111,7 +120,11 @@ async function requestAccountSettingsV2(credentials: Credentials): Promise<Accou
   if (response.status < 200 || response.status >= 300) {
     throw new AccountSettingsV2RequestError(response.status);
   }
-  return AccountSettingsV2GetResponseSchema.parse(response.data);
+  try {
+    return AccountSettingsV2GetResponseSchema.parse(response.data);
+  } catch (error) {
+    throw new AccountSettingsContentInvalidError(error);
+  }
 }
 
 function resolveLiveApplyDisposition(params: Readonly<{
@@ -434,14 +447,14 @@ export async function bootstrapAccountSettingsContext(params: Readonly<{
   const parseFromContent = async (content: AccountSettingsContentEnvelope | null): Promise<AccountSettings> => {
     if (!content) return migrateAccountSettingsForCodexAppServerDefault(accountSettingsParse({}));
     if (content.t === 'plain') {
-      const settings = migrateAccountSettingsForCodexAppServerDefault(accountSettingsParse(content.v));
+      const settings = migrateAccountSettingsForCodexAppServerDefault(parseBootstrapAccountSettings(content.v));
       assertAccountEncryptionModeAllowedByEffectiveClientRequirement('plain', settings);
       return settings;
     }
     const ciphertext = typeof content.c === 'string' ? content.c : '';
     if (!ciphertext) return migrateAccountSettingsForCodexAppServerDefault(accountSettingsParse({}));
     const decrypted = await deps.decryptCiphertext({ credentials: params.credentials, ciphertext });
-    return migrateAccountSettingsForCodexAppServerDefault(accountSettingsParse(decrypted ?? {}));
+    return migrateAccountSettingsForCodexAppServerDefault(parseBootstrapAccountSettings(decrypted ?? {}));
   };
 
   const cacheContent: AccountSettingsContentEnvelope | null =
@@ -518,7 +531,7 @@ export async function bootstrapAccountSettingsContext(params: Readonly<{
 
     // Fire refresh immediately; expose promise for long-running processes.
     const whenRefreshed = fetchAndPersist().catch(async (err) => {
-      if (isClientE2eeRequiredError(err)) throw err;
+      if (isClientE2eeRequiredError(err) || isAccountSettingsContentInvalidError(err)) throw err;
       if (minSettingsVersion !== null) {
         throw err;
       }
@@ -536,7 +549,7 @@ export async function bootstrapAccountSettingsContext(params: Readonly<{
   try {
     return await fetchAndPersist();
   } catch (err) {
-    if (isClientE2eeRequiredError(err)) throw err;
+    if (isClientE2eeRequiredError(err) || isAccountSettingsContentInvalidError(err)) throw err;
     if (minSettingsVersion !== null) {
       throw err;
     }

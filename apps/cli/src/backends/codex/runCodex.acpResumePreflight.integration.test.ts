@@ -279,6 +279,7 @@ vi.mock('@/ui/logger', () => ({
     debug: vi.fn(),
     debugLargeJson: vi.fn(),
     infoDeveloper: vi.fn(),
+    infoFile: vi.fn(),
     warn: vi.fn(),
     getLogPath: vi.fn(() => '/tmp/happier.log'),
     logFilePath: '/tmp/happier.log',
@@ -1960,13 +1961,41 @@ describe('runCodex CodexACP resume behavior', () => {
     expect(outcome).toMatchObject({ ok: true });
   });
 
-  it('cancels the app-server runtime when the session abort RPC is invoked mid-turn', async () => {
+  it.each([false, true])('cancels the app-server runtime and controller on Stop (journal admission fails: %s)', async (admissionFails) => {
     resolveRunnerMcpServersSpy.mockImplementationOnce(async () => ({
       happierMcpServer: { url: 'http://127.0.0.1:0', stop: vi.fn() },
       mcpServers: {},
     }));
-    sessionInputConsumerWaitForNextInputImpl = async () => {
-      throw new Error('wait-called');
+    const actualFactory = await vi.importActual<typeof import('./utils/createCodexPermissionHandler')>('./utils/createCodexPermissionHandler');
+    let permissionHandler: ReturnType<typeof createCodexPermissionHandler> | undefined;
+    let state: import('@/api/types').AgentState = { requests: {}, completedRequests: {} };
+    vi.mocked(createCodexPermissionHandler).mockImplementationOnce((params) => {
+      Object.assign(params.session, {
+        getAgentStateSnapshot: () => state,
+        updateAgentState: async (updater: (current: import('@/api/types').AgentState) => import('@/api/types').AgentState) => { state = updater(state); },
+        updateAgentStateRequestSettlement: async (updater: (current: import('@/api/types').AgentState) => import('@/api/types').AgentState) => {
+          if (admissionFails) throw Object.assign(new Error('journal disk full'), { code: 'ENOSPC' });
+          state = updater(state);
+        },
+      });
+      permissionHandler = actualFactory.createCodexPermissionHandler(params);
+      return permissionHandler;
+    });
+    let stoppedSignal: AbortSignal | undefined;
+    let stopCompleted = false;
+    sessionInputConsumerWaitForNextInputImpl = async ({ abortSignal }: { abortSignal: AbortSignal }) => {
+      stoppedSignal = abortSignal;
+      if (!permissionHandler) throw new Error('Expected real Codex permission handler');
+      const pending = permissionHandler.handleToolCall('codex-stop', 'AskUserQuestion', {
+        questions: [{ question: 'Continue?', options: [{ label: 'Yes' }] }],
+      });
+      const rejected = expect(pending).rejects.toThrow('Aborted by user');
+      const abortHandler = registerSessionRpcHandlerMock.mock.calls.find((call) => call[0] === 'abort')?.[1];
+      if (!abortHandler) throw new Error('Expected Stop RPC');
+      await abortHandler();
+      await rejected;
+      stopCompleted = true;
+      throw new Error('test-input-boundary-complete');
     };
     const cancelSpy = vi.fn(async () => {});
     createCodexAppServerRuntimeSpy.mockImplementationOnce(() => ({
@@ -1998,10 +2027,9 @@ describe('runCodex CodexACP resume behavior', () => {
       codexBackendMode: 'appServer',
     } as any).catch(() => undefined);
 
-    const abortHandler = registerSessionRpcHandlerMock.mock.calls.find((call) => call[0] === 'abort')?.[1];
-    await expect(abortHandler?.()).resolves.toBeUndefined();
-    const createdPermissionHandler = (createCodexPermissionHandler as any).mock.results[0]?.value;
-    expect(createdPermissionHandler?.abortPendingRequestsAndFlush).toHaveBeenCalledTimes(1);
+    expect(stopCompleted).toBe(true);
+    expect(stoppedSignal?.aborted).toBe(true);
+    expect(Boolean(state.requests?.['codex-stop'])).toBe(admissionFails);
     expect(cancelSpy).toHaveBeenCalledTimes(1);
   });
 

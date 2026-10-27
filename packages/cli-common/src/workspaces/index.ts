@@ -476,7 +476,7 @@ function collectExternalRuntimeDepNamesFromPackageJson(packageJson: any): Readon
   return [...required, ...optional];
 }
 
-function resolveInstalledPackage(params: Readonly<{ require: NodeRequire; packageName: string }>): Readonly<{
+export function resolveInstalledPackage(params: Readonly<{ require: NodeRequire; packageName: string }>): Readonly<{
   packageDir: string;
   packageJsonPath: string;
   packageJson: any;

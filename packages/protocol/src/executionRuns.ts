@@ -141,6 +141,17 @@ export const ExecutionRunPublicStateSchema = z.object({
 }).passthrough();
 export type ExecutionRunPublicState = z.infer<typeof ExecutionRunPublicStateSchema>;
 
+/** Retained lifetime and current work are separate: an idle interactive run remains sendable. */
+export function isExecutionRunActive(run: Readonly<{
+  status?: string | null;
+  runClass?: string | null;
+  turnInFlight?: boolean | null;
+}>): boolean {
+  // A bounded run still owns outcome processing after its provider turn settles. Older producers
+  // and provisioning runs without a turn observation remain conservatively active.
+  return run.status === 'running' && (run.runClass !== 'long_lived' || run.turnInFlight !== false);
+}
+
 export const ExecutionRunListResponseSchema = z.object({
   runs: z.array(ExecutionRunPublicStateSchema),
 }).passthrough();

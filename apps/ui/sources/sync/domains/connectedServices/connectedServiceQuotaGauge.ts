@@ -11,7 +11,7 @@ import { getAgentCore, resolveAgentIdFromFlavor } from '@/agents/registry/regist
 
 import type { MeterTone } from '@/components/ui/lists/MeterBar';
 
-import { clampQuotaPct, deriveQuotaUtilizationPct } from './deriveQuotaUtilizationPct';
+import { clampQuotaPct, deriveQuotaMeterValues, deriveQuotaUtilizationPct } from './deriveQuotaUtilizationPct';
 import {
     summarizeConnectedServiceQuotaRecoveryCredits,
     type ConnectedServiceQuotaRecoveryCreditSummary,
@@ -302,11 +302,7 @@ function buildMeterRow(
     nowMs: number,
     formatter: ConnectedServiceQuotaGaugeLabelFormatter,
 ): ConnectedServiceQuotaGaugeMeterRow {
-    const usedPct = deriveQuotaUtilizationPct(meter);
-
-    const remainingPct = typeof meter.remainingPct === 'number' && Number.isFinite(meter.remainingPct)
-        ? clampQuotaPct(meter.remainingPct)
-        : usedPct === null ? null : clampQuotaPct(100 - usedPct);
+    const { usedPct, remainingPct, used, limit } = deriveQuotaMeterValues(meter);
     const remainingLabel = remainingPct === null ? '—' : `${Math.round(remainingPct)}%`;
     // An elapsed reset boundary means the snapshot predates its own reset — fall back to the plain
     // remaining label instead of composing the nonsense phrase "resets in outdated".
@@ -324,11 +320,11 @@ function buildMeterRow(
             : resetLabel
             ? formatter.remainingWithReset({ percent: remainingLabel, reset: resetLabel })
             : formatter.remaining({ percent: remainingLabel }),
-        usedLimitSemantics: typeof meter.used === 'number' && typeof meter.limit === 'number'
+        usedLimitSemantics: typeof used === 'number' && typeof limit === 'number'
             ? 'used'
             : null,
-        usedLimitLabel: typeof meter.used === 'number' && typeof meter.limit === 'number'
-            ? formatter.used({ used: formatNumber(meter.used), limit: formatNumber(meter.limit) })
+        usedLimitLabel: typeof used === 'number' && typeof limit === 'number'
+            ? formatter.used({ used: formatNumber(used), limit: formatNumber(limit) })
             : null,
         resetLabel,
         tone: resolveTone(remainingPct),
@@ -367,10 +363,20 @@ export function computeConnectedServiceQuotaGaugeViewModel(_params: Readonly<{
     formatter: ConnectedServiceQuotaGaugeLabelFormatter;
     providerDisplayName?: string | null;
     activeAccountDisplayLabel?: string | null;
+    activeModelId?: string | null;
 }>): ConnectedServiceQuotaGaugeViewModel | null {
     if (_params.quotaLimitSelection === null) return null;
-    const snapshot = projectConnectedServiceQuotaSnapshotForLimitSelection(_params.snapshot, _params.quotaLimitSelection);
-    if (!snapshot) return null;
+    const selectedSnapshot = projectConnectedServiceQuotaSnapshotForLimitSelection(_params.snapshot, _params.quotaLimitSelection);
+    if (!selectedSnapshot) return null;
+    // Account windows remain account facts. A model reading is eligible only for
+    // its exact active identity; labels and provider limit ids imply no membership.
+    const activeModelId = _params.activeModelId?.trim();
+    const snapshot = _params.activeModelId === undefined ? selectedSnapshot : {
+        ...selectedSnapshot,
+        meters: selectedSnapshot.meters.filter(meter => meter.modelId
+            ? meter.modelId === activeModelId
+            : meter.scope !== 'model' && meter.limitScope !== 'model'),
+    };
     const params = { ..._params, snapshot };
 
     const rankableMeters = selectComparableConnectedServiceQuotaMeters(params.snapshot.meters);

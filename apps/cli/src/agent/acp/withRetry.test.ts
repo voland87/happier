@@ -2,9 +2,25 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { logger } from '@/ui/logger';
 
-import { withRetry } from './withRetry';
+import { createAcpRequestFailureLogRecord, withRetry } from './withRetry';
 
 describe('withRetry', () => {
+  it('retains the numeric request error code without exposing provider error data', () => {
+    const secret = 'Bearer must-not-appear-in-acp-request-log';
+    const error = Object.assign(new Error(secret), {
+      code: -32000,
+      data: { reason: 'onboarding_failed', message: secret },
+    });
+    const record = createAcpRequestFailureLogRecord({ operation: 'NewSession', error });
+
+    expect(record).toEqual({ operation: 'NewSession', failureKind: 'provider_rejection', requestErrorCode: -32000 });
+    expect(JSON.stringify(record)).not.toContain(secret);
+    expect(JSON.stringify(record)).not.toContain('onboarding_failed');
+    expect(createAcpRequestFailureLogRecord({
+      operation: 'NewSession', error: Object.assign(new Error('Rejected'), { code: secret }),
+    })).toEqual({ operation: 'NewSession', failureKind: 'provider_rejection' });
+  });
+
   it('wraps non-Error thrown values with useful details', async () => {
     const thrown = { code: 'E_FAIL', detail: { nested: 'boom' } };
 

@@ -4,6 +4,7 @@ set -euo pipefail
 CHANNEL="${HAPPIER_CHANNEL:-stable}"
 PRODUCT="${HAPPIER_PRODUCT:-cli}"
 INSTALL_DIR="${HAPPIER_INSTALL_DIR:-$HOME/.happier}"
+STATE_HOME_DIR="${HAPPIER_HOME_DIR:-${INSTALL_DIR}}"
 BIN_DIR="${HAPPIER_BIN_DIR:-$HOME/.local/bin}"
 WITH_DAEMON="${HAPPIER_WITH_DAEMON-}"
 WITH_DAEMON_EXPLICIT=0
@@ -285,6 +286,11 @@ installer_animate_step() {
   return "${status}"
 }
 
+# Successful steps suppress tool chatter, but recovery warnings remain visible.
+replay_installer_step_warnings() {
+  sed -n '/^WARNING: /p' "$1" >&2
+}
+
 run_installer_step() {
   local label="$1"
   shift
@@ -322,6 +328,8 @@ run_installer_step() {
   if [[ "${status}" -eq 0 ]]; then
     if [[ "${VERBOSE_MODE}" == "1" ]] && [[ -s "${tmp_output}" ]]; then
       cat "${tmp_output}"
+    else
+      replay_installer_step_warnings "${tmp_output}"
     fi
     rm -f "${tmp_output}" >/dev/null 2>&1 || true
     return 0
@@ -373,6 +381,8 @@ capture_installer_step_output() {
     printf -v "${__resultvar}" '%s' "$(cat "${tmp_output}")"
     if [[ "${VERBOSE_MODE}" == "1" ]] && [[ -s "${tmp_error}" ]]; then
       cat "${tmp_error}" >&2
+    else
+      replay_installer_step_warnings "${tmp_error}"
     fi
     rm -f "${tmp_output}" "${tmp_error}" >/dev/null 2>&1 || true
     return 0
@@ -595,6 +605,33 @@ validate_requested_install_version() {
     return 1
   fi
   return 0
+}
+
+# Only rejected credentials trigger anonymous fallback. Buffer each response so a
+# failed transfer cannot leave partial metadata in the caller's next retry.
+curl_auth() {
+  local response=""
+  local status=0
+  if [[ -n "${GITHUB_TOKEN:-}" ]]; then
+    if response="$(curl -fsSL --show-error --write-out $'\n%{http_code}' \
+      -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+      -H "X-GitHub-Api-Version: 2022-11-28" \
+      "$@")"; then
+      printf '%s' "${response%$'\n'*}"
+      return 0
+    else
+      status=$?
+    fi
+    if [[ "${response##*$'\n'}" != "401" ]]; then
+      return "${status}"
+    fi
+    echo "WARNING: GitHub rejected GITHUB_TOKEN/HAPPIER_GITHUB_TOKEN (401); retrying without the token..." >&2
+  fi
+  if response="$(curl -fsSL --show-error "$@")"; then
+    printf '%s' "${response}"
+  else
+    return $?
+  fi
 }
 
 fetch_release_metadata_with_retry() {
@@ -1186,10 +1223,9 @@ invoke_installer_command_with_daemon_service_context() {
   local channel_label=""
   channel_label="$(display_channel_label "${CHANNEL}")"
   local installer_strategy="${HAPPIER_INSTALLER_DAEMON_SERVICE_STRATEGY:-}"
-  local state_home_dir="${HAPPIER_HOME_DIR:-${INSTALL_DIR}}"
 
   local -a env_cmd=(env
-    "HAPPIER_HOME_DIR=${state_home_dir}"
+    "HAPPIER_HOME_DIR=${STATE_HOME_DIR}"
     "HAPPIER_PUBLIC_RELEASE_CHANNEL=${channel_label}"
     "HAPPIER_DAEMON_SERVICE_CHANNEL=${channel_label}"
     ${installer_strategy:+"HAPPIER_INSTALLER_DAEMON_SERVICE_STRATEGY=${installer_strategy}"}
@@ -1730,17 +1766,6 @@ action_version() {
 
   local api_url="https://api.github.com/repos/${GITHUB_REPO}/releases/tags/${tag}"
   info "Fetching ${tag} release metadata..."
-  curl_auth() {
-    if [[ -n "${GITHUB_TOKEN:-}" ]]; then
-      curl -fsSL \
-        -H "Authorization: Bearer ${GITHUB_TOKEN}" \
-        -H "X-GitHub-Api-Version: 2022-11-28" \
-        "$@"
-      return
-    fi
-    curl -fsSL "$@"
-  }
-
   local release_json=""
   if [[ -z "${RELEASE_ASSETS_DIR}" ]]; then
     if ! release_json="$(fetch_release_metadata_with_retry "${api_url}")"; then
@@ -2491,8 +2516,8 @@ append_path_hint() {
   local export_line="export PATH=\"${BIN_DIR}:\$PATH\""
   local home_export_line=""
   local default_install_dir="${HOME}/.happier"
-  if [[ "${INSTALL_DIR}" != "${default_install_dir}" ]]; then
-    home_export_line="export HAPPIER_HOME_DIR=\"${INSTALL_DIR}\""
+  if [[ "${STATE_HOME_DIR}" != "${default_install_dir}" ]]; then
+    home_export_line="export HAPPIER_HOME_DIR=\"${STATE_HOME_DIR}\""
   fi
   local rc_files=()
   case "${shell_name}" in
@@ -2613,19 +2638,6 @@ print_installer_welcome
 installer_phase "Download"
 
 API_URL="https://api.github.com/repos/${GITHUB_REPO}/releases/tags/${TAG}"
-curl_auth() {
-  local -a curl_args
-  curl_args=(-fsSL --show-error)
-  if [[ -n "${GITHUB_TOKEN:-}" ]]; then
-    curl "${curl_args[@]}" \
-      -H "Authorization: Bearer ${GITHUB_TOKEN}" \
-      -H "X-GitHub-Api-Version: 2022-11-28" \
-      "$@"
-    return
-  fi
-  curl "${curl_args[@]}" "$@"
-}
-
 RELEASE_JSON=""
 if [[ -z "${RELEASE_ASSETS_DIR}" ]]; then
   if ! capture_installer_step_output "Fetching ${TAG} release metadata" RELEASE_JSON fetch_release_metadata_with_retry "${API_URL}"; then

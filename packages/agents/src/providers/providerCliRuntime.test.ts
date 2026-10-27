@@ -9,6 +9,7 @@ import {
   resolveProviderCliLatestVersionSource,
   resolveProviderCliNpmPackageName,
 } from './providerCliRuntime.js';
+import { getProviderCliManualInstallSummaryLines } from './providerCliInstallGuidance.js';
 
 const cursorAgentId = 'cursor' as AgentId;
 
@@ -34,7 +35,7 @@ describe('PROVIDER_CLI_RUNTIME_SPECS', () => {
         },
         archiveExtractionLimits: {
           maxFileBytes: 384 * 1024 * 1024,
-          maxExpandedBytes: 384 * 1024 * 1024,
+          maxExpandedBytes: 512 * 1024 * 1024,
         },
       },
     });
@@ -46,10 +47,10 @@ describe('PROVIDER_CLI_RUNTIME_SPECS', () => {
     expect(archiveExtractionLimits).toBeDefined();
     if (!archiveExtractionLimits) return;
 
-    // Checksum-pinned OpenAI release rust-v0.147.0 contains a 298,668,336-byte
-    // Codex executable and expands to 370,442,135 bytes across the package.
-    expect(archiveExtractionLimits.maxFileBytes).toBeGreaterThan(298_668_336);
-    expect(archiveExtractionLimits.maxExpandedBytes).toBeGreaterThan(370_442_135);
+    // Digest-verified rust-v0.163.0 Windows x64 package: SHA-256
+    // 901028b285614a9974f431f9d9f6534b3e5ed8d62eba4ba64f4762c00f040522.
+    expect(archiveExtractionLimits.maxFileBytes).toBeGreaterThanOrEqual(341_270_320);
+    expect(archiveExtractionLimits.maxExpandedBytes).toBeGreaterThanOrEqual(465_689_987);
   });
 
   it('declares managed package sources for package-backed CLIs', () => {
@@ -139,6 +140,16 @@ describe('PROVIDER_CLI_RUNTIME_SPECS', () => {
     expect(JSON.stringify(getProviderCliRuntimeSpec('droid').manualInstallRecipes)).toContain('app.factory.ai/cli');
   });
 
+  it('declares CodeBuddy Code as a system-first CLI Happier can install from its npm package', () => {
+    expect(getProviderCliRuntimeSpec('codebuddy')).toMatchObject({
+      id: 'codebuddy',
+      binaryName: 'codebuddy',
+      sourcePreferenceDefault: 'system-first',
+      managedInstall: { kind: 'managed_package', packageName: '@tencent-ai/codebuddy-code', binaryName: 'codebuddy' },
+      manualInstallKind: 'command',
+    });
+  });
+
   /**
    * Factory's published Windows installer (`https://app.factory.ai/cli/windows`, observed
    * 2026-09-12 at CLI 0.218.1) resolves x64 / x64-baseline / arm64 from one script and copies
@@ -148,7 +159,7 @@ describe('PROVIDER_CLI_RUNTIME_SPECS', () => {
     const droid = getProviderCliRuntimeSpec('droid');
     expect(droid.manualInstallRecipes?.win32).toEqual([
       {
-        cmd: 'powershell',
+        cmd: 'powershell.exe',
         args: [
           '-NoProfile',
           '-ExecutionPolicy',
@@ -181,6 +192,7 @@ describe('PROVIDER_CLI_RUNTIME_SPECS', () => {
     ]);
     expect(getProviderCliRuntimeSpec('opencode').knownCommandCandidates).toEqual([
       { kind: 'homeBinDir', relativeDir: '.opencode/bin' },
+      { kind: 'homeBinDir', relativeDir: '.local/bin' },
       { kind: 'homePath', relativePath: 'AppData/Roaming/npm/opencode.cmd' },
     ]);
     expect(getProviderCliRuntimeSpec('codex').knownCommandCandidates).toBeNull();
@@ -231,6 +243,24 @@ describe('PROVIDER_CLI_RUNTIME_SPECS', () => {
       ],
       alternativeBinaryNames: ['agent'],
     });
+  });
+
+  it('uses directly spawnable Windows PowerShell executables for every vendor recipe', () => {
+    for (const providerId of AGENT_IDS) {
+      for (const command of getProviderCliRuntimeSpec(providerId).manualInstallRecipes?.win32 ?? []) {
+        if (command.args.includes('-Command')) {
+          expect(command.cmd, providerId).toBe('powershell.exe');
+        }
+      }
+    }
+  });
+
+  it('uses the official native Windows Cursor installer and preserves copyable PowerShell guidance', () => {
+    const command = getProviderCliRuntimeSpec(cursorAgentId).manualInstallRecipes?.win32?.[0];
+    expect(command?.args.at(-1)).toBe("irm 'https://cursor.com/install?win32=true' | iex");
+    expect(getProviderCliManualInstallSummaryLines(cursorAgentId)).toContain(
+      "  Windows (PowerShell): irm 'https://cursor.com/install?win32=true' | iex",
+    );
   });
 
   it('filters Cursor fallback binary aliases when the fallback env var is disabled', () => {

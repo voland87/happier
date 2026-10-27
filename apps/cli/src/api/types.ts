@@ -383,13 +383,15 @@ export type DaemonState = z.infer<typeof DaemonStateSchema>
 
 export type Machine = {
   id: string,
-  encryptionKey: Uint8Array;
-  encryptionVariant: 'legacy' | 'dataKey';
+  publishedDataEncryptionKey?: string | null;
   metadata: MachineMetadata | null,
   metadataVersion: number,
   daemonState: DaemonState | null,
   daemonStateVersion: number,
-}
+} & (
+  | { encryptionKey: Uint8Array; encryptionVariant: 'legacy' | 'dataKey' }
+  | { encryptionKey: null; encryptionVariant: 'plain' }
+)
 
 /**
  * Session message from API
@@ -539,6 +541,8 @@ export type Metadata = {
    * Null indicates "no profile".
    */
   profileId?: string | null,
+  /** Non-secret native account directory overrides captured by the creating runner. */
+  nativeAgentEnvironmentV1?: import('@/agent/runtime/sessionNativeEnvironment').SessionNativeEnvironment,
   summary?: {
     text: string,
     updatedAt: number
@@ -771,6 +775,8 @@ export type Metadata = {
   happyToolsDir: string,
   startedFromDaemon?: boolean,
   hostPid?: number,
+  /** OS generation of hostPid; permits safe pre-webhook startup association. */
+  hostProcessInstanceFingerprint?: string,
   sessionLogPath?: string,
   startedBy?: 'daemon' | 'terminal',
   // Lifecycle state management

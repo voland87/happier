@@ -30,7 +30,7 @@ import { createConnectedServiceAuthGenerationApplyFailureError } from './connect
 import type { ConnectedServiceSessionAuthSwitchReason } from './connectedServiceSessionAuthSwitchCore';
 import { ConnectedServiceAuthGroupRuntimeStateRevisionConflictError } from '@/api/connectedServices/connectedServiceCredentialApi';
 import type { ConnectedServiceAuthGroupCandidatePreparationResult } from '../refresh/prepareConnectedServiceAuthGroupCandidateForSwitch';
-import type { ConnectedServiceGroupQuotaProbeResult, ConnectedServiceQuotaRecoveryCreditConsumeResult } from '../quotas/ConnectedServiceQuotasCoordinator';
+import type { AutomaticQuotaResetContext, ConnectedServiceGroupQuotaProbeResult, ConnectedServiceQuotaRecoveryCreditConsumeResult } from '../quotas/ConnectedServiceQuotasCoordinator';
 
 type AuthGroupApi = Readonly<{
   getConnectedServiceAuthGroup(input: Readonly<{
@@ -43,6 +43,7 @@ type AuthGroupApi = Readonly<{
     activeProfileId: string;
     expectedGeneration: number;
     overrideRuntimeCooldown?: boolean;
+    switchReason?: string;
   }>): Promise<ConnectedServiceAuthGroupV1>;
   updateConnectedServiceAuthGroupRuntimeState?(input: Readonly<{
     serviceId: ConnectedServiceId;
@@ -197,7 +198,7 @@ export function createDaemonConnectedServiceAuthGroupSwitchCoordinator(params: R
   consumeAvailableRecoveryCreditForProfile?: (input: Readonly<{
     serviceId: ConnectedServiceId;
     profileId: string;
-    automaticResetContext: Readonly<{ groupId: string; sessionId?: string }>;
+    automaticResetContext: AutomaticQuotaResetContext;
   }>) => Promise<ConnectedServiceQuotaRecoveryCreditConsumeResult>;
   nowMs: () => number;
   sleepMs?: (ms: number) => Promise<void>;
@@ -274,7 +275,7 @@ export function createDaemonConnectedServiceAuthGroupSwitchCoordinator(params: R
     nowMs: params.nowMs,
     quotaFreshnessMs: params.quotaFreshnessMs,
     ...(params.consumeAvailableRecoveryCreditForProfile ? {
-      consumeAvailableRecoveryCreditForProfile: async (input: Readonly<{ serviceId: string; profileId: string; automaticResetContext: Readonly<{ groupId: string; sessionId?: string }> }>) =>
+      consumeAvailableRecoveryCreditForProfile: async (input: Readonly<{ serviceId: string; profileId: string; automaticResetContext: AutomaticQuotaResetContext }>) =>
         await params.consumeAvailableRecoveryCreditForProfile!({ ...input, serviceId: ConnectedServiceIdSchema.parse(input.serviceId) }),
     } : {}),
     loadState: async (input) => {
@@ -347,6 +348,7 @@ export function createDaemonConnectedServiceAuthGroupSwitchCoordinator(params: R
         activeProfileId: input.toProfileId,
         expectedGeneration: input.expectedGeneration,
         overrideRuntimeCooldown: true,
+        switchReason: input.reason,
       });
       await params.onCommittedSwitch?.({
         serviceId,

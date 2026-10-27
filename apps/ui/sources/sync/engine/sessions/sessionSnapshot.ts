@@ -20,6 +20,7 @@ import {
     type SessionListRenderableMetadata,
 } from '@/sync/domains/session/listing/sessionListRenderable';
 import { resolveSessionRuntimePresenceFields } from '@/sync/domains/session/attention/deriveSessionRuntimePresentationState';
+import { resolveSessionPresence } from '@/sync/domains/session/sessionLifecycleProjection';
 import type { SessionListCacheEntryV1 } from '@/sync/domains/state/warmCachePersistence';
 import { isSessionListCacheEntryMetadataUsable } from '@/sync/domains/state/warmCacheAdapters';
 import {
@@ -211,7 +212,7 @@ function buildHydratedSessionFromDecryptedRow(
         rollbackEligibleTurnStarts: (row as Record<string, unknown>).rollbackEligibleTurnStarts === undefined
             ? null
             : readRollbackEligibleTurnStarts((row as Record<string, unknown>).rollbackEligibleTurnStarts),
-        presence: row.active ? 'online' : row.activeAt,
+        presence: resolveSessionPresence(row),
     };
 }
 
@@ -257,14 +258,11 @@ function buildRenderableFromRowAndCache(
             hiddenSystemSession: cachedEntry.hiddenSystemSession === true,
         }
         : null;
-    const useMatchingCacheMetadata = metadataMatches
-        && metadataFromCache != null
-        && cachedEntry?.sessionWorkContextV1 !== undefined;
-    const useExistingSessionMetadata = !useMatchingCacheMetadata && existingMetadataMatches;
-    const useCurrentRenderableMetadata =
-        !useMatchingCacheMetadata && !useExistingSessionMetadata && currentMetadataMatches;
+    // A compact cache may predate canonical identity projection even at the same
+    // metadata version. Prefer full metadata, which retains the runtime evidence.
+    const useExistingSessionMetadata = existingMetadataMatches;
     const staleCacheMetadataVersion = cachedEntry?.metadataVersion ?? row.metadataVersion;
-    const plainHydratedSession = !useMatchingCacheMetadata && !useExistingSessionMetadata && !useCurrentRenderableMetadata
+    const plainHydratedSession = !useExistingSessionMetadata
         ? buildPlainHydratedSessionFromRow(row)
         : null;
     const plainRenderable = plainHydratedSession?.metadata != null
@@ -274,10 +272,17 @@ function buildRenderableFromRowAndCache(
         return plainRenderable;
     }
     const usePlainRenderableMetadata =
-        !useMatchingCacheMetadata
-        && !useExistingSessionMetadata
-        && !useCurrentRenderableMetadata
+        !useExistingSessionMetadata
         && plainRenderable?.metadata != null;
+    const useCurrentRenderableMetadata =
+        !useExistingSessionMetadata && !usePlainRenderableMetadata && currentMetadataMatches;
+    const useMatchingCacheMetadata =
+        !useExistingSessionMetadata
+        && !usePlainRenderableMetadata
+        && !useCurrentRenderableMetadata
+        && metadataMatches
+        && metadataFromCache != null
+        && cachedEntry?.sessionWorkContextV1 !== undefined;
     const useStaleCacheMetadata =
         !useMatchingCacheMetadata
         && !useExistingSessionMetadata
@@ -379,7 +384,7 @@ function buildRenderableFromRowAndCache(
         metadata: renderableMetadata,
         thinking: runtimePresence.thinking,
         thinkingAt: runtimePresence.thinkingAt,
-        presence: row.active ? 'online' : row.activeAt,
+        presence: resolveSessionPresence(row),
         latestTurnId: row.latestTurnId ?? null,
         rollbackEligibleTurnStarts: rowRecord.rollbackEligibleTurnStarts === undefined
             ? null
@@ -821,11 +826,13 @@ function buildStaleHydratedSessionRenderablePatch(
     const shouldPatchPendingFlags =
         currentRenderable.agentStateVersion <= hydratedRenderable.agentStateVersion
         && (
-            typeof currentRenderable.hasPendingPermissionRequests !== 'boolean'
+            currentRenderable.agentStateVersion < hydratedRenderable.agentStateVersion
+            || typeof currentRenderable.hasPendingPermissionRequests !== 'boolean'
             || typeof currentRenderable.hasPendingUserActionRequests !== 'boolean'
         );
     if (shouldPatchPendingFlags) {
         patch.agentStateVersion = hydratedRenderable.agentStateVersion;
+        patch.pendingRequestObservedAt = hydratedRenderable.pendingRequestObservedAt ?? null;
         if (typeof hydratedRenderable.hasPendingPermissionRequests === 'boolean') {
             patch.hasPendingPermissionRequests = hydratedRenderable.hasPendingPermissionRequests;
         }
@@ -1275,7 +1282,10 @@ export async function fetchAndApplySessions(params: {
     request?: (path: string, init: RequestInit) => Promise<Response>;
     applySessions: (sessions: HydratedSession[]) => void;
     onSnapshotFetched?: (sessionIds: string[]) => void;
-    applySessionListRenderables?: (sessions: SessionListRenderableSession[], options?: { replace?: boolean }) => void;
+    applySessionListRenderables?: (
+        sessions: SessionListRenderableSession[],
+        options?: { replace?: boolean; coversWholeList?: boolean },
+    ) => void;
     cachedSessionListEntries?: Record<string, SessionListCacheEntryV1>;
     getCurrentSessionListRenderable?: CurrentSessionListRenderableLookup;
     applySessionListRenderablePatches?: (patches: readonly SessionListRenderablePatch[]) => void;
@@ -1336,10 +1346,16 @@ export async function fetchAndApplySessions(params: {
     };
 
     let cursor: string | null = params.sessionListCursor ?? null;
+    const startedFromListHead = cursor === null;
     const seenCursors = new Set<string>();
     let fetchedPages = 0;
     let nextCursorForMore: string | null = cursor;
     let hasNextForMore = false;
+    // Whether the server explicitly reported the end of the last fetched page. Missing or
+    // malformed pagination metadata proves no coverage. Whole-list coverage also requires starting at the list
+    // head and a v2 source: the `/v1/sessions` fallback is capped server-side yet reports no
+    // further page. Anything unproven fails closed and retains omitted rows.
+    let serverReportedListEnd = false;
     let source: 'v2' | 'v1' = 'v2';
     const buildFetchResult = (): SessionListFetchResult => ({
         sessionIds: sessions.map((session) => session.id),
@@ -1411,6 +1427,7 @@ export async function fetchAndApplySessions(params: {
                 nextCursor = page.nextCursor;
                 nextCursorForMore = page.nextCursor;
                 hasNextForMore = page.hasNext === true && typeof page.nextCursor === 'string' && page.source === 'v2';
+                serverReportedListEnd = page.hasNext === false;
             },
         );
 
@@ -1527,7 +1544,10 @@ export async function fetchAndApplySessions(params: {
                 requiredRows: requiredSnapshotRows,
                 backgroundRows: countBackgroundRows(renderables.length, requiredSnapshotRows),
             },
-            () => params.applySessionListRenderables!(renderables, { replace: true }),
+            () => params.applySessionListRenderables!(renderables, {
+                replace: true,
+                coversWholeList: startedFromListHead && source === 'v2' && serverReportedListEnd,
+            }),
         );
         recordFirstUsableListTelemetry({
             snapshotStartedAtMs,

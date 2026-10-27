@@ -68,6 +68,77 @@ Product seams still own the actual compatibility implementation.
 
 Before adding dual writers, parallel persisted formats, rollout modes, operator flags, socket-drain protocols, or a mandatory client floor, compare their lifetime cost with the actual user behavior required. If preserving old-client/new-server behavior for a major change would require substantial machinery, stop and obtain an explicit developer/product decision among: operation-scoped degradation, a documented client update requirement, or the heavier compatibility transition. An agent must not silently choose either forced upgrades or heavy compatibility machinery. This exception is for genuinely incompatible, high-cost transitions; routine server changes must remain compatible and must not manufacture client-update requirements.
 
+### Connected-service reader support in 0.2 development
+
+The Antigravity integration extends a released closed service enum. UI/server
+0.2.15 (`88d45f33`) and CLI 0.2.14 (`df8241c8`) supplied the original failing
+reader contracts; current UI 0.2.16, server 0.2.16 and CLI 0.2.15 stable/preview
+releases are independently resolved at `22ac8263`. Their release records and
+binary metadata establish the published component basis; they do not attest a
+particular deployment.
+
+`packages/protocol/src/connect/connectedServiceReaderSupport.ts` owns the
+recognized-service policy. Authenticated HTTP requests advertise reader support
+with the `happierConnectedServices` query, and sockets use `connectedServiceIds`
+in their auth payload. Missing or malformed declarations retain the released
+service set. This avoids adding a cross-origin request header that old relays
+cannot accept.
+
+Outward profile projection filters profiles/groups and credential revisions
+together. Session-detail/list/turn and socket projections omit unsupported
+optional service/quota references from runtime issues while retaining generic
+failure, retry/reset and status facts. Stored identity is unchanged. Encrypted
+transcript records and recovery metadata retain their existing per-record
+degradation on older clients; the server cannot rewrite encrypted content.
+
+New-service authoring requires the server's typed `supportedServiceIds` operation
+declaration. Session launch separately requires the selected daemon's real
+materialization support. Current clients reject unsupported operations before
+effects, preserving existing services. Deploy server admission/projections before enabling
+new-service authoring; this is an operation-scoped transition, not a fleet-wide
+upgrade requirement.
+
+The settings owner in `account/settings/connectedServicesSettings.ts` splits
+saved defaults into disjoint service subsets: released services remain in
+`connectedServicesDefaultAuthByAgentIdV1`; additional services use
+`connectedServicesAdditionalDefaultAuthByAgentIdV1`. One reader/writer presents
+the combined defaults. New bindings must not be inserted into the released map,
+whose old parser would discard unrelated defaults too. Historical UI
+read/edit/write retention is a required validation gate. An older local CLI
+cannot honor the additional service default and needs an upgrade for that
+operation.
+Fetched settings that reject the canonical schema refuse launch defaulting;
+they do not fall back to cached or native authentication. Ordinary network
+failures retain the existing account-settings cache policy.
+
+Remove these outward/default-carrier adapters when the supported closed-enum
+readers retire, consolidating at their existing owners. The undeployed 0.3 line
+uses qualified account services and its existing one-way upgrade boundary;
+0.2-created Antigravity data still needs its storage-ingress mapping there.
+
+### Quota recovery details (0.2 development)
+
+Reset availability remains in the existing strict recovery-credit inventory.
+Optional `recoveryCreditDetails` supplies quantities, applicability and display
+reasons by provider credit id; these facts do not authorize redemption.
+
+The inspected UI/server 0.2.16 and CLI 0.2.15 readers at
+`22ac8263cfdbcdb845441b9044ff18199cf7652e` reject extra fields inside the strict
+Provider Account Usage body. The canonical supplemental-facet splitter therefore
+extracts both subscription facts and recovery details before writing that body.
+Encrypted details use the existing account-scoped sealing owner and travel beside
+the base ciphertext. The released non-strict sealed envelope ignores this optional
+facet, retaining ordinary usage and the original recovery-credit shape.
+
+Plain V3 writes place details in outer metadata only when the server explicitly
+advertises `connectedServices.quotaRecoveryCreditDetails`. Its canonical dependency
+is `connectedServices.quotas`. A missing or malformed bit keeps the released plain
+body and metadata shape; saved quantities and display reasons are then omitted.
+The current server admits, persists and projects that facet through the existing
+usage-record owner and refuses it when disabled. Subscription gating does not
+erase independently supported recovery details. Tests use the exact released
+strict body and sealed-envelope declarations, rather than reconstructed readers.
+
 ### Browser request headers and CORS
 
 A new request header is both a wire-contract change and, for cross-origin web clients,
@@ -218,6 +289,26 @@ Same-machine session handoff extends the existing tracked handoff operation and 
 
 Source start validates a distinct local destination before stopping the session. Once the target is committed, source cleanup preserves its v2 job and does not stop the resumed session on the same daemon. Cancellation addresses that shared job once through the existing abort owner. The v1 cleanup adapter remains available for source cleanup; it cannot mutate an uncommitted v2 target job.
 
+### Existing-state session handoff (development)
+
+The existing Start/Prepare handoff schemas accept optional `stateTransfer: 'existing'`. The public `session.handoff` CLI Action consumes the existing tracked source entry point, whose coordinator requires source and target daemons to advertise `existingState: true` through their v2 capability owner before source stop/export. The raw source handler independently checks target support before effects. Missing or older peer support refuses admission. Explicit `transfer` normalizes to omission on outgoing requests so default transfer retains its existing peer contract.
+
+Existing-state preparation verifies the target's actual native session instead of publishing, receiving, or importing a provider bundle. Workspace transfer must be disabled. Claude requires a resolved transcript file; Codex requires its native index row and the indexed rollout file. The existing durable handoff records carry the selected mode through prepare/status/recovery, and the original target resume/confirm, binding, commit, and abort owners retain authority. A missing target session leaves the canonical source Machine binding intact; stopping the source remains recoverable through the same handoff lifecycle.
+
+The CLI observes the shared Action Operations owner after its historical preparation receipt and reports success only at terminal handoff completion. A daemon restart can make that transient operation observation unavailable while the durable handoff recovery record remains. Inspect recovery before redelivery. This addition is development-only; an already-running predecessor daemon does not acquire support when its checkout changes.
+
+The development picker exposes one default-on **Transfer session data** toggle for
+cross-machine moves. Its Action adapter and delegated start preserve explicit `existing`;
+that selection disables workspace transfer. Both peer capabilities must prove support
+before the option can be turned off, and the shared Agent handoff policy must admit the
+native-state mode. Source admission also requires the actual catalog resolver before it
+stops the session. Missing target-native state is checked after that stop and produces
+`existing_session_state_unavailable` through immediate and persisted prepare results and
+launch-time revalidation. That refusal is
+kept inline in the same picker, without retrying transfer automatically; turning the toggle
+on and submitting again is a new explicit choice. Same-machine moves hide the toggle and
+retain default transfer. The current 0.3 V3 capability is not a V2 compatibility proof.
+
 ### Direct-session import and takeover operations (development)
 
 The released `cli-v0.2.14` and `cli-v0.2.14-preview.1` daemon at
@@ -285,6 +376,28 @@ The probe can be removed only when daemons predating this method are no longer s
 Directory validation remains daemon-owned after successful negotiation, and a relative `cwd`
 continues to return `invalid_request` rather than being reclassified as compatibility fallback.
 
+### Priority-pool primary recovery (development)
+
+The group active-member mutation records its cause in the existing
+`state.lastSwitchReason` and `state.lastSwitchAt` fields. Runtime-state refreshes
+preserve recorded provenance. Manual selections, including older clients that
+omit a cause, replace an automatic cause with `manual`; removing or disabling
+the active member does the same when it selects a replacement.
+
+With priority strategy and `autoRestorePrimaryWhenReset` enabled, the canonical
+candidate selector can restore an eligible primary from fresh healthy quota
+observed after an automatic limit fallback, even without a provider reset time
+or surviving member failure marker. Explicit manual provenance prevents this
+override. Older persisted groups without provenance retain the landed-reset
+proof; missing evidence is not treated as an automatic fallback.
+
+The CLI sends the optional `x-happier-connected-service-switch-reason` header,
+leaving the strict V3 mutation body unchanged. The stable and preview server
+readers at `server-v0.2.16` and `server-v0.2.16-preview.1`
+(`22ac8263cfdbcdb845441b9044ff18199cf7652e`) ignore that header and still perform
+the switch, but cannot record its new provenance. The missing-marker recovery
+therefore requires an updated relay. Browser clients do not send this header.
+
 ### Account-pool quota-reset opt-in (development)
 
 `autoUseQuotaResetsWhenExhausted` is optional in the V1 pool policy; absence means
@@ -348,6 +461,18 @@ stored selection.
 it for presentation and expiry-first ranking; absence preserves eligibility semantics and older
 readers safely ignore it. Pool-selected usage projection filters only meters and
 preserves account-, subscription-, freshness-, and recovery-credit fields.
+
+Provider rejection codes (for example Claude's `rate_limit`) are not allowance
+IDs. When the provider does not identify the exhausted allowance, recovery keeps
+that identity unknown and uses the existing account-level recovery policy; only
+an explicit allowance identity can be excluded by the pool selection.
+
+The existing V1 runtime-auth recovery event's `cancelled` carrier also contains
+terminal policy outcomes. Its existing `reason` distinguishes explicit
+cancellation from recovery that stopped without an automatic retry. Current
+readers use the shared protocol interpretation; no new event enum or persisted
+recovery state is introduced. Primary-session failures remain visible even when
+independently owned background runs continue.
 
 ### Account-pool expiry-first strategy (development)
 
@@ -465,3 +590,16 @@ The migration edit and its retained-development reconciliation are one work unit
 That reconciliation is an operator/development action, not a shipped compatibility path. Do not add runtime checksum exceptions, migration-name aliases, duplicate no-op migrations, or automatic ledger repair merely to preserve unpublished development history.
 
 Keep PostgreSQL, SQLite, and MySQL migrations aligned by intent. Before publication, validate both a clean migration from the published baseline and the approved reconciliation path for any retained development database. After publication, preserve the exact migration history and test upgrades append-only.
+
+### Unistyles native bindings (development)
+
+The development UI upgrades Unistyles from 3.2.4 to 3.5.3 and Nitro Modules
+from 0.35.6 to 0.37.1. Non-publicdev lanes use the new `0.2.9-native`
+runtime train, so this JavaScript cannot be delivered to binaries containing
+the previous bindings on `0.2.8-native`. Publicdev retains Expo's fingerprint
+policy. Rebuild the native development client after installing these dependencies;
+a Metro reload alone cannot update the native bindings. Publish the matching
+native build before publishing an OTA update for this train.
+React Native's CocoaPods post-install owner marks glog's namespace-fragment
+headers textual, so Swift can import Nitro's public Fabric headers without
+Clang attempting a submodule import inside `namespace google`.

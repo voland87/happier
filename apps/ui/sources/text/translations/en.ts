@@ -360,6 +360,7 @@ const acpCatalogTranslationExtension = {
     acpCatalogAuthParser: 'Status parser',
     acpCatalogCapabilities: 'Capabilities',
     acpCatalogTransportProfile: 'Transport profile',
+    acpCatalogSupportsLoadSession: 'Supports session resume',
     acpCatalogSupportsModes: 'Supports modes',
     acpCatalogSupportsModels: 'Supports models',
     acpCatalogSupportsConfigOptions: 'Supports config options',
@@ -1159,6 +1160,7 @@ export const en = {
         working: 'working...',
         workingRetained: 'working, awaiting updates…',
         keptInAttention: 'Kept in attention',
+        archiving: 'archiving…',
         backgroundActive: ({ count }: { count: number }) => `${count} running in background`,
         activityUnknown: 'activity status unavailable',
         readyForReview: 'ready for review',
@@ -2277,6 +2279,19 @@ export const en = {
     },
 
     connectedServices: {
+        importAccounts: {
+            unknownResult: "The import result is unknown. Refresh the account list and check this profile before retrying.",
+            title: "Import existing login",
+            failed: "Could not import this login. Check that you are signed in on the selected machine, then retry.",
+            actionDescription: "Copy a login from one of your machines",
+            description: "Copy the selected login into this encrypted profile. Shared refresh tokens may rotate, and the native app may ask you to sign in again.",
+            unsupported: "Import is unavailable here. Choose another machine or update its CLI.",
+            credentialsUnavailable: "No usable login was found. Sign in to the native app, then try again.",
+            profileConflict: "This profile belongs to another account or changed during import. Choose a new profile name.",
+            reauthorizationRequired: "Sign in to the native app again, then retry.",
+            imported: "Login imported",
+            refreshFailed: "The login was imported, but the account list could not refresh. Reopen Connected Services.",
+        },
         subscription: {
             title: "Subscription",
             currentPeriod: "Current period",
@@ -2306,6 +2321,7 @@ export const en = {
             openai: 'OpenAI API key',
             anthropic: 'Anthropic API key',
             gemini: 'Google Gemini',
+            antigravity: 'Google Antigravity',
             github: 'GitHub',
         },
         title: 'Connected services',
@@ -2326,6 +2342,7 @@ export const en = {
                 profileMissing: 'The selected connected account is no longer available. Refresh the account list and choose another account.',
                 groupMissing: 'The selected account pool is no longer available. Refresh the account list and choose another pool.',
                 metadataUpdateFailed: 'The session could not save the new authentication selection. Try again after the session finishes syncing.',
+                restartDisallowedByExecutionPolicy: 'This authentication change requires a restart that is not allowed while the session is running. Stop the session before changing its authentication.',
                 restartFailed: 'The session could not be restarted with the new authentication selection. Stop the session and try again.',
                 hotApplyFailed: 'The running session rejected the new authentication selection. Restart the session and try again.',
                 agentMismatch: 'This authentication selection does not match the session backend.',
@@ -2499,6 +2516,7 @@ export const en = {
             },
         },
         quota: {
+            refreshing: 'Refreshing usage…',
             loading: 'Loading…',
             error: ({ message }: { message: string }) => `Error: ${message}`,
             lastUpdated: ({ time }: { time: string }) => `Last updated: ${time}`,
@@ -2540,6 +2558,21 @@ export const en = {
             resets: {
                 use: 'Use',
                 available: 'Reset available',
+                remainingCount: ({ count }: { count: number }) => `Saved resets: ${count}`,
+                appliesTo: ({ limits }: { limits: string }) => `Applies to: ${limits}`,
+                fiveHourLimit: "5-hour limit",
+                weeklyLimit: "Weekly limit",
+                unavailableReasons: {
+                    paused: "Paused",
+                    cooldown: "Waiting for cooldown",
+                    ineligible: "Not eligible",
+                    not_selected: "Not selected",
+                    provider_unavailable: "Provider unavailable",
+                    not_started: "Not started yet",
+                    expired: "Expired",
+                    consumed: "Already used",
+                    unknown: "Unavailable now",
+                },
                 rowLabel: ({ date, countdown }: { date: string; countdown: string }) => `Expires ${date} · ${countdown}`,
                 now: 'now',
                 inDays: ({ days }: { days: number }) => `in ${days}d`,
@@ -2561,6 +2594,12 @@ export const en = {
             pasteRedirectUrlPromptBody:
                 '1) Sign in on the page that opens. 2) Copy the final URL from your browser address bar. 3) Paste it in the field below.',
             providerOverrides: {
+                antigravity: {
+                    connectWebDescription: "Next step: sign in with Google. Antigravity shows an authorization code to copy.",
+                    pasteRedirectUrlPromptBody: "1) Sign in with Google. 2) Copy the authorization code shown on antigravity.google. 3) Paste it below, keeping this sign-in open.",
+                    pasteRedirectUrlPlaceholder: "Paste the Antigravity authorization code",
+                    pasteRedirectUrlTitle: "Paste authorization code",
+                },
                 claudeSubscription: {
                     connectWebDescription:
                         'Next step: sign in on the page that opens. Claude may show a code string instead of redirecting automatically.',
@@ -2642,6 +2681,7 @@ export const en = {
             addOauthProfileDeviceTitle: 'Add via device auth',
             addOauthProfileDeviceSubtitle: 'Recommended for web/headless flows',
             addOauthProfilePasteTitle: 'Add via redirect paste',
+            signInWithGoogle: 'Sign in with Google',
             addOauthProfilePasteSubtitle: 'Manual copy/paste redirect URL flow',
             addOauthProfileBrowserTitle: 'Add via in-app browser',
             addOauthProfileBrowserSubtitle: 'Use an embedded browser where supported',
@@ -2685,6 +2725,7 @@ export const en = {
             errors: {
                 credentialReferencedByGroup: 'This account is still used by an account pool. Remove it from the pool, then try again.',
                 credentialNotFound: 'This connected account was already removed.',
+                serviceUnsupportedServer: 'This relay does not support this connected service. Update the relay to connect it.',
                 credentialRequestFailed: 'The connected account request failed. Refresh connected services and try again.',
                 groupRequestFailed: 'The account pool request failed. Refresh connected services and try again.',
                 generationConflict: 'This account pool changed before the action completed. Refresh connected services and try again.',
@@ -3823,6 +3864,10 @@ export const en = {
                             }
                         }
                     },
+                    claudeCodeIncludeInNativeHistory: {
+                        title: "Show sessions in Claude Code",
+                        subtitle: "Use Happier attribution for new Claude sessions, including Agent SDK runs. Off keeps runtime defaults."
+                    },
                     claudeCodeExperimentalAgentTeamsEnabled: {
                         title: "Force-enable Agent Teams",
                         subtitle: "Enable Claude Code experimental Agent Teams (agent swarm) in all Claude sessions started by Happier."
@@ -4028,6 +4073,9 @@ export const en = {
             droid: {
                 title: "Factory Droid"
             },
+            codebuddy: {
+                title: "CodeBuddy"
+            },
             grok: {
                 title: "Grok Build"
             },
@@ -4138,6 +4186,9 @@ export const en = {
             full: 'Full width',
             fullDescription: 'Use the available window width',
         },
+        feedback: "Feedback",
+        haptics: "Haptic feedback",
+        hapticsDescription: "Use touch feedback for actions and reordering on this device.",
         backdropBlur: 'Backdrop blur',
         backdropBlurDescription: 'Use frosted background blur behind modals and menus. Disable to improve browser performance.',
         multiPanePanels: 'Right panels',
@@ -4158,6 +4209,13 @@ export const en = {
         showLineNumbersInDiffsDescription: 'Display line numbers in code diffs',
         showLineNumbersInToolViews: 'Show Line Numbers in Tool Views',
         showLineNumbersInToolViewsDescription: 'Display line numbers in tool view diffs',
+        chatCodeBlocks: {
+            title: 'Chat code blocks',
+            showWrapControls: 'Show wrap controls',
+            showWrapControlsDescription: 'Show a wrap toggle on each chat code block',
+            wrapByDefault: 'Wrap code blocks by default',
+            wrapByDefaultDescription: 'Wrap long lines in chat code blocks unless you choose otherwise for a block',
+        },
         wrapLinesInDiffs: 'Wrap Lines in Code Views',
         wrapLinesInDiffsDescription: 'Wrap long lines instead of horizontal scrolling in code previews and editors',
         alwaysShowContextSize: 'Always Show Context Size',
@@ -4420,6 +4478,8 @@ export const en = {
     },
 
     errors: {
+        machineRpcDecryptionFailed: "Unable to decrypt data from this machine. Sign in with the matching account key and try again.",
+        machineRpcContextUnavailable: "This machine’s connection is unavailable. Refresh your machines and try again.",
         networkError: 'Network error occurred',
         serverError: 'Server error occurred',
         unknownError: 'An unknown error occurred',
@@ -4851,6 +4911,15 @@ export const en = {
     },
 
     sessionHandoff: {
+        transferSessionData: {
+          title: "Transfer session data",
+          subtitle: "Copies this session's conversation history to the other machine. Turn off if it's already there.",
+          checking: "Checking both machines for support…",
+          agentRequiresTransfer: "This Agent requires session data transfer between machines.",
+          updateRequired: "Update Happier on both machines to turn this off.",
+          sessionMissing: "This session's conversation history isn't on the target machine. Turn on “Transfer session data” and try again.",
+          workspaceRequiresTransfer: "Turn on “Transfer session data” to copy or sync workspace files.",
+        },
         activeWarning: {
             title: 'This session is still running here',
             message: 'Handoff will stop this session on this machine before transferring it to the selected machine.',
@@ -5180,6 +5249,11 @@ export const en = {
         composerBanners: {
             showBannerAction: 'Show banner',
             hideBannerAction: 'Hide banner',
+        },
+        runnerRestartBackgroundWork: {
+            title: 'Background work is running',
+            body: ({ count }: { count: number }) => `${count} background ${count === 1 ? 'activity is' : 'activities are'} running. Restarting will stop ${count === 1 ? 'it' : 'them'}.`,
+            confirmAction: 'Stop and restart',
         },
         staleRunner: {
             title: 'Session is still running on an older CLI',
@@ -5580,7 +5654,7 @@ export const en = {
             discarded: {
                 title: 'Discarded messages',
                 subtitle:
-                    'These messages were not sent to the agent (for example, when switching from remote to local).',
+                    'These messages are no longer queued. Delivery may be uncertain; check the transcript before sending again.',
                 label: 'Discarded',
                 removeConfirm: {
                     title: 'Remove discarded message?',
@@ -5772,6 +5846,28 @@ export const en = {
         targetSession: 'Target session',
         noTarget: 'No session selected',
         clearTarget: 'Clear target',
+        errors: {
+            sendFailed: "Couldn't send your message to the session.",
+            sttFailed: "Couldn't transcribe what you said. Try again.",
+            sttTimeout: "Speech-to-text timed out. Check your connection and try again.",
+            sttAuthFailed: "Speech-to-text rejected the API key. Check the key and its restrictions in Settings → Voice.",
+            sttRateLimited: "Speech-to-text is rate limited. Wait a moment and try again.",
+            missingSttBaseUrl: "Set a speech-to-text server URL in Settings → Voice.",
+            missingSttApiKey: "Add a speech-to-text API key in Settings → Voice.",
+            recordingStartFailed: "Couldn't start the microphone. Check that no other app is using it.",
+            recordingStopFailed: "Couldn't finish the recording. Try again.",
+            deviceSttUnavailable: "Speech recognition isn't available on this device. Pick another speech-to-text provider in Settings → Voice.",
+            speechPermissionDenied: "Microphone or speech recognition access was denied. Allow it in your device settings.",
+            deviceSttStartFailed: "Couldn't start speech recognition. Try again.",
+            localNeuralSttUnavailable: "On-device speech recognition isn't available in this build. Pick another speech-to-text provider in Settings → Voice.",
+            localNeuralPackNotInstalled: "Download the speech model in Settings → Voice.",
+            localNeuralSttStartFailed: "Couldn't start on-device speech recognition. Try again.",
+            localNeuralAudioCaptureFailed: "The microphone stopped unexpectedly. Try again.",
+            ttsFailed: "Couldn't play the spoken reply. Check text-to-speech in Settings → Voice.",
+            voiceAgentRequiresFeature: ({ feature }: { feature: string }) => `Agent mode needs “${feature}” turned on in Settings → Features.`,
+            voiceAgentUnavailable: "The voice agent isn't available on this server.",
+            generic: "Voice ran into a problem.",
+        },
         a11y: {
             teleport: 'Teleport voice agent',
             toggleActivity: 'Toggle voice activity',
@@ -6200,7 +6296,9 @@ export const en = {
         fxSessionId: 'FX Session ID',
         fxSessionIdCopied: 'FX Session ID copied to clipboard',
         droidSessionId: 'Factory Droid Session ID',
+        codebuddySessionId: 'CodeBuddy Session ID',
         droidSessionIdCopied: 'Factory Droid Session ID copied to clipboard',
+        codebuddySessionIdCopied: 'CodeBuddy Session ID copied to clipboard',
         customAcpSessionId: 'Custom ACP Session ID',
         grokSessionId: "Grok Session ID",
         grokSessionIdCopied: "Grok Session ID copied to clipboard",
@@ -6432,6 +6530,8 @@ export const en = {
         permissionMode: {
             title: 'PERMISSION MODE',
             effectiveLabel: ({ label }: { label: string }) => `Effective: ${label}`,
+            nativeModeOverrides: ({ mode }: { mode: string }) => `Agent Mode ${mode} overrides this permission setting. Clear the Mode override to use the permission setting.`,
+            usePermissionSetting: 'Use permission setting',
             default: 'Default',
             readOnly: 'Read Only',
             acceptEdits: 'Accept Edits',
@@ -6461,6 +6561,7 @@ export const en = {
             devin: 'Devin',
             fx: 'FX',
             droid: 'Factory Droid',
+            codebuddy: 'CodeBuddy',
             customAcp: 'Custom ACP',
             pi: 'Pi',
             copilot: 'Copilot',
@@ -7467,7 +7568,7 @@ export const en = {
         invalidActionSubtitle: 'This action is no longer available in this build.',
         configureActionAccessibilityLabel: 'Configure action',
         approvalHelpTitle: 'Approval modes',
-        approvalHelpBody: '"Ask first" creates an approval request before this action runs from that surface. For AI sessions, that request is queued in the existing approvals surface and does not wait in a modal. "Allowed" lets the action run from that surface without an approval request.',
+        approvalHelpBody: "\"Ask first\" requires approval before this action runs from that surface. App controls may show a confirmation dialog. For AI sessions, an approval request is queued in the existing approvals surface and does not wait in a modal. \"Allowed\" lets the action run from that surface without an approval request.",
         toolExposure: {
             title: 'Tool exposure',
             footer: 'Controls whether eligible actions appear as direct tools or stay available through action discovery only.',
@@ -7700,6 +7801,14 @@ settingsSession: {
 	              workingStatusAnimatedTextTitle: 'Animated working text',
 	              workingStatusAnimatedTextEnabledSubtitle: 'Rotate working verbs while a session is running',
 	              workingStatusAnimatedTextDisabledSubtitle: 'Show a steady working... label while a session is running',
+	              backgroundWorkAttentionModeTitle: "Unread replies during background work",
+	              backgroundWorkAttentionModeSubtitle: "Choose where unread replies appear while background work continues. Requests for you still need attention.",
+	              backgroundWorkAttentionKeepWorkingTitle: "Keep working status",
+	              backgroundWorkAttentionKeepWorkingSubtitle: "Keep the working status and show a blue center dot for unread replies",
+	              backgroundWorkAttentionKeepWorkingUnreadTitle: "Show unread status in Working",
+	              backgroundWorkAttentionKeepWorkingUnreadSubtitle: "Keep sessions in Working and show unread status until you read the reply",
+	              backgroundWorkAttentionShowUnreadTitle: "Move unread sessions to Needs attention",
+	              backgroundWorkAttentionShowUnreadSubtitle: "Move sessions with unread replies to Needs attention while background work continues",
 	              attentionPromotionModeTitle: 'Sessions needing attention',
 	              attentionPromotionModeSubtitle: 'Choose where sessions waiting for you or ready to review appear',
 	              attentionPromotionModeOffTitle: 'Leave in normal position',
@@ -8833,6 +8942,26 @@ settingsSession: {
                     },
                 },
             },
+            modelPackDownload: {
+                progress: ({ loaded, total }: { loaded: string; total: string }) => `${loaded} of ${total}`,
+                progressWithFiles: ({ loaded, total, filesDone, filesTotal }: { loaded: string; total: string; filesDone: number; filesTotal: number }) =>
+                    `${loaded} of ${total} · ${filesDone} of ${filesTotal} ${filesTotal === 1 ? 'file' : 'files'}`,
+                progressAccessibilityLabel: "Download progress",
+                verifyingDetail: "Verifying",
+                verifyingProgress: ({ verified, total, filesDone, filesTotal }: { verified: string; total: string; filesDone: number; filesTotal: number }) =>
+                    `Verified ${verified} of ${total} · ${filesDone} of ${filesTotal} ${filesTotal === 1 ? 'file' : 'files'}`,
+                verifyingAccessibilityLabel: "Verification progress",
+                failedDetail: "Failed",
+                failedSubtitle: "Couldn't get the model ready. Tap to try again.",
+                failedResumableSubtitle: ({ size }: { size: string }) => `Download didn't finish. ${size} is saved, so tap to resume.`,
+                incompleteDetail: "Incomplete",
+                incompleteSubtitle: ({ size }: { size: string }) => `${size} downloaded so far. Tap to continue.`,
+                discardSubtitle: "Delete the unfinished download to free up space.",
+                discardConfirmTitle: "Discard unfinished download?",
+                discardConfirmBody: ({ size }: { size: string }) => `This deletes the ${size} downloaded so far. You can download the model again later.`,
+                insufficientStorage: ({ required, available }: { required: string; available: string }) =>
+                    `Not enough free space. This download needs ${required}, but only ${available} is free.`,
+            },
             localNeuralStt: {
                 modelPack: {
                     title: 'Model pack',
@@ -8852,12 +8981,6 @@ settingsSession: {
                     installed: 'Installed',
                     installedWithBuild: ({ build }: { build: string }) => `Installed • ${build}`,
                     notInstalled: 'Not installed',
-                },
-                language: {
-                    title: 'Language',
-                    subtitle: 'Optional BCP-47 language tag.',
-                    promptTitle: 'Language',
-                    promptBody: 'Enter a BCP-47 language tag (e.g. en, en-US).',
                 },
                 alerts: {
                     downloadFailedTitle: 'Download failed',
@@ -8888,6 +9011,8 @@ settingsSession: {
                     enableTitle: 'Enable hands-free',
                     silenceTitle: 'Silence timeout (ms)',
                     minSpeechTitle: 'Minimum speech (ms)',
+                    pushToTalkTitle: 'Push-to-talk',
+                    pushToTalkSubtitle: 'This provider transcribes a finished recording, so tap the mic again to send. Choose Device or Local neural speech recognition for hands-free.',
                 },
                 customBackendIdSubtitle: 'Enter a custom backend id.',
                 searchBackendsPlaceholder: 'Search backends',
@@ -9086,7 +9211,7 @@ settingsSession: {
             sttProvider: 'STT Provider',
             neuralStt: {
                 title: 'On-device STT',
-                webNotAvailableSubtitle: 'Not available on web. Use Device, OpenAI-compatible, or Gemini STT.',
+                webFallbackSubtitle: 'Runs in the mobile app only. In the browser, voice uses the browser’s speech recognition instead.',
             },
             sttBaseUrl: 'STT Base URL',
             sttBaseUrlTitle: 'Speech to text',
@@ -9344,6 +9469,7 @@ settingsSession: {
             checking: 'Checking…',
             failedGeneric: 'The update didn’t finish. Try again.',
             remoteUnsupported: 'This machine can’t update its command line remotely. Update it on the machine.',
+            archiveExpandedByteLimit: "The downloaded runtime exceeds the extraction size limit. Update Happier before retrying.",
             updateNotVerified: 'The update ran, but the version didn’t change.',
             rolledBackLocal: 'The update didn’t start, so this computer went back to the previous version.',
             smokeFailed: 'The new version didn’t run on this computer, so nothing changed.',
@@ -9806,6 +9932,7 @@ settingsSession: {
         blockedTitle: 'Setup stopped',
         blockedStatusFallback: 'Setup could not finish. Your account and your sessions are untouched.',
         blockedServiceConflictStatus: 'Another background service on this computer has to be sorted out first. It was left as it is — open Details to see which one.',
+        blockedServiceManagerUnavailableStatus: 'Happier can’t set up the background service on this computer. Open Details for help, or continue with your other machines.',
         blockedConsentDeclinedStatus: 'Setup stopped. The background service already on this computer was left exactly as it was.',
         blockedAccountKeptStatus: 'Setup stopped. This computer stays connected to the account it is signed in to.',
         blockedAccountChangedStatus: 'This computer signed in to another account while setup ran, so setup stopped before pairing. Try again.',
@@ -10082,6 +10209,7 @@ settingsSession: {
         providerStateSharingDegraded: 'Provider state sharing partially applied',
         connectedServiceRuntimeAuthRecoveryRecovered: 'Provider authentication recovered',
         connectedServiceRuntimeAuthRecoveryCancelled: 'Provider authentication recovery cancelled',
+        connectedServiceRuntimeAuthRecoveryStopped: "Provider recovery stopped; it will not retry automatically",
         runtimeConfigOutcomeAppliesBeforeNextMessage: 'Applies before your next message',
         runtimeConfigOutcomeQueuedUntilReady: 'Queued until ready',
         runtimeConfigOutcomeAlreadySet: 'Already set',
@@ -10469,8 +10597,8 @@ settingsSession: {
             anthropic: 'Anthropic (Default)',
             deepseek: 'DeepSeek (Reasoner)',
             zai: 'Z.AI (GLM-4.6)',
-            minimax: 'MiniMax (M3)',
-            minimaxCn: 'MiniMax (M3, CN)',
+            minimax: 'MiniMax (M3.1 Flash)',
+            minimaxCn: 'MiniMax (M3.1 Flash, CN)',
             codex: 'Codex (Default)',
             openai: 'OpenAI (GPT-5)',
             azureOpenai: 'Azure OpenAI',
@@ -10624,6 +10752,7 @@ settingsSession: {
             agySubtitleExperimental: 'Antigravity CLI (experimental)',
             fxSubtitleExperimental: 'FX CLI (experimental)',
             droidSubtitleExperimental: 'Factory Droid CLI (experimental)',
+            codebuddySubtitleExperimental: 'CodeBuddy Code CLI (experimental)',
             customAcpSubtitleExperimental: 'Custom ACP CLI (experimental)',
             grokSubtitleExperimental: "Grok Build CLI (experimental)",
             piSubtitleExperimental: 'Pi CLI (experimental)',

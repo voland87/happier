@@ -50,10 +50,10 @@ export const AGENT_SESSION_MODE_DESCRIPTORS: Readonly<Record<AgentId, AgentSessi
     semantics: 'none',
     runtimeSwitch: 'none',
   },
-  // Agy modes (if any) come from negotiated ACP state, not a static descriptor.
-  agy: { source: 'none', semantics: 'none', runtimeSwitch: 'none' },
+  agy: { source: 'acp', semantics: 'agent-modes', runtimeSwitch: 'acp-setSessionMode' },
   fx: { source: 'acp', semantics: 'agent-modes', runtimeSwitch: 'acp-setSessionMode' },
   droid: { source: 'acp', semantics: 'agent-modes', runtimeSwitch: 'acp-setSessionMode' },
+  codebuddy: { source: 'acp', semantics: 'agent-modes', runtimeSwitch: 'acp-setSessionMode' },
 });
 
 function descriptorToSessionModesKind(descriptor: AgentSessionModeDescriptor): AgentSessionModesKind {
@@ -88,6 +88,7 @@ export const AGENT_SESSION_MODES: Readonly<Record<AgentId, AgentSessionModesKind
   agy: descriptorToSessionModesKind(AGENT_SESSION_MODE_DESCRIPTORS.agy),
   fx: descriptorToSessionModesKind(AGENT_SESSION_MODE_DESCRIPTORS.fx),
   droid: descriptorToSessionModesKind(AGENT_SESSION_MODE_DESCRIPTORS.droid),
+  codebuddy: descriptorToSessionModesKind(AGENT_SESSION_MODE_DESCRIPTORS.codebuddy),
 });
 
 export function getAgentSessionModeDescriptor(agentId: AgentId): AgentSessionModeDescriptor {

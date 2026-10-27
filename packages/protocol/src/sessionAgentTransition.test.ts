@@ -52,6 +52,13 @@ function expectAllReject(schema: z.ZodTypeAny, group: Readonly<Record<string, un
 }
 
 describe('session agent transition — portable selection', () => {
+  it('retains exact configured targets and rejects contradictory agent identities', () => {
+    const selection = { v: 1, agentId: 'customAcp', backendTarget: { kind: 'configuredAcpBackend', backendId: 'review-b' } };
+    expect(SessionAgentTransitionSelectionV1Schema.parse(selection)).toEqual(selection);
+    expect(SessionAgentTransitionSelectionV1Schema.safeParse({ ...selection, agentId: 'claude' }).success).toBe(false);
+    expect(SessionAgentTransitionSelectionV1Schema.safeParse({ v: 1, agentId: 'claude', backendTarget: { kind: 'builtInAgent', agentId: 'codex' } }).success).toBe(false);
+  });
+
   it('accepts every valid selection vector and rejects every invalid one', () => {
     expectAllParse(SessionAgentTransitionSelectionV1Schema, V.selection.valid);
     expectAllReject(SessionAgentTransitionSelectionV1Schema, V.selection.invalid);
@@ -307,6 +314,14 @@ describe('session continuation inspection', () => {
 });
 
 describe('session agent transition divider', () => {
+  it('distinguishes configured handoff boundaries sharing the same provider id', () => {
+    const common = { v: 1, fromAgentId: 'customAcp', toAgentId: 'customAcp', sourceCutoffSeqInclusive: 4,
+      fromBackendTarget: { kind: 'configuredAcpBackend', backendId: 'a' },
+      toBackendTarget: { kind: 'configuredAcpBackend', backendId: 'b' } };
+    const first = SessionAgentTransitionDividerV1Schema.parse(common);
+    const second = SessionAgentTransitionDividerV1Schema.parse({ ...common, toBackendTarget: { kind: 'configuredAcpBackend', backendId: 'c' } });
+    expect(isSameSessionAgentTransitionDividerV1(first, second)).toBe(false);
+  });
   it('pins the reserved namespace, sidecar key, and old-reader prose', () => {
     expect(SESSION_AGENT_TRANSITION_DIVIDER_LOCAL_ID_PREFIX).toBe(V.divider.localIdPrefix);
     expect(SESSION_AGENT_TRANSITION_DIVIDER_SIDECAR_KEY).toBe(V.divider.sidecarKey);

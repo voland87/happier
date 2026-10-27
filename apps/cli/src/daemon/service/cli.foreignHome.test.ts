@@ -45,10 +45,13 @@ describe('service definition home attribution', () => {
       const definition = foreignPlan.files[0]!;
       mkdirSync(dirname(definition.path), { recursive: true });
       writeFileSync(definition.path, definition.content);
-      spawnSyncMock.mockImplementation((_command: string, args: readonly string[]) => ({
+      const isTaskFolderListing = (command: string, args: readonly string[]) => (
+        command === 'powershell.exe' && args.some((arg) => arg.includes('.GetFolder("\\Happier")'))
+      );
+      spawnSyncMock.mockImplementation((command: string, args: readonly string[]) => ({
         status: 0, stderr: '', stdout: args.includes('/XML')
           ? `<Task><Actions><Exec><Arguments>-File &quot;${definition.path}&quot;</Arguments></Exec></Actions></Task>`
-          : args.includes('CSV') ? '"\\Happier\\happier-daemon.default","N/A","Ready"' : '',
+          : isTaskFolderListing(command, args) ? '["\\\\Happier\\\\happier-daemon.default"]' : '',
       }));
       const cli = await import('./cli');
       expect(cli.resolveDaemonServiceInstallationSnapshotFromEnv()).toMatchObject({
@@ -59,7 +62,7 @@ describe('service definition home attribution', () => {
           code: 'foreign_home_service',
         });
       }
-      expect(spawnSyncMock.mock.calls.every(([, args]) => args.includes('/Query'))).toBe(true);
+      expect(spawnSyncMock.mock.calls.every(([command, args]) => args.includes('/Query') || isTaskFolderListing(command, args))).toBe(true);
       const runtime = cli.resolveDaemonServiceCliRuntimeFromEnv();
       mkdirSync(foreignHomeDir, { recursive: true });
       writeFileSync(join(foreignHomeDir, 'settings.json'), JSON.stringify({
@@ -97,7 +100,7 @@ describe('service definition home attribution', () => {
             code: 'foreign_home_service',
           });
         }
-        expect(spawnSyncMock.mock.calls.every(([, args]) => args.includes('/Query'))).toBe(true);
+        expect(spawnSyncMock.mock.calls.every(([command, args]) => args.includes('/Query') || isTaskFolderListing(command, args))).toBe(true);
       }
     });
   });

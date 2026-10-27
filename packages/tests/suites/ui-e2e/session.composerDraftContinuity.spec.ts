@@ -154,7 +154,7 @@ async function openNewSessionDraft(params: Readonly<{
 }>): Promise<Readonly<{ draftId: string; composer: ReturnType<Page['getByTestId']> }>> {
     const draftListHydration = params.draftId
         ? params.page.waitForResponse(
-            (response) => response.url().endsWith('/v1/account/session-drafts/list')
+            (response) => new URL(response.url()).pathname === '/v1/account/session-drafts/list'
                 && response.request().method() === 'POST'
                 && response.status() === 200,
             { timeout: 60_000 },
@@ -196,7 +196,7 @@ async function waitForDraftMutation(page: Page, action: () => Promise<void>): Pr
     // Match a request that starts after this action is armed. A response matcher can accidentally
     // consume a still-finishing mutation from the preceding test and return before this edit is durable.
     const mutation = page.waitForRequest(
-        (request) => request.url().endsWith('/v1/account/session-drafts/mutate')
+        (request) => new URL(request.url()).pathname === '/v1/account/session-drafts/mutate'
             && request.method() === 'POST',
         { timeout: 60_000 },
     );
@@ -215,7 +215,7 @@ async function holdNextDraftMutation(page: Page): Promise<Readonly<{
     release: () => void;
     dispose: () => Promise<void>;
 }>> {
-    const mutationUrl = '**/v1/account/session-drafts/mutate';
+    const mutationUrl = (url: URL) => url.pathname === '/v1/account/session-drafts/mutate';
     let markIntercepted!: () => void;
     const intercepted = new Promise<void>((resolve) => { markIntercepted = resolve; });
     let markCompleted!: () => void;
@@ -596,7 +596,7 @@ test.describe('ui e2e: session composer draft continuity', () => {
         let releaseResponse!: () => void;
         const mayRespond = new Promise<void>((resolve) => { releaseResponse = resolve; });
         let didIntercept = false;
-        const pendingEnqueueUrl = `**/v2/sessions/${session.id}/pending`;
+        const pendingEnqueueUrl = (url: URL) => url.pathname === `/v2/sessions/${session.id}/pending`;
         await page.route(pendingEnqueueUrl, async (route) => {
             if (route.request().method() !== 'POST') {
                 await route.fallback();

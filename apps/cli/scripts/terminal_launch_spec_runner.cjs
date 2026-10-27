@@ -6,6 +6,7 @@ const { spawn } = require('node:child_process');
 const os = require('node:os');
 const path = require('node:path');
 const { killProcessTree } = require('./process_tree.cjs');
+const { reportNativeProcessExited } = require('./native_process_exit.cjs');
 
 const terminalSignalNames = ['SIGINT', 'SIGQUIT'];
 const stderrTailMaxChars = 64 * 1024;
@@ -405,7 +406,12 @@ function runLaunchSpec(spec, controllerSignal) {
             reportNativeSpawnResult('failed');
             settle(() => reject(error));
         });
-        child.on('close', (code, signal) => {
+        // The Windows invocation owner sets verbatim arguments when it inserts ComSpec.
+        // That shell's exit cannot prove provider shutdown or await inherited provider pipes.
+        const providerIsChild = spec.windowsVerbatimArguments !== true;
+        child.on(providerIsChild ? 'close' : 'exit', async (code, signal) => {
+            if (!providerIsChild) child.stderr?.destroy();
+            if (controllerChannel && providerIsChild) await reportNativeProcessExited(process, code, signal);
             if (typeof code === 'number') {
                 settle(async () => {
                     if (code !== 0) {

@@ -1,8 +1,11 @@
 import { join } from 'node:path';
+import { readSessionMetadataRuntimeDescriptor } from '@happier-dev/agents';
 
 import { requireConnectedServiceTokenCredentialRecord } from '@/daemon/connectedServices/shared/connectedServiceCredentialRecord';
 import type { ConnectedServicesProviderMaterializer } from '@/daemon/connectedServices/materialize/providerMaterializerTypes';
 import { materializeCodexConnectedServiceAuth } from './materializeCodexConnectedServiceAuth';
+import { resolveConnectedServiceHomesDir, resolveConnectedServiceSelectionHomeDir } from '@/daemon/connectedServices/homes/resolveConnectedServiceHomeDir';
+import { resolveConnectedServicePreviousStateRoot } from '@/daemon/connectedServices/materialize/resolveConnectedServicePreviousStateRoot';
 
 export function createCodexConnectedServicesMaterializer(): ConnectedServicesProviderMaterializer {
   return async (params) => {
@@ -10,14 +13,50 @@ export function createCodexConnectedServicesMaterializer(): ConnectedServicesPro
     const openai = params.recordsByServiceId.get('openai') ?? null;
 
     if (codex) {
+      const selection = params.selectionsByServiceId?.get('openai-codex');
+      const validateGroupMutationCurrentness = params.validateGroupMutationCurrentness;
+      const previousDescriptor = readSessionMetadataRuntimeDescriptor(params.existingSessionMetadata, 'codex');
+      const managedRoots = [
+        resolveConnectedServiceHomesDir(params),
+        // The common owner supplies only the previous session/run root, not an ambient home.
+        ...(params.previousMaterializedRoot ? [params.previousMaterializedRoot] : []),
+      ];
+      const previousCodexHome = params.materializationPurpose === 'probe'
+        ? null
+        : await resolveConnectedServicePreviousStateRoot({
+            previousRoot: previousDescriptor?.home === 'connectedService' ? previousDescriptor.homePath : null,
+            managedRoots,
+          }) ?? await resolveConnectedServicePreviousStateRoot({
+            previousRoot: params.previousMaterializedRoot ? join(params.previousMaterializedRoot, 'codex-home') : null,
+            managedRoots,
+          });
+      const rootDir = params.materializationPurpose !== 'probe'
+        ? resolveConnectedServiceSelectionHomeDir({
+            activeServerDir: params.activeServerDir,
+            serviceId: 'openai-codex',
+            agentId: 'codex',
+            fallbackProfileId: codex.profileId,
+            selection,
+          })
+        : params.rootDir;
       const write = () => materializeCodexConnectedServiceAuth({
-        rootDir: params.rootDir,
-        previousCodexHome: params.previousMaterializedRoot
-          ? join(params.previousMaterializedRoot, 'codex-home')
-          : null,
+        rootDir,
+        activeServerDir: params.activeServerDir,
+        vendorResumeId: params.vendorResumeId,
+        previousCodexHome,
         record: codex,
         accountSettings: params.accountSettings ?? null,
         processEnv: params.processEnv ?? process.env,
+        sessionStateMode: params.sessionStateMode,
+        validateCurrentBeforeMutation: selection?.kind === 'group' && validateGroupMutationCurrentness
+          ? () => validateGroupMutationCurrentness({
+              serviceId: 'openai-codex',
+              groupId: selection.groupId,
+              profileId: selection.activeProfileId,
+              generation: selection.generation,
+              credentialRevision: selection.credentialRevision ?? null,
+            })
+          : undefined,
       });
       const materialized = await (params.writeArtifacts ? params.writeArtifacts(write) : write());
 

@@ -1,8 +1,10 @@
-import type {
-    ComposerAgentContinuationIntentV1,
-    SessionAgentTransitionInputV1,
-    SessionAgentTransitionRejectedCodeV1,
-    SessionAgentTransitionResultV1,
+import {
+    buildBackendTargetKey,
+    type BackendTargetRefV1,
+    type ComposerAgentContinuationIntentV1,
+    type SessionAgentTransitionInputV1,
+    type SessionAgentTransitionRejectedCodeV1,
+    type SessionAgentTransitionResultV1,
 } from '@happier-dev/protocol';
 import { parsePermissionIntentAlias } from '@happier-dev/agents';
 
@@ -201,6 +203,7 @@ export type ArmedAgentContinuationInputCustody =
 export type ArmedAgentContinuationCanonicalFacts = Readonly<{
     /** The Agent the Session canonically runs right now. */
     currentAgentId: string | null;
+    currentBackendTarget?: BackendTargetRefV1 | null;
     /** Whether the Session has a live runtime. */
     sessionActive: boolean;
     /** How far the exact submitted localId has got. */
@@ -390,6 +393,7 @@ export function reconcileArmedAgentContinuationDisposition(params: Readonly<{
     labels: ArmedAgentContinuationLabels;
     /** The Agent the reader armed; the Session running it proves the cutover. */
     targetAgentId: string | null;
+    targetBackendTarget?: BackendTargetRefV1;
     /** Null until canonical state has actually been read since the call. */
     facts: ArmedAgentContinuationCanonicalFacts | null;
 }>): ArmedAgentContinuationDisposition {
@@ -458,7 +462,11 @@ export function reconcileArmedAgentContinuationDisposition(params: Readonly<{
     // The Session canonically runs the Agent the reader armed, and this exact
     // input did not land: that is the committed-but-incomplete depth, reached
     // from facts rather than from a code the daemon could not determine.
-    if (facts !== null && targetAgentId !== null && facts.currentAgentId === targetAgentId) {
+    const targetIsCurrent = facts !== null && (params.targetBackendTarget
+        ? facts.currentBackendTarget !== null && facts.currentBackendTarget !== undefined
+            && buildBackendTargetKey(facts.currentBackendTarget) === buildBackendTargetKey(params.targetBackendTarget)
+        : targetAgentId !== null && facts.currentAgentId === targetAgentId);
+    if (targetIsCurrent) {
         return buildDisposition({
             depth: 'current_view_committed',
             message: t('session.agentContinuation.transition.switched', {
@@ -528,6 +536,7 @@ export async function continueSessionWithArmedAgent(
             v: 1,
             sessionId: submission.sessionId,
             expectedCurrentAgentId: submission.intent.sourceAgentId,
+            ...(submission.intent.sourceBackendTarget ? { expectedCurrentBackendTarget: submission.intent.sourceBackendTarget } : {}),
             selection: submission.intent.selection,
             input: buildArmedAgentContinuationTransitionInput(submission),
         },

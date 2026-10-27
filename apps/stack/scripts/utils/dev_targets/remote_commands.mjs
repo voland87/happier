@@ -441,6 +441,11 @@ export function buildSshForwardArgs(target, { forwards, sshArgs = [] } = {}) {
   }
   return [
     '-T',
+    // Supervised listeners must terminate with their foreground tunnel owner.
+    '-o',
+    'ControlMaster=no',
+    '-o',
+    'ControlPath=none',
     ...sshArgs,
     '-o',
     'BatchMode=yes',

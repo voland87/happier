@@ -11,7 +11,7 @@ import { logger } from '@/ui/logger';
 
 import { readConnectedServiceStateSharingManifest } from '../stateSharing/connectedServiceStateSharingManifest';
 import { materializeConnectedServicesForSpawn } from './materializeConnectedServicesForSpawn';
-import { resolveConnectedServiceMaterializedRootDir } from './resolveConnectedServiceMaterializedRootDir';
+import { resolveConnectedServiceSelectionHomeDir } from '../homes/resolveConnectedServiceHomeDir';
 
 const firstHooks = '{"hooks":{"Stop":[]}}\n';
 const secondHooks = '{"hooks":{"SessionStart":[]}}\n';
@@ -109,10 +109,12 @@ it('migrates linked hooks and preserves profile hook state through repeated stag
   const baseDir = join(root, 'materialized');
   const activeServerDir = join(root, 'server');
   const materializationKey = 'synthetic-codex-hooks-canary';
-  const materializationRoot = resolveConnectedServiceMaterializedRootDir({
-    baseDir,
+  const materializationRoot = resolveConnectedServiceSelectionHomeDir({
+    activeServerDir,
+    serviceId: 'openai-codex',
     agentId: 'codex',
-    materializationKey,
+    fallbackProfileId: 'synthetic',
+    selection: { kind: 'profile', profileId: 'synthetic' },
   });
   const targetHome = join(materializationRoot, 'codex-home');
   const sourceHooksPath = join(sourceHome, 'hooks.json');

@@ -17,7 +17,39 @@ import { resetInMemoryAccountSettingsContextForTests } from '@/settings/accountS
 import { resolveAccountSettingsCachePath } from '@/settings/accountSettings/accountSettingsCache';
 import { writeExecutableShim } from '@/testkit/fs/executableShim';
 
+const processListBoundary = vi.hoisted(() => ({ startupPath: null as string | null }));
+vi.mock('ps-list', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('ps-list')>();
+  return {
+    ...actual,
+    default: async () => {
+      if (!processListBoundary.startupPath) return await actual.default();
+      // The standalone fixture has no descendants. Scope its OS snapshot so unrelated
+      // host processes cannot exhaust the short catalog request budget in teardown.
+      return [{ pid: Number(await readFile(processListBoundary.startupPath, 'utf8')),
+        ppid: process.pid, name: 'fake-codex-app-server' }];
+    },
+  };
+});
+
 describe('capabilities.invoke pre-session catalogs', () => {
+  it('reports connected-service launch support from the registered materializer and lifecycle', async () => {
+    const { call } = createEncryptedRpcTestClient({ scopePrefix: 'actual-auth-support', registerHandlers: registerCapabilitiesHandlers });
+    await expect(call(RPC_METHODS.CAPABILITIES_INVOKE, { id: 'cli.agy', method: 'connectedServiceAuthSupport' }))
+      .resolves.toMatchObject({ ok: true, result: { supportedServiceIds: ['antigravity'] } });
+    await expect(call(RPC_METHODS.CAPABILITIES_INVOKE, { id: 'cli.cursor', method: 'connectedServiceAuthSupport' }))
+      .resolves.toMatchObject({ ok: true, result: { supportedServiceIds: [] } });
+  });
+  it.each(['probeModels', 'probeModes', 'probeConfigOptions'])('refuses selected auth for an adapter without materialization: %s', async (method) => {
+    const { call } = createEncryptedRpcTestClient({ scopePrefix: `unsupported-auth-${method}`, registerHandlers: registerCapabilitiesHandlers });
+    await expect(call(RPC_METHODS.CAPABILITIES_INVOKE, {
+      id: 'cli.cursor', method, params: {
+        connectedServices: { v: 1, bindingsByServiceId: {
+          'openai-codex': { source: 'connected', selection: 'profile', profileId: 'fixture' },
+        } },
+      },
+    })).resolves.toMatchObject({ ok: false, error: { code: 'connected-service-preflight-failed' } });
+  });
   it.each(['mkdir', 'write', 'promote', 'credential-http'] as const)('settles acquired selected-account artifacts before returning a catalog deadline: %s', async (boundary) => {
     await withTempDir('catalog-auth-custody-', async (cwd) => {
       const overrides = {
@@ -273,6 +305,7 @@ describe('capabilities.invoke pre-session catalogs', () => {
       resetInMemoryAccountSettingsContextForTests();
       const originalAdapter = axios.defaults.adapter;
       const startupPath = join(cwd, 'native-startups');
+      const rpcLogPath = join(cwd, 'catalog-rpc.log');
       const cacheLockPath = `${resolveAccountSettingsCachePath({ token: 'catalog-fixture' })}.lock`;
       let settingsWriteCompleted!: () => void;
       const settingsWrite = new Promise<void>((resolve) => { settingsWriteCompleted = resolve; });
@@ -308,6 +341,7 @@ describe('capabilities.invoke pre-session catalogs', () => {
             environmentVariables: {
               HAPPIER_CODEX_APP_SERVER_BIN: fileURLToPath(new URL('../../backends/codex/preflight/__fixtures__/fakeCodexAppServer.mjs', import.meta.url)),
               HAPPIER_TEST_CATALOG_START_FILE: startupPath,
+              HAPPIER_CODEX_APP_SERVER_RPC_LOG_PATH: rpcLogPath,
             },
           },
         };
@@ -320,9 +354,13 @@ describe('capabilities.invoke pre-session catalogs', () => {
         await settingsWrite;
         await new Promise<void>((resolve) => setImmediate(resolve));
         expect(existsSync(startupPath)).toBe(false);
-        await expect(call(RPC_METHODS.CAPABILITIES_INVOKE, request)).resolves.toMatchObject({ ok: true });
+        processListBoundary.startupPath = startupPath;
+        const retry = await call(RPC_METHODS.CAPABILITIES_INVOKE, request);
+        expect(retry, JSON.stringify({ retry, nativeStarted: existsSync(startupPath),
+          rpcLog: await readFile(rpcLogPath, 'utf8').catch(() => null) })).toMatchObject({ ok: true });
         expect((await readFile(startupPath, 'utf8')).trim().split('\n')).toHaveLength(1);
       } finally {
+        processListBoundary.startupPath = null;
         releaseHttp();
         await pending;
         if (httpEntered) await settingsWrite;

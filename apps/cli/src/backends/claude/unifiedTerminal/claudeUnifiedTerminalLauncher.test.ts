@@ -2292,6 +2292,7 @@ describe('claudeUnifiedTerminalLauncher', () => {
     await vi.waitFor(() => {
       expect(session.client.sessionTurnLifecycle?.failTurn).toHaveBeenCalledWith({
         provider: 'claude',
+        allocateWhenIdle: true,
         issue: expect.objectContaining({
           code: 'usage_limit',
           source: 'usage_limit',
@@ -2337,6 +2338,7 @@ describe('claudeUnifiedTerminalLauncher', () => {
     await vi.waitFor(() => {
       expect(session.client.sessionTurnLifecycle?.failTurn).toHaveBeenCalledWith({
         provider: 'claude',
+        allocateWhenIdle: true,
         issue: expect.objectContaining({
           code: 'provider_status_error',
           source: 'provider_status_error',
@@ -2393,14 +2395,15 @@ describe('claudeUnifiedTerminalLauncher', () => {
     }
 
     await vi.waitFor(() => {
-      expect(session.client.sessionTurnLifecycle?.failTurn).toHaveBeenCalledWith({
+      expect(session.client.sessionTurnLifecycle?.failTurn).toHaveBeenCalledWith(expect.objectContaining({
         provider: 'claude',
+        allocateWhenIdle: true,
         issue: expect.objectContaining({
           code: 'auth_error',
           source: 'auth_error',
           provider: 'claude',
         }),
-      });
+      }));
     });
   });
 
@@ -2471,14 +2474,15 @@ describe('claudeUnifiedTerminalLauncher', () => {
     }
 
     expect(session.client.sessionTurnLifecycle?.failTurn).toHaveBeenCalledTimes(1);
-    expect(session.client.sessionTurnLifecycle?.failTurn).toHaveBeenCalledWith({
+    expect(session.client.sessionTurnLifecycle?.failTurn).toHaveBeenCalledWith(expect.objectContaining({
       provider: 'claude',
+      allocateWhenIdle: true,
       issue: expect.objectContaining({
         code: 'auth_error',
         source: 'auth_error',
         provider: 'claude',
       }),
-    });
+    }));
     expect(session.client.sessionTurnLifecycle?.failTurn).not.toHaveBeenCalledWith({
       provider: 'claude',
       issue: expect.objectContaining({
@@ -3772,6 +3776,7 @@ describe('claudeUnifiedTerminalLauncher', () => {
     await vi.waitFor(() => {
       expect(session.client.sessionTurnLifecycle?.failTurn).toHaveBeenCalledWith({
         provider: 'claude',
+        allocateWhenIdle: true,
         issue: expect.objectContaining({
           code: 'usage_limit',
           source: 'usage_limit',

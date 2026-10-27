@@ -1250,7 +1250,7 @@ describe('reducer', () => {
                 }
             };
 
-            const result1 = reducer(state, [], agentState);
+            const result1 = reducer(state, [], agentState, { mainHistoryStartLoaded: true });
             expect(result1.messages).toHaveLength(1);
 
             // Then receive the actual tool call from the agent
@@ -1389,7 +1389,7 @@ describe('reducer', () => {
                 }
             };
 
-            const result1 = reducer(state, [], agentState);
+            const result1 = reducer(state, [], agentState, { mainHistoryStartLoaded: true });
             expect(result1.messages).toHaveLength(2);
 
             // Store the message IDs
@@ -1463,7 +1463,7 @@ describe('reducer', () => {
             };
 
             // First call - should create messages
-            const result1 = reducer(state, [], agentState);
+            const result1 = reducer(state, [], agentState, { mainHistoryStartLoaded: true });
             expect(result1.messages).toHaveLength(2);
 
             // Verify the messages were created
@@ -1733,7 +1733,7 @@ describe('reducer', () => {
             };
 
             // Process permissions
-            const result1 = reducer(state, [], agentState);
+            const result1 = reducer(state, [], agentState, { mainHistoryStartLoaded: true });
             expect(result1.messages).toHaveLength(2);
 
             // Both should be separate messages
@@ -2716,7 +2716,7 @@ describe('reducer', () => {
                 }
             ];
 
-            const result = reducer(state, messages, agentState);
+            const result = reducer(state, messages, agentState, { mainHistoryStartLoaded: true });
 
             // Should create: 1 user, 1 agent text, 1 tool from permission request,
             // 1 tool from completed permission, 1 new tool call

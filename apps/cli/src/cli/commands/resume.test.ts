@@ -548,10 +548,10 @@ describe('happier resume', () => {
     const prevCwd = process.cwd();
 
     const now = Date.now();
-    const credentials: Credentials = {
+    const credentials = {
       token: 'token-connected',
       encryption: { type: 'legacy', secret: new Uint8Array(32).fill(13) },
-    };
+    } satisfies Credentials;
     if (credentials.encryption.type !== 'legacy') {
       throw new Error('test fixture expected legacy encryption');
     }
@@ -772,10 +772,10 @@ describe('happier resume', () => {
     const prevCwd = process.cwd();
 
     const now = Date.now();
-    const credentials: Credentials = {
+    const credentials = {
       token: 'token-connected-cleanup',
       encryption: { type: 'legacy', secret: new Uint8Array(32).fill(17) },
-    };
+    } satisfies Credentials;
     if (credentials.encryption.type !== 'legacy') {
       throw new Error('test fixture expected legacy encryption');
     }
