@@ -29,9 +29,11 @@ export type SessionListRowStoreState = Readonly<{
 }>;
 
 export type SessionListWorkContextPreview = Readonly<{
-    tasks: readonly string[];
+    tasks: readonly Readonly<{ value: string; label: string }>[];
     mergeRequests: readonly Readonly<{ value: string; label: string }>[];
     branch: string | null;
+    description: string | null;
+    customFields: readonly Readonly<{ name: string; value: string }>[];
 }>;
 
 export type SessionListRowPresentationSettings = Readonly<{

@@ -59,6 +59,20 @@ function normalizeNonEmptyString(value: unknown): string | null {
     return trimmed.length > 0 ? trimmed : null;
 }
 
+function formatTaskPreviewLabel(reference: string): string {
+    try {
+        const url = new URL(reference);
+        if (url.protocol !== 'https:' && url.protocol !== 'http:') return reference;
+        const queryId = url.searchParams.get('id') || url.searchParams.get('taskId') || url.searchParams.get('task_id');
+        if (queryId) return queryId;
+        const lastSegment = url.pathname.split('/').filter(Boolean).at(-1);
+        const pathId = lastSegment ? decodeURIComponent(lastSegment) : '';
+        return /^(?:\d+|[a-z][a-z\d_]*-\d+)$/i.test(pathId) ? pathId : reference;
+    } catch {
+        return reference;
+    }
+}
+
 function formatMergeRequestPreviewLabel(reference: string): string {
     const trimmed = reference.trim();
     if (/^\d+$/.test(trimmed)) return `!${trimmed}`;
@@ -76,13 +90,21 @@ function formatMergeRequestPreviewLabel(reference: string): string {
 function buildWorkContextPreview(session: Session | SessionListRenderableSession) {
     const context = session.metadata?.sessionWorkContextV1;
     if (!context || context.v !== 1) return null;
-    const tasks = (context.tasks ?? []).filter((value) => typeof value === 'string' && value.trim().length > 0);
+    const tasks = (context.tasks ?? [])
+        .filter((value) => typeof value === 'string' && value.trim().length > 0)
+        .map((value) => ({ value, label: formatTaskPreviewLabel(value) }));
     const mergeRequests = (context.mergeRequests ?? [])
         .filter((value) => typeof value === 'string' && value.trim().length > 0)
         .map((value) => ({ value, label: formatMergeRequestPreviewLabel(value) }));
-    const branch = typeof context.branch === 'string' && context.branch.trim().length > 0 ? context.branch : null;
+    const branch = normalizeNonEmptyString(context.branch);
+    const description = normalizeNonEmptyString(context.description);
+    const customFields = Object.entries(context.customFields ?? {}).flatMap(([name, value]) => {
+        const text = normalizeNonEmptyString(value);
+        return name.trim() && text ? [{ name, value: text }] : [];
+    });
     return tasks.length > 0 || mergeRequests.length > 0 || branch !== null
-        ? { tasks, mergeRequests, branch }
+        || description !== null || customFields.length > 0
+        ? { tasks, mergeRequests, branch, description, customFields }
         : null;
 }
 

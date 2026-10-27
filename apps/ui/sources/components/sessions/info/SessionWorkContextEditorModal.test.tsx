@@ -74,10 +74,12 @@ describe('SessionWorkContextEditorModal', () => {
         const context: SessionWorkContextV1 = {
             v: 1,
             tasks: ['TASK-1'],
+            repository: 'acme/app',
             customFields: { team: 'platform' },
             manualOverrides: { 'custom:cleared': true },
         };
         const { screen, chrome } = await renderEditor({ context, onSave });
+        expect(screen.findByTestId('work-context-input-repository')).toBeNull();
         const tasks = screen.findByTestId('work-context-input-tasks');
         if (!tasks) throw new Error('Expected tasks input');
 

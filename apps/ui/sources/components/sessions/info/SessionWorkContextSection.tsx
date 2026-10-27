@@ -15,7 +15,7 @@ import { patchSessionWorkContextMetadata } from './sessionWorkContextMetadata';
 import { SessionWorkContextEditorModal } from './SessionWorkContextEditorModal';
 import type { SessionWorkContextV1, SessionWorkContextPatchV1 } from '@happier-dev/protocol';
 
-type WorkContextField = 'tasks' | 'mergeRequests' | 'branch' | 'repository' | 'description';
+type WorkContextField = 'tasks' | 'mergeRequests' | 'branch' | 'description';
 
 export type SessionWorkContextSectionProps = Readonly<{
     sessionId: string;
@@ -34,7 +34,6 @@ const FIELDS: ReadonlyArray<Readonly<{
     { key: 'tasks', title: 'tasks' },
     { key: 'mergeRequests', title: 'mergeRequests' },
     { key: 'branch', title: 'branch' },
-    { key: 'repository', title: 'repository' },
     { key: 'description', title: 'description' },
 ];
 

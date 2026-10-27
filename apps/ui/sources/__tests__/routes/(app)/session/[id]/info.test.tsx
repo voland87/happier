@@ -650,7 +650,7 @@ describe('/session/[id]/info', () => {
 
         expect(screen.findByTestId('session-work-context-branch')?.props.subtitle).toBe('feature/live');
         expect(screen.findByTestId('session-work-context-branch')?.props.detail).toBeUndefined();
-        expect(screen.findByTestId('session-work-context-repository')?.props.detail).toBe('sessionInfo.workContext.manual');
+        expect(screen.findByTestId('session-work-context-repository')).toBeNull();
     });
 
     it('ignores a newer active-server list projection for an info route scoped to another server', async () => {

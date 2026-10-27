@@ -19,6 +19,8 @@ const useProfileSpy = vi.hoisted(() => vi.fn(() => ({ id: 'u1' })));
 const useSessionSpy = vi.hoisted(() => vi.fn(() => null));
 const useSessionStatusSpy = vi.hoisted(() => vi.fn(() => mockSessionStatus));
 const useSettingSpy = vi.hoisted(() => vi.fn());
+const setClipboardStringAsyncSpy = vi.hoisted(() => vi.fn(async (_text: string) => {}));
+vi.mock('expo-clipboard', () => ({ setStringAsync: setClipboardStringAsyncSpy }));
 const formatPendingCountBadgeSpy = vi.hoisted(() => vi.fn((pendingCount: number) => {
     if (!Number.isFinite(pendingCount) || pendingCount <= 0) {
         return null;
@@ -409,6 +411,7 @@ function findWorkingSpinner(screen: Awaited<ReturnType<typeof renderScreen>>, se
 
 describe('SessionItem activity time', () => {
     beforeEach(() => {
+        setClipboardStringAsyncSpy.mockReset().mockResolvedValue(undefined);
         mockSessionStatus = {
             ...defaultSessionStatus,
         };
@@ -522,17 +525,24 @@ describe('SessionItem activity time', () => {
         expect(useSettingSpy).not.toHaveBeenCalled();
     });
 
-    it('renders task and merge-request chips with a separate branch line', async () => {
+    it.each([
+        { compact: false, compactMinimal: false },
+        { compact: true, compactMinimal: false },
+        { compact: true, compactMinimal: true },
+    ])('shows all work-context fields directly in the row at density $compact/$compactMinimal', async (density) => {
         const { SessionItem } = await importSessionItemForTest();
         const rowModel = createSessionRowModel({
+            ...density,
             workContextPreview: {
-                tasks: ['TASK-42', 'TASK-43'],
+                tasks: [{ value: 'TASK-42', label: 'TASK-42' }, { value: 'TASK-43', label: 'TASK-43' }],
                 mergeRequests: [
                     { value: 'https://github.com/acme/app/pull/42', label: '!42' },
                     { value: 'https://gitlab.com/acme/app/-/merge_requests/43', label: '!43' },
                     { value: 'follow-up after release', label: 'follow-up after release' },
                 ],
                 branch: 'feature/context',
+                description: 'Keep the full description visible\nincluding the second line',
+                customFields: [{ name: 'Priority', value: 'High' }, { name: 'Owner', value: 'Platform team' }],
             },
         });
 
@@ -544,6 +554,12 @@ describe('SessionItem activity time', () => {
         expect(screen.getTextContent()).toContain('!43');
         expect(screen.getTextContent()).toContain('follow-up after release');
         expect(screen.getTextContent()).toContain('feature/context');
+        expect(screen.findByTestId('session-list-work-context-preview-repository-sess_row_model')).toBeNull();
+        expect(screen.getTextContent()).toContain('Keep the full description visible\nincluding the second line');
+        expect(screen.getTextContent()).toContain('Priority');
+        expect(screen.getTextContent()).toContain('High');
+        expect(screen.getTextContent()).toContain('Owner');
+        expect(screen.getTextContent()).toContain('Platform team');
         expect(screen.findByTestId('session-list-work-context-preview-tasks-sess_row_model')).toBeTruthy();
         expect(screen.findByTestId('session-list-work-context-preview-merge-requests-sess_row_model')).toBeTruthy();
         expect(screen.findByTestId('session-list-work-context-preview-branch-sess_row_model')).toBeTruthy();
@@ -560,9 +576,11 @@ describe('SessionItem activity time', () => {
                 secondaryLine: 'none',
             },
             workContextPreview: {
-                tasks: ['TASK-42'],
+                tasks: [{ value: 'TASK-42', label: 'TASK-42' }],
                 mergeRequests: [{ value: '!7', label: '!7' }],
                 branch: 'feature/context',
+                description: null,
+                customFields: [],
             },
         });
 
@@ -571,6 +589,26 @@ describe('SessionItem activity time', () => {
         expect(screen.findByTestId('session-list-work-context-preview-sess_row_model')).toBeTruthy();
         expect(screen.findByTestId('session-list-work-context-preview-tasks-sess_row_model')).toBeTruthy();
         expect(screen.findByTestId('session-list-status-subtitle-sess_row_model-working')).toBeNull();
+    });
+
+    it('copies the full task URL without triggering the session row press', async () => {
+        const { SessionItem } = await importSessionItemForTest();
+        const url = 'https://tracker.example/view.php?id=42&view=details#notes';
+        const rowModel = createSessionRowModel({
+            workContextPreview: {
+                tasks: [{ value: url, label: '42' }], mergeRequests: [], branch: null,
+                description: null, customFields: [],
+            },
+        });
+        const screen = await renderScreen(<SessionItem rowModel={rowModel} session={rowModel.session} />);
+        const button = screen.findByTestId('session-list-work-context-copy-task-sess_row_model-0');
+        expect(button).toBeTruthy();
+        const event = { stopPropagation: vi.fn(), preventDefault: vi.fn() };
+        await act(async () => { await button!.props.onPress(event); });
+        expect(event.stopPropagation).toHaveBeenCalled();
+        expect(setClipboardStringAsyncSpy).toHaveBeenCalledWith(url);
+        expect(screen.findByTestId('session-item-copy-debug-feedback:sess_row_model')).toBeTruthy();
+        expect(screen.getTextContent()).not.toContain(url);
     });
 
     it('renders background activity with the normal working spinner while retaining pending and unread row facts', async () => {

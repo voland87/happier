@@ -19,11 +19,15 @@ Build the updated UI and CLI to use it; this addition is not part of the upstrea
 
 Open a session's information screen from its header, then select a work-context
 field to edit it. You can keep task references, several merge requests, the
-branch and repository, a description, and your own named fields. Enter task and
+branch, a description, and your own named fields. Enter task and
 merge-request references one per line, using a number or a full URL. The session
-list shows a short preview in Detailed and Medium density, and its search
-includes these fields in every density. Narrow density keeps its single-line
-layout; switch density in **Settings → Sessions → Session List Density**.
+list shows all filled work-context fields directly in the session card, including
+in Narrow density. Tasks and merge requests use wrapping chips. Recognized task
+links show their task ID; click a task ID to copy the full original URL. Hover actions share the title
+row, so they do not change the width of the metadata below. The branch,
+description, and custom fields have labeled lines that wrap without
+truncation. Empty fields take no space. Search includes these fields in every
+density.
 
 The updated CLI gives Agents tools to record confirmed context as work
 progresses. Automatic task and merge-request updates add unique references;

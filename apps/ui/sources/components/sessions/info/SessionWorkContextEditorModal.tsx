@@ -200,7 +200,6 @@ export function SessionWorkContextEditorModal(props: SessionWorkContextEditorMod
     const [tasks, setTasks] = React.useState((props.context.tasks ?? []).join('\n'));
     const [mergeRequests, setMergeRequests] = React.useState((props.context.mergeRequests ?? []).join('\n'));
     const [branch, setBranch] = React.useState(props.context.branch ?? '');
-    const [repository, setRepository] = React.useState(props.context.repository ?? '');
     const [description, setDescription] = React.useState(props.context.description ?? '');
     const [customFields, setCustomFields] = React.useState(() => createCustomFieldDrafts(props.context));
     const [manualFields, setManualFields] = React.useState(() => new Set(props.manualFields));
@@ -239,10 +238,8 @@ export function SessionWorkContextEditorModal(props: SessionWorkContextEditorMod
         if (!sameStringArray(props.context.tasks ?? [], nextTasks)) patch.tasks = nextTasks;
         if (!sameStringArray(props.context.mergeRequests ?? [], nextMergeRequests)) patch.mergeRequests = nextMergeRequests;
         const nextBranch = normalizedScalar(branch);
-        const nextRepository = normalizedScalar(repository);
         const nextDescription = normalizedScalar(description);
         if ((props.context.branch ?? null) !== nextBranch) patch.branch = nextBranch;
-        if ((props.context.repository ?? null) !== nextRepository) patch.repository = nextRepository;
         if ((props.context.description ?? null) !== nextDescription) patch.description = nextDescription;
 
         const initialCustomKeys = new Set([
@@ -299,7 +296,7 @@ export function SessionWorkContextEditorModal(props: SessionWorkContextEditorMod
         } finally {
             setBusy(false);
         }
-    }, [branch, busy, customFields, description, mergeRequests, props, repository, tasks]);
+    }, [branch, busy, customFields, description, mergeRequests, props, tasks]);
 
     const addCustomField = React.useCallback(() => {
         setCustomFields((current) => [...current, {
@@ -318,7 +315,7 @@ export function SessionWorkContextEditorModal(props: SessionWorkContextEditorMod
     }, []);
 
     const renderField = (
-        key: 'tasks' | 'mergeRequests' | 'branch' | 'repository' | 'description',
+        key: 'tasks' | 'mergeRequests' | 'branch' | 'description',
         label: string,
         value: string,
         onChange: (value: string) => void,
@@ -367,7 +364,6 @@ export function SessionWorkContextEditorModal(props: SessionWorkContextEditorMod
                 {renderField('tasks', t('sessionInfo.workContext.tasks'), tasks, setTasks, true)}
                 {renderField('mergeRequests', t('sessionInfo.workContext.mergeRequests'), mergeRequests, setMergeRequests, true)}
                 {renderField('branch', t('sessionInfo.workContext.branch'), branch, setBranch)}
-                {renderField('repository', t('sessionInfo.workContext.repository'), repository, setRepository)}
                 {renderField('description', t('sessionInfo.workContext.description'), description, setDescription, true)}
                 <View style={styles.field}>
                     <Text style={styles.label}>{t('sessionInfo.workContext.customFields')}</Text>

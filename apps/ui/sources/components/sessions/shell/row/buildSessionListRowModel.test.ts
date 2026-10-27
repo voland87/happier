@@ -222,14 +222,13 @@ describe('buildSessionListRowModel', () => {
                 readStateV1: null,
                 sessionWorkContextV1: {
                     v: 1,
-                    tasks: ['TASK-42', 'TASK-43'],
+                    tasks: ['https://tracker.example/view.php?id=42#details', 'TASK-43'],
                     mergeRequests: [
                         'https://github.com/acme/app/pull/42',
                         'https://gitlab.com/acme/app/-/merge_requests/43',
                         'follow-up after release',
                     ],
                     branch: 'feature/context',
-                    repository: 'acme/app',
                     description: 'Searchable description',
                     customFields: { owner: 'platform' },
                 },
@@ -245,14 +244,67 @@ describe('buildSessionListRowModel', () => {
         });
 
         expect(model.workContextPreview).toEqual({
-            tasks: ['TASK-42', 'TASK-43'],
+            tasks: [
+                { value: 'https://tracker.example/view.php?id=42#details', label: '42' },
+                { value: 'TASK-43', label: 'TASK-43' },
+            ],
             mergeRequests: [
                 { value: 'https://github.com/acme/app/pull/42', label: '!42' },
                 { value: 'https://gitlab.com/acme/app/-/merge_requests/43', label: '!43' },
                 { value: 'follow-up after release', label: 'follow-up after release' },
             ],
             branch: 'feature/context',
+            description: 'Searchable description',
+            customFields: [{ name: 'owner', value: 'platform' }],
         });
+    });
+
+    it.each([
+        ['https://tracker.example/view.php?id=00042&view=details#notes', '00042'],
+        ['https://office.example/company/personal/user/7/tasks/task/view/12345/', '12345'],
+        ['https://issues.example/browse/TEAM-42', 'TEAM-42'],
+        ['https://issues.example/tasks/TEAM%2D42/', 'TEAM-42'],
+        ['TASK-43', 'TASK-43'],
+        ['https://tracker.example/view.php?issue=42', 'https://tracker.example/view.php?issue=42'],
+        ['https://issues.example/browse/TEAM-42/comments', 'https://issues.example/browse/TEAM-42/comments'],
+    ])('shows the task id while retaining the original reference: %s', (value, label) => {
+        const session = createRenderable('task-reference');
+        session.metadata = { ...session.metadata!, sessionWorkContextV1: { v: 1, tasks: [value] } };
+        const model = buildSessionListRowModel({
+            item: createSessionItem(session), state: {}, isFirst: true, isLast: true,
+            isSingle: true, settings: createSettings(),
+        });
+        expect(model.workContextPreview?.tasks).toEqual([{ value, label }]);
+    });
+
+    it.each([
+        { description: 'Description without a task' },
+        { customFields: { priority: 'High', cleared: '' } },
+    ])('keeps a row preview with only optional context details: %j', (details) => {
+        const session = createRenderable('details-only');
+        session.metadata = { ...session.metadata!, sessionWorkContextV1: { v: 1, ...details } };
+        const model = buildSessionListRowModel({
+            item: createSessionItem(session),
+            state: {},
+            isFirst: true,
+            isLast: true,
+            isSingle: true,
+            settings: createSettings(),
+        });
+
+        expect(model.workContextPreview).not.toBeNull();
+        expect(model.workContextPreview?.customFields).not.toContainEqual({ name: 'cleared', value: '' });
+    });
+
+    it('does not create a preview for legacy repository metadata alone', () => {
+        const session = createRenderable('repository-only');
+        session.metadata = { ...session.metadata!, sessionWorkContextV1: { v: 1, repository: 'acme/app' } };
+        const model = buildSessionListRowModel({
+            item: createSessionItem(session), state: {}, isFirst: true, isLast: true,
+            isSingle: true, settings: createSettings(),
+        });
+        expect(model.workContextPreview).toBeNull();
+        expect(session.metadata.sessionWorkContextV1?.repository).toBe('acme/app');
     });
 
     it('uses server-scoped row identity without collapsing same session ids from different servers', () => {
